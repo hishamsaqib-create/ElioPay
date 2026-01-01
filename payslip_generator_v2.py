@@ -50,49 +50,49 @@ PRACTICE_ADDRESS = "East Avenue, Billingham, TS23 1BY"
 DENTISTS = {
     "Zeeshan Abbas": {
         "practitioner_id": 283516,
-        "split": 0.45,
+        "split": 0.45,  # 45%
         "uda_rate": None,
         "has_nhs": False,
         "display_name": "Dr Zeeshan Abbas",
     },
     "Peter Throw": {
         "practitioner_id": 189357,
-        "split": 0.50,
+        "split": 0.50,  # 50%
         "uda_rate": 16,
-        "has_nhs": True,
+        "has_nhs": True,  # NHS
         "display_name": "Dr Peter Throw",
     },
     "Priyanka Kapoor": {
         "practitioner_id": 189361,
-        "split": 0.50,
+        "split": 0.50,  # 50%
         "uda_rate": 15,
-        "has_nhs": True,
+        "has_nhs": True,  # NHS
         "display_name": "Dr Priyanka Kapoor",
     },
     "Moneeb Ahmad": {
         "practitioner_id": 293046,
-        "split": 0.50,
+        "split": 0.50,  # 50%
         "uda_rate": 15,
-        "has_nhs": True,
+        "has_nhs": True,  # NHS
         "display_name": "Dr Moneeb Ahmad",
     },
     "Hani Dalati": {
         "practitioner_id": None,  # Add ID when known
-        "split": 0.50,
+        "split": 0.50,  # 50%
         "uda_rate": None,
         "has_nhs": False,
         "display_name": "Dr Hani Dalati",
     },
     "Ankush Patel": {
         "practitioner_id": 110701,
-        "split": 0.50,
-        "uda_rate": 15,
+        "split": 0.45,  # 45%
+        "uda_rate": None,
         "has_nhs": False,
         "display_name": "Dr Ankush Patel",
     },
     "Hisham Saqib": {
         "practitioner_id": 127844,
-        "split": 0.50,
+        "split": 0.50,  # 50%
         "uda_rate": None,
         "has_nhs": False,
         "display_name": "Dr Hisham Saqib",
@@ -164,7 +164,7 @@ def dentally_request(endpoint, params=None):
 
 
 def get_invoices_for_period(start_date, end_date):
-    """Get all paid invoices in period"""
+    """Get all paid invoices in period - filtered for Aura site and non-zero amounts"""
     print(f"   Fetching invoices {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
     
     all_invoices = []
@@ -172,8 +172,9 @@ def get_invoices_for_period(start_date, end_date):
     
     while True:
         params = {
-            "paid_at_from": start_date.strftime("%Y-%m-%d"),
-            "paid_at_to": end_date.strftime("%Y-%m-%d"),
+            "dated_on_after": start_date.strftime("%Y-%m-%d"),
+            "dated_on_before": end_date.strftime("%Y-%m-%d"),
+            "site_id": DENTALLY_SITE_ID,  # Only Aura Dental
             "page": page,
             "per_page": 100
         }
@@ -186,13 +187,18 @@ def get_invoices_for_period(start_date, end_date):
         if not invoices:
             break
         
-        all_invoices.extend(invoices)
+        # Filter: only paid invoices with amount > 0
+        for inv in invoices:
+            if inv.get("paid") and float(inv.get("amount", 0)) > 0:
+                all_invoices.append(inv)
+        
+        print(f"   Page {page}: {len(invoices)} invoices, {len(all_invoices)} valid so far...")
         
         if len(invoices) < 100:
             break
         page += 1
     
-    print(f"   Found {len(all_invoices)} invoices")
+    print(f"   Found {len(all_invoices)} paid invoices with amount > £0")
     return all_invoices
 
 
@@ -426,19 +432,19 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         ["", "", "", "", "", "", "", ""],
         ["", "PATIENT BREAKDOWN", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
-        ["", "Patient Name", "", "Date", "Finance Fee", "Finance 50%", "Therapist", "Paid"],
+        ["", "Patient Name", "", "", "", "", "", "Total Paid"],
     ])
     
-    # Patient breakdown
+    # Patient breakdown - consolidated (one row per patient, sorted by amount)
     for patient in payslip.get('patients', []):
         rows.append([
             "",
             patient['name'],
             "",
-            patient.get('date', ''),
-            f"£{patient.get('finance_fee', 0):,.2f}" if patient.get('finance_fee', 0) > 0 else "",
-            f"£{patient.get('finance_fee_50', 0):,.2f}" if patient.get('finance_fee_50', 0) > 0 else "",
-            "Yes" if patient.get('therapist') else "",
+            "",
+            "",
+            "",
+            "",
             f"£{patient['amount']:,.2f}"
         ])
     
@@ -519,18 +525,25 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
             "therapy_total": 0,
             "total_deductions": 0,
             "total_payment": 0,
-            "patients": []
+            "invoice_count": 0,
+            "patient_totals": {},  # {patient_id: {"name": str, "total": float}}
+            "patients": []  # Final consolidated list
         }
     
     # Track finance payments needing term length
     finance_flags = []
     
-    # Get invoices
+    # Get invoices (already filtered for site and paid > 0)
     invoices = get_invoices_for_period(start_date, end_date)
     
-    # Process each invoice
+    # Patient name cache
     patient_cache = {}
+    
+    # Process each invoice
     processed = 0
+    skipped = 0
+    
+    print(f"   Processing {len(invoices)} invoices...")
     
     for invoice in invoices:
         invoice_id = invoice.get("id")
@@ -539,16 +552,11 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
         # Get invoice details with line items
         details = get_invoice_details(invoice_id)
         if not details:
+            skipped += 1
             continue
         
         invoice_data = details.get("invoice", {})
         line_items = invoice_data.get("invoice_items", [])
-        
-        # Get patient name (with caching)
-        if patient_id not in patient_cache:
-            patient_cache[patient_id] = get_patient_name(patient_id)
-        patient_name = patient_cache[patient_id]
-        
         paid_date = invoice.get("paid_on", "")
         
         # Process line items - group by practitioner
@@ -564,13 +572,8 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
             if any(excl.lower() in item_name.lower() for excl in EXCLUDED_TREATMENTS):
                 continue
             
-            # Check if this is therapist work
-            is_therapist = (practitioner_id == THERAPIST_ID)
-            
-            # Find which dentist this belongs to
-            if is_therapist:
-                # Therapist work - need to attribute to the dentist
-                # For now, we'll skip therapist items (they get added via therapy_minutes input)
+            # Skip therapist work (handled via therapy_minutes input)
+            if practitioner_id == THERAPIST_ID:
                 continue
             
             # Look up dentist by practitioner_id
@@ -580,27 +583,44 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
             
             # Add to dentist totals
             payslips[dentist_name]["gross_private_dentist"] += item_amount
+            payslips[dentist_name]["invoice_count"] += 1
             
-            # Track patient
-            payslips[dentist_name]["patients"].append({
-                "name": patient_name,
-                "amount": item_amount,
-                "date": paid_date,
-                "treatment": item_name,
-                "finance_fee": 0,
-                "finance_fee_50": 0,
-                "therapist": False
-            })
+            # Add to patient totals (will consolidate later)
+            if patient_id not in payslips[dentist_name]["patient_totals"]:
+                # Get patient name (with caching)
+                if patient_id not in patient_cache:
+                    patient_cache[patient_id] = get_patient_name(patient_id)
+                payslips[dentist_name]["patient_totals"][patient_id] = {
+                    "name": patient_cache[patient_id],
+                    "total": 0,
+                    "last_date": paid_date
+                }
+            
+            payslips[dentist_name]["patient_totals"][patient_id]["total"] += item_amount
+            payslips[dentist_name]["patient_totals"][patient_id]["last_date"] = paid_date
         
         processed += 1
-        if processed % 500 == 0:
-            print(f"   Processed {processed} invoices...")
+        if processed % 100 == 0:
+            print(f"   Processed {processed}/{len(invoices)} invoices...")
     
-    print(f"   Processed {processed} invoices total")
+    print(f"   ✅ Processed {processed} invoices ({skipped} skipped)")
+    print(f"   📋 Cached {len(patient_cache)} patient names")
     
-    # Calculate final figures
+    # Calculate final figures and consolidate patients
+    print("\n📋 RESULTS:")
+    print("=" * 50)
+    
     for name, p in payslips.items():
         config = DENTISTS[name]
+        
+        # Consolidate patient_totals into patients list (sorted by amount descending)
+        p["patients"] = sorted([
+            {"name": pt["name"], "amount": pt["total"], "date": pt["last_date"]}
+            for pt in p["patient_totals"].values()
+        ], key=lambda x: x["amount"], reverse=True)
+        
+        # Remove the working dict
+        del p["patient_totals"]
         
         p["gross_total"] = p["gross_private_dentist"] + p["gross_private_therapist"]
         p["net_private"] = p["gross_total"] * config["split"]
@@ -621,7 +641,8 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
         p["total_payment"] = p["net_private"] - p["total_deductions"]
         
         if p["gross_total"] > 0:
-            print(f"   {name}: £{p['total_payment']:,.2f} (Gross: £{p['gross_total']:,.2f})")
+            split_pct = int(config["split"] * 100)
+            print(f"   {name} ({split_pct}%): Gross £{p['gross_total']:,.2f} → Net £{p['total_payment']:,.2f} ({len(p['patients'])} patients)")
     
     return payslips, finance_flags
 
