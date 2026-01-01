@@ -46,57 +46,67 @@ LOGO_URL = "https://drive.google.com/uc?export=view&id=1Z4d-u7P8XzOOm3IKyssYrRD0
 PRACTICE_NAME = "Aura Dental Clinic"
 PRACTICE_ADDRESS = "East Avenue, Billingham, TS23 1BY"
 
-# Dentist Configuration
+# Dentist Configuration - with Dentally practitioner_id mapping
 DENTISTS = {
     "Zeeshan Abbas": {
+        "practitioner_id": 283516,
         "split": 0.45,
         "uda_rate": None,
         "has_nhs": False,
         "display_name": "Dr Zeeshan Abbas",
-        "aliases": ["zeeshan", "zee", "abbas"]
     },
     "Peter Throw": {
+        "practitioner_id": 189357,
         "split": 0.50,
         "uda_rate": 16,
         "has_nhs": True,
         "display_name": "Dr Peter Throw",
-        "aliases": ["peter", "throw"]
     },
     "Priyanka Kapoor": {
+        "practitioner_id": 189361,
         "split": 0.50,
         "uda_rate": 15,
         "has_nhs": True,
         "display_name": "Dr Priyanka Kapoor",
-        "aliases": ["priyanka", "kapoor"]
     },
     "Moneeb Ahmad": {
+        "practitioner_id": 293046,
         "split": 0.50,
         "uda_rate": 15,
         "has_nhs": True,
         "display_name": "Dr Moneeb Ahmad",
-        "aliases": ["moneeb", "ahmad"]
     },
     "Hani Dalati": {
+        "practitioner_id": None,  # Add ID when known
         "split": 0.50,
         "uda_rate": None,
         "has_nhs": False,
         "display_name": "Dr Hani Dalati",
-        "aliases": ["hani", "dalati"]
     },
     "Ankush Patel": {
+        "practitioner_id": 110701,
         "split": 0.50,
         "uda_rate": 15,
         "has_nhs": False,
         "display_name": "Dr Ankush Patel",
-        "aliases": ["ankush", "patel"]
     },
     "Hisham Saqib": {
+        "practitioner_id": 127844,
         "split": 0.50,
         "uda_rate": None,
         "has_nhs": False,
         "display_name": "Dr Hisham Saqib",
-        "aliases": ["hisham", "saqib", "hish"]
     }
+}
+
+# Therapist (for tracking therapy work)
+THERAPIST_ID = 288298  # Taryn Dawson
+
+# Reverse lookup: practitioner_id -> dentist_name
+PRACTITIONER_TO_DENTIST = {
+    config["practitioner_id"]: name 
+    for name, config in DENTISTS.items() 
+    if config["practitioner_id"]
 }
 
 # Private Takings Logs (read-only)
@@ -151,43 +161,6 @@ def dentally_request(endpoint, params=None):
     except Exception as e:
         print(f"   ⚠️ API exception: {e}")
         return None
-
-
-def get_practitioners():
-    """Get all practitioners from Dentally"""
-    print("   Fetching practitioners...")
-    data = dentally_request("practitioners")
-    if not data:
-        return {}
-    
-    practitioners = {}
-    for p in data.get("practitioners", []):
-        full_name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
-        practitioners[p.get("id")] = {
-            "name": full_name,
-            "id": p.get("id"),
-            "active": p.get("active", True)
-        }
-    
-    print(f"   Found {len(practitioners)} practitioners")
-    return practitioners
-
-
-def match_practitioner_to_dentist(practitioner_name):
-    """Match a Dentally practitioner to our dentist config"""
-    name_lower = practitioner_name.lower()
-    
-    for dentist_name, config in DENTISTS.items():
-        # Check full name match
-        if dentist_name.lower() in name_lower or name_lower in dentist_name.lower():
-            return dentist_name
-        
-        # Check aliases
-        for alias in config.get("aliases", []):
-            if alias.lower() in name_lower:
-                return dentist_name
-    
-    return None
 
 
 def get_invoices_for_period(start_date, end_date):
@@ -526,16 +499,6 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
     therapy_minutes = therapy_minutes or {}
     nhs_udas = nhs_udas or {}
     
-    # Get practitioners
-    practitioners = get_practitioners()
-    
-    # Map practitioner IDs to dentist names
-    prac_to_dentist = {}
-    for prac_id, prac_info in practitioners.items():
-        dentist = match_practitioner_to_dentist(prac_info['name'])
-        if dentist:
-            prac_to_dentist[prac_id] = dentist
-    
     # Initialize payslips
     payslips = {}
     for name, config in DENTISTS.items():
@@ -567,87 +530,73 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
     
     # Process each invoice
     patient_cache = {}
+    processed = 0
+    
     for invoice in invoices:
         invoice_id = invoice.get("id")
         patient_id = invoice.get("patient_id")
-        practitioner_id = invoice.get("practitioner_id")
         
-        # Find dentist
-        dentist_name = prac_to_dentist.get(practitioner_id)
-        if not dentist_name:
+        # Get invoice details with line items
+        details = get_invoice_details(invoice_id)
+        if not details:
             continue
+        
+        invoice_data = details.get("invoice", {})
+        line_items = invoice_data.get("invoice_items", [])
         
         # Get patient name (with caching)
         if patient_id not in patient_cache:
             patient_cache[patient_id] = get_patient_name(patient_id)
         patient_name = patient_cache[patient_id]
         
-        # Get invoice details
-        details = get_invoice_details(invoice_id)
-        if not details:
-            continue
+        paid_date = invoice.get("paid_on", "")
         
-        invoice_data = details.get("invoice", {})
-        line_items = invoice_data.get("line_items", [])
-        
-        # Calculate invoice totals
-        total_amount = 0
-        is_therapist = False
-        paid_date = invoice.get("paid_at", "")[:10]
-        
+        # Process line items - group by practitioner
         for item in line_items:
-            item_name = item.get("description", "")
-            item_amount = float(item.get("amount", 0))
-            item_status = item.get("status", "").lower()
+            practitioner_id = item.get("practitioner_id")
+            item_name = item.get("name", "")
+            item_amount = float(item.get("total_price", 0))
             
-            # Skip unpaid items
-            if item_status != "paid":
+            if item_amount <= 0:
                 continue
             
             # Skip excluded treatments (CBCT etc)
             if any(excl.lower() in item_name.lower() for excl in EXCLUDED_TREATMENTS):
                 continue
             
-            # Check for therapist work
-            if "therapist" in item_name.lower() or "hygiene" in item_name.lower():
-                is_therapist = True
+            # Check if this is therapist work
+            is_therapist = (practitioner_id == THERAPIST_ID)
             
-            total_amount += item_amount
-        
-        # Check for finance payments
-        payments = get_payments_for_invoice(invoice_id)
-        finance_fee = 0
-        for payment in payments:
-            method = payment.get("payment_method", "").lower()
-            if "finance" in method or "tabeo" in method:
-                amount = float(payment.get("amount", 0))
-                # Flag for manual term entry
-                finance_flags.append({
-                    "patient": patient_name,
-                    "dentist": dentist_name,
-                    "amount": amount,
-                    "date": paid_date
-                })
-                # Use default rate for now
-                finance_fee += amount * TABEO_DEFAULT_RATE
-        
-        # Add to dentist totals
-        if total_amount > 0:
+            # Find which dentist this belongs to
             if is_therapist:
-                payslips[dentist_name]["gross_private_therapist"] += total_amount
-            else:
-                payslips[dentist_name]["gross_private_dentist"] += total_amount
+                # Therapist work - need to attribute to the dentist
+                # For now, we'll skip therapist items (they get added via therapy_minutes input)
+                continue
             
-            payslips[dentist_name]["finance_fees_total"] += finance_fee
+            # Look up dentist by practitioner_id
+            dentist_name = PRACTITIONER_TO_DENTIST.get(practitioner_id)
+            if not dentist_name:
+                continue
             
+            # Add to dentist totals
+            payslips[dentist_name]["gross_private_dentist"] += item_amount
+            
+            # Track patient
             payslips[dentist_name]["patients"].append({
                 "name": patient_name,
-                "amount": total_amount,
+                "amount": item_amount,
                 "date": paid_date,
-                "finance_fee": finance_fee,
-                "finance_fee_50": finance_fee * FINANCE_FEE_SPLIT,
-                "therapist": is_therapist
+                "treatment": item_name,
+                "finance_fee": 0,
+                "finance_fee_50": 0,
+                "therapist": False
             })
+        
+        processed += 1
+        if processed % 500 == 0:
+            print(f"   Processed {processed} invoices...")
+    
+    print(f"   Processed {processed} invoices total")
     
     # Calculate final figures
     for name, p in payslips.items():
@@ -671,7 +620,8 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
         
         p["total_payment"] = p["net_private"] - p["total_deductions"]
         
-        print(f"   {name}: £{p['total_payment']:,.2f}")
+        if p["gross_total"] > 0:
+            print(f"   {name}: £{p['total_payment']:,.2f} (Gross: £{p['gross_total']:,.2f})")
     
     return payslips, finance_flags
 
