@@ -320,12 +320,55 @@ def get_patient_name(patient_id):
     return "Unknown"
 
 
-def get_payments_for_invoice(invoice_id):
-    """Get payments for an invoice"""
-    data = dentally_request(f"invoices/{invoice_id}/payments")
-    if data:
-        return data.get("payments", [])
-    return []
+def get_payments_for_period(start_date, end_date):
+    """Get all payments for a period - used to identify payment methods"""
+    all_payments = []
+    page = 1
+    
+    print(f"   Fetching payments from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
+    
+    while True:
+        params = {
+            "dated_after": start_date.strftime("%Y-%m-%d"),
+            "dated_before": end_date.strftime("%Y-%m-%d"),
+            "page": page,
+            "per_page": 100
+        }
+        
+        data = dentally_request("payments", params)
+        if not data:
+            break
+        
+        payments = data.get("payments", [])
+        if not payments:
+            break
+        
+        all_payments.extend(payments)
+        
+        # Check if more pages
+        meta = data.get("meta", {})
+        total_pages = meta.get("total_pages", 1)
+        if page >= total_pages:
+            break
+        page += 1
+    
+    print(f"   Found {len(all_payments)} payments")
+    return all_payments
+
+
+def build_invoice_payment_map(payments):
+    """Build map of invoice_id -> payment_method from payments"""
+    invoice_payment_map = {}
+    
+    for payment in payments:
+        method = payment.get("method", "Unknown")
+        # Get invoice IDs from explanations
+        for explanation in payment.get("explanations", []):
+            invoice_id = explanation.get("invoice_id")
+            if invoice_id:
+                invoice_payment_map[invoice_id] = method
+    
+    return invoice_payment_map
 
 
 # =============================================================================
@@ -1216,6 +1259,17 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
     # Get invoices (already filtered for site)
     invoices = get_invoices_for_period(start_date, end_date)
     
+    # Get all payments with wide date range (6 months before to 1 month after)
+    # This catches: prepayments, deposits, and delayed payments
+    payment_start = start_date - timedelta(days=180)
+    payment_end = end_date + timedelta(days=30)
+    payments = get_payments_for_period(payment_start, payment_end)
+    invoice_payment_map = build_invoice_payment_map(payments)
+    
+    # Count finance payments
+    finance_count = sum(1 for m in invoice_payment_map.values() if m.lower() == "finance")
+    print(f"   Mapped {len(invoice_payment_map)} invoice payment methods ({finance_count} Finance)")
+    
     # Patient name cache
     patient_cache = {}
     
@@ -1253,12 +1307,8 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
             debug_logged = True
         
         # Check if this invoice was paid via Finance (Tabeo)
-        is_finance_payment = False
-        payments = get_payments_for_invoice(invoice_id)
-        for payment in payments:
-            if payment.get("method", "").lower() == "finance":
-                is_finance_payment = True
-                break
+        payment_method = invoice_payment_map.get(invoice_id, "Unknown")
+        is_finance_payment = payment_method.lower() == "finance"
         
         # Process line items - group by practitioner
         for item in line_items:
