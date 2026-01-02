@@ -12,12 +12,18 @@ import base64
 import requests
 import re
 import time
+import io
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-# Google Sheets
+# Google Sheets & Drive
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+
+# PDF parsing
+import pdfplumber
 
 # PDF Generation
 from reportlab.lib import colors
@@ -39,6 +45,9 @@ DENTALLY_API_BASE = "https://api.dentally.co/v1"
 # Google Sheets
 GOOGLE_SHEETS_CREDENTIALS = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
 SPREADSHEET_ID = os.environ.get("PAYSLIP_SPREADSHEET_ID", "1BANM1mdxxtjLAHHc8jSkchHHNbiRC474phtMEINeYHs")
+
+# Historical Payslips Folder (for duplicate detection)
+HISTORICAL_PAYSLIPS_FOLDER_ID = "1rcE4JFqnNj8jXHUCmQyoPn5DYDKSjNpJ"
 
 # Logo
 LOGO_URL = "https://drive.google.com/uc?export=view&id=1Z4d-u7P8XzOOm3IKyssYrRD0o_jZ5fjd"
@@ -372,8 +381,423 @@ def build_invoice_payment_map(payments):
 
 
 # =============================================================================
-# GOOGLE SHEETS
+# GOOGLE DRIVE & HISTORICAL PAYSLIP PARSING
 # =============================================================================
+
+def get_drive_service():
+    """Get authenticated Google Drive service"""
+    if not GOOGLE_SHEETS_CREDENTIALS:
+        print("   ⚠️ No Google credentials for Drive")
+        return None
+    
+    try:
+        creds_dict = json.loads(base64.b64decode(GOOGLE_SHEETS_CREDENTIALS))
+        creds = Credentials.from_service_account_info(creds_dict, scopes=[
+            'https://www.googleapis.com/auth/drive.readonly'
+        ])
+        service = build('drive', 'v3', credentials=creds)
+        return service
+    except Exception as e:
+        print(f"   ⚠️ Drive auth error: {e}")
+        return None
+
+
+def list_payslip_pdfs(service, folder_id):
+    """Recursively list all PDF payslips in the folder"""
+    all_pdfs = []
+    
+    def search_folder(fid, dentist_name=None):
+        query = f"'{fid}' in parents and trashed = false"
+        results = service.files().list(
+            q=query,
+            fields="files(id, name, mimeType)",
+            pageSize=100
+        ).execute()
+        
+        files = results.get('files', [])
+        
+        for f in files:
+            if f['mimeType'] == 'application/vnd.google-apps.folder':
+                # It's a subfolder - use folder name as dentist name
+                search_folder(f['id'], f['name'])
+            elif f['mimeType'] == 'application/pdf' and 'payslip' in f['name'].lower():
+                all_pdfs.append({
+                    'id': f['id'],
+                    'name': f['name'],
+                    'dentist_folder': dentist_name
+                })
+    
+    search_folder(folder_id)
+    return all_pdfs
+
+
+def download_pdf_content(service, file_id):
+    """Download PDF content as bytes"""
+    try:
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        fh.seek(0)
+        return fh
+    except Exception as e:
+        print(f"      ⚠️ Download error: {e}")
+        return None
+
+
+def parse_payslip_pdf(pdf_content, filename, dentist_folder=None):
+    """
+    Parse a payslip PDF and extract patient payments.
+    
+    Returns:
+        {
+            'dentist': str,
+            'period': str,
+            'patients': [{'name': str, 'date': str, 'amount': float}]
+        }
+    """
+    result = {
+        'dentist': dentist_folder,
+        'period': None,
+        'patients': [],
+        'filename': filename
+    }
+    
+    try:
+        with pdfplumber.open(pdf_content) as pdf:
+            text = ""
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+            
+            # Extract dentist name from "Performer:" line
+            performer_match = re.search(r'Performer[:\s]+(?:Dr\.?\s+)?(.+?)(?:\n|Practice)', text, re.IGNORECASE)
+            if performer_match:
+                result['dentist'] = performer_match.group(1).strip()
+            
+            # Extract period from "Private Period" line
+            period_match = re.search(r'Private\s+Period[:\s]+(\w+\s+\d{4})', text, re.IGNORECASE)
+            if period_match:
+                result['period'] = period_match.group(1).strip()
+            
+            # Extract patient breakdown section
+            # Look for lines with: Name, Date (DD/MM/YYYY), and Amount (£X,XXX.XX)
+            # Pattern: Name followed by date and amount at end
+            lines = text.split('\n')
+            in_breakdown = False
+            
+            for line in lines:
+                # Check if we're in patient breakdown section
+                if 'patient breakdown' in line.lower():
+                    in_breakdown = True
+                    continue
+                
+                if not in_breakdown:
+                    continue
+                
+                # Stop at section 3 or other sections
+                if re.match(r'^Section\s+\d', line, re.IGNORECASE):
+                    break
+                
+                # Try to extract patient line: Name Date Amount
+                # Date format: DD/MM/YYYY
+                # Amount format: £X,XXX.XX or (£X,XXX.XX)
+                patient_match = re.match(
+                    r'^([A-Za-z][A-Za-z\s\'\-]+?)\s+(\d{2}/\d{2}/\d{4}).*?[\(£]?\s*([\d,]+\.?\d*)\s*\)?$',
+                    line.strip()
+                )
+                
+                if patient_match:
+                    name = patient_match.group(1).strip()
+                    date = patient_match.group(2)
+                    amount_str = patient_match.group(3).replace(',', '')
+                    
+                    try:
+                        amount = float(amount_str)
+                        if amount > 0:  # Only include positive amounts
+                            result['patients'].append({
+                                'name': name,
+                                'date': date,
+                                'amount': amount
+                            })
+                    except ValueError:
+                        pass
+    
+    except Exception as e:
+        print(f"      ⚠️ PDF parse error ({filename}): {e}")
+    
+    return result
+
+
+def build_historical_database(service, folder_id, exclude_period=None):
+    """
+    Build a database of all previously paid patients from historical payslips.
+    
+    Args:
+        service: Google Drive service
+        folder_id: Root folder ID containing payslip PDFs
+        exclude_period: Period to exclude (e.g., "December 2025" - current month)
+    
+    Returns:
+        {
+            'dentist_name': [
+                {'patient': str, 'amount': float, 'date': str, 'period': str}
+            ]
+        }
+    """
+    print("\n📂 BUILDING HISTORICAL PAYMENT DATABASE...")
+    print("=" * 50)
+    
+    historical_db = defaultdict(list)
+    
+    # List all payslip PDFs
+    print("   Scanning folders for payslip PDFs...")
+    pdfs = list_payslip_pdfs(service, folder_id)
+    print(f"   Found {len(pdfs)} payslip PDFs")
+    
+    # Parse each PDF
+    for i, pdf_info in enumerate(pdfs):
+        print(f"   Processing {i+1}/{len(pdfs)}: {pdf_info['name'][:50]}...")
+        
+        # Download PDF
+        content = download_pdf_content(service, pdf_info['id'])
+        if not content:
+            continue
+        
+        # Parse PDF
+        parsed = parse_payslip_pdf(content, pdf_info['name'], pdf_info['dentist_folder'])
+        
+        # Skip if current period (we're generating this one now)
+        if exclude_period and parsed['period'] and exclude_period.lower() in parsed['period'].lower():
+            print(f"      ⏭️ Skipping current period: {parsed['period']}")
+            continue
+        
+        dentist = parsed.get('dentist')
+        period = parsed.get('period', 'Unknown')
+        
+        if not dentist:
+            print(f"      ⚠️ Could not determine dentist")
+            continue
+        
+        # Normalize dentist name
+        dentist_normalized = normalize_dentist_name(dentist)
+        
+        # Add patients to database
+        for patient in parsed['patients']:
+            historical_db[dentist_normalized].append({
+                'patient': patient['name'],
+                'amount': patient['amount'],
+                'date': patient['date'],
+                'period': period,
+                'source_file': pdf_info['name']
+            })
+        
+        print(f"      ✅ {dentist}: {len(parsed['patients'])} patients from {period}")
+    
+    # Summary
+    print("\n   📊 Historical Database Summary:")
+    total_records = 0
+    for dentist, records in historical_db.items():
+        print(f"      {dentist}: {len(records)} historical payments")
+        total_records += len(records)
+    print(f"   Total: {total_records} historical payment records")
+    
+    return dict(historical_db)
+
+
+def normalize_dentist_name(name):
+    """Normalize dentist name for matching"""
+    if not name:
+        return ""
+    # Remove Dr., titles, extra spaces
+    name = re.sub(r'^(Dr\.?\s*)', '', name, flags=re.IGNORECASE)
+    name = name.strip()
+    
+    # Map common variations
+    name_map = {
+        'zee': 'Zeeshan Abbas',
+        'zeeshan': 'Zeeshan Abbas',
+        'peter': 'Peter Throw',
+        'priyanka': 'Priyanka Kapoor',
+        'moneeb': 'Moneeb Ahmad',
+        'hani': 'Hani Dalati',
+        'ankush': 'Ankush Patel',
+    }
+    
+    for key, value in name_map.items():
+        if key in name.lower():
+            return value
+    
+    return name
+
+
+def check_for_duplicates(current_patients, historical_db, dentist_name, current_period):
+    """
+    Check if any current patients were already paid in previous periods.
+    
+    Args:
+        current_patients: List of current month's patients
+        historical_db: Historical payment database
+        dentist_name: Current dentist name
+        current_period: Current period string (e.g., "December 2025")
+    
+    Returns:
+        List of potential duplicates with details
+    """
+    duplicates = []
+    
+    # Get historical records for this dentist
+    dentist_normalized = normalize_dentist_name(dentist_name)
+    historical = historical_db.get(dentist_normalized, [])
+    
+    if not historical:
+        return duplicates
+    
+    # Build lookup by patient name (normalized)
+    historical_lookup = defaultdict(list)
+    for h in historical:
+        patient_normalized = normalize_name(h['patient'])
+        historical_lookup[patient_normalized].append(h)
+    
+    # Check each current patient
+    for cp in current_patients:
+        cp_name_normalized = normalize_name(cp['name'])
+        cp_amount = cp.get('amount', 0)
+        
+        # Look for matches in historical data
+        if cp_name_normalized in historical_lookup:
+            for hist in historical_lookup[cp_name_normalized]:
+                # Check if same amount (potential duplicate)
+                if abs(hist['amount'] - cp_amount) < 1:  # Within £1
+                    duplicates.append({
+                        'patient': cp['name'],
+                        'dentist': dentist_name,
+                        'current_amount': cp_amount,
+                        'current_date': cp.get('date', ''),
+                        'previous_amount': hist['amount'],
+                        'previous_period': hist['period'],
+                        'previous_date': hist['date'],
+                        'source_file': hist.get('source_file', ''),
+                        'match_type': 'EXACT_AMOUNT',
+                        'status': '⚠️ POTENTIAL DUPLICATE'
+                    })
+                elif abs(hist['amount'] - cp_amount) < cp_amount * 0.1:  # Within 10%
+                    duplicates.append({
+                        'patient': cp['name'],
+                        'dentist': dentist_name,
+                        'current_amount': cp_amount,
+                        'current_date': cp.get('date', ''),
+                        'previous_amount': hist['amount'],
+                        'previous_period': hist['period'],
+                        'previous_date': hist['date'],
+                        'source_file': hist.get('source_file', ''),
+                        'match_type': 'SIMILAR_AMOUNT',
+                        'status': '🔍 CHECK'
+                    })
+    
+    return duplicates
+
+
+def update_duplicate_check_tab(spreadsheet, duplicates, period_str):
+    """Update the Duplicate Check tab with potential duplicates"""
+    print("   Updating Duplicate Check tab...")
+    
+    try:
+        sh = spreadsheet.worksheet("Duplicate Check")
+        sh.clear()
+    except:
+        try:
+            sh = spreadsheet.add_worksheet(title="Duplicate Check", rows=200, cols=12)
+        except Exception as e:
+            print(f"      ⚠️ Cannot create Duplicate Check tab: {e}")
+            return
+    
+    rows = [
+        ["", "🔍 DUPLICATE CHECK", "", "", "", "", "", "", "", ""],
+        ["", f"Period: {period_str}", "", f"Generated: {datetime.now().strftime('%d/%m/%Y %H:%M')}", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", ""],
+        ["", "Checks current payslip patients against historical payments", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", ""],
+        ["", "Patient", "Dentist", "Current £", "Current Date", "Previous £", "Previous Period", "Previous Date", "Match Type", "Status"],
+    ]
+    
+    if duplicates:
+        for dup in duplicates:
+            rows.append([
+                "",
+                dup['patient'],
+                dup['dentist'],
+                f"£{dup['current_amount']:,.2f}",
+                dup['current_date'],
+                f"£{dup['previous_amount']:,.2f}",
+                dup['previous_period'],
+                dup['previous_date'],
+                dup['match_type'],
+                dup['status']
+            ])
+    else:
+        rows.append(["", "✅ No potential duplicates found", "", "", "", "", "", "", "", ""])
+    
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)
+    
+    # Formatting
+    sh.format('B1', {'textFormat': {'bold': True, 'fontSize': 16}})
+    sh.format('B6:J6', {
+        'textFormat': {'bold': True},
+        'backgroundColor': {'red': 1.0, 'green': 0.9, 'blue': 0.6}
+    })
+    
+    print(f"   ✅ Duplicate Check tab updated ({len(duplicates)} potential duplicates)")
+
+
+def update_paid_invoices_log(spreadsheet, payslips, period_str):
+    """
+    Log all paid invoices for future duplicate detection.
+    This creates a running log of invoice_id -> payment record.
+    """
+    print("   Updating Paid Invoices log...")
+    
+    try:
+        sh = spreadsheet.worksheet("Paid Invoices")
+    except:
+        try:
+            sh = spreadsheet.add_worksheet(title="Paid Invoices", rows=5000, cols=8)
+            # Add headers
+            sh.update(values=[["Invoice ID", "Patient", "Dentist", "Amount", "Date", "Period", "Added On", "Treatment"]], range_name='A1')
+            sh.format('A1:H1', {'textFormat': {'bold': True}})
+        except Exception as e:
+            print(f"      ⚠️ Cannot create Paid Invoices tab: {e}")
+            return
+    
+    # Get existing data to find next empty row
+    existing = sh.get_all_values()
+    next_row = len(existing) + 1
+    
+    # Collect all new invoice records
+    new_records = []
+    added_on = datetime.now().strftime('%d/%m/%Y %H:%M')
+    
+    for dentist_name, payslip in payslips.items():
+        for patient in payslip.get('patients', []):
+            invoice_id = patient.get('invoice_id', '')
+            new_records.append([
+                str(invoice_id),
+                patient.get('name', ''),
+                dentist_name,
+                patient.get('amount', 0),
+                patient.get('date', ''),
+                period_str,
+                added_on,
+                patient.get('treatment', '')
+            ])
+    
+    if new_records:
+        sh.update(values=new_records, range_name=f'A{next_row}')
+        time.sleep(1)
+    
+    print(f"   ✅ Logged {len(new_records)} invoices to Paid Invoices")
 
 def get_sheets_client():
     """Get authenticated Google Sheets client"""
@@ -1504,6 +1928,35 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
         lab_bills, therapy_minutes, nhs_udas
     )
     
+    # Build historical database and check for duplicates
+    all_duplicates = []
+    drive_service = get_drive_service()
+    if drive_service:
+        try:
+            historical_db = build_historical_database(
+                drive_service, 
+                HISTORICAL_PAYSLIPS_FOLDER_ID,
+                exclude_period=period_str  # Don't include current month's PDFs
+            )
+            
+            # Check each dentist's patients against historical
+            print("\n🔍 CHECKING FOR DUPLICATES...")
+            for dentist_name, payslip in payslips.items():
+                patients = payslip.get('patients', [])
+                dups = check_for_duplicates(patients, historical_db, dentist_name, period_str)
+                if dups:
+                    all_duplicates.extend(dups)
+                    print(f"   ⚠️ {dentist_name}: {len(dups)} potential duplicates")
+            
+            if not all_duplicates:
+                print("   ✅ No duplicates found")
+        except Exception as e:
+            print(f"   ⚠️ Duplicate check error: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("\n⚠️ Skipping duplicate check - Drive service unavailable")
+    
     # Update Google Sheets
     xref_results = None
     if GOOGLE_SHEETS_CREDENTIALS:
@@ -1535,6 +1988,13 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                     update_cross_reference(spreadsheet, xref_results, period_str)
                     update_discrepancies(spreadsheet, xref_results, period_str)
                 
+                # Update duplicate check tab
+                if all_duplicates:
+                    update_duplicate_check_tab(spreadsheet, all_duplicates, period_str)
+                
+                # Log paid invoices for future duplicate detection
+                update_paid_invoices_log(spreadsheet, payslips, period_str)
+                
             except Exception as e:
                 print(f"   ⚠️ Sheets error: {e}")
                 import traceback
@@ -1552,6 +2012,10 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     # Warnings
     if finance_flags:
         print(f"\n⚠️ ACTION REQUIRED: Enter term lengths for {len(finance_flags)} finance payments")
+    
+    # Duplicate check summary
+    if all_duplicates:
+        print(f"\n🔴 DUPLICATE CHECK: {len(all_duplicates)} potential duplicates found - Review Duplicate Check tab!")
     
     # Cross-reference summary
     if xref_results:
