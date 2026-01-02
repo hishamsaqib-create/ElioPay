@@ -74,11 +74,27 @@ def apply_base_formatting(spreadsheet, sheet):
     """Apply professional base formatting to a sheet"""
     sheet_id = sheet.id
     
+    # First clear ALL existing formatting
+    clear_requests = [
+        {
+            'updateCells': {
+                'range': {'sheetId': sheet_id},
+                'fields': 'userEnteredFormat'
+            }
+        }
+    ]
+    
+    try:
+        spreadsheet.batch_update({'requests': clear_requests})
+    except:
+        pass
+    
+    # Now apply base formatting
     requests = [
         {
             'repeatCell': {
                 'range': {'sheetId': sheet_id},
-                'cell': {'userEnteredFormat': {'textFormat': {'fontFamily': 'Google Sans', 'fontSize': 11}}},
+                'cell': {'userEnteredFormat': {'textFormat': {'fontFamily': 'Arial', 'fontSize': 11}}},
                 'fields': 'userEnteredFormat.textFormat'
             }
         },
@@ -100,11 +116,14 @@ def setup_dashboard(spreadsheet):
     """Create professional executive Dashboard"""
     print("Creating Dashboard...")
     
+    # Delete and recreate to clear all formatting
     try:
-        sh = spreadsheet.worksheet("Dashboard")
-        sh.clear()
+        old_sheet = spreadsheet.worksheet("Dashboard")
+        spreadsheet.del_worksheet(old_sheet)
     except:
-        sh = spreadsheet.add_worksheet("Dashboard", 50, 16)
+        pass
+    
+    sh = spreadsheet.add_worksheet("Dashboard", 50, 16)
     
     apply_base_formatting(spreadsheet, sh)
     
@@ -171,11 +190,14 @@ def setup_dentist_payslip(spreadsheet, name, config):
     tab_name = f"{first_name} Payslip"
     print(f"Creating {tab_name}...")
     
+    # Delete and recreate to clear all formatting
     try:
-        sh = spreadsheet.worksheet(tab_name)
-        sh.clear()
+        old_sheet = spreadsheet.worksheet(tab_name)
+        spreadsheet.del_worksheet(old_sheet)
     except:
-        sh = spreadsheet.add_worksheet(tab_name, 150, 7)
+        pass
+    
+    sh = spreadsheet.add_worksheet(tab_name, 150, 7)
     
     apply_base_formatting(spreadsheet, sh)
     
@@ -263,10 +285,12 @@ def setup_finance_flags(spreadsheet):
     print("Creating Finance Flags...")
     
     try:
-        sh = spreadsheet.worksheet("Finance Flags")
-        sh.clear()
+        old_sheet = spreadsheet.worksheet("Finance Flags")
+        spreadsheet.del_worksheet(old_sheet)
     except:
-        sh = spreadsheet.add_worksheet("Finance Flags", 100, 12)
+        pass
+    
+    sh = spreadsheet.add_worksheet("Finance Flags", 100, 12)
     
     apply_base_formatting(spreadsheet, sh)
     
@@ -297,10 +321,12 @@ def setup_discrepancies(spreadsheet):
     print("Creating Discrepancies...")
     
     try:
-        sh = spreadsheet.worksheet("Discrepancies")
-        sh.clear()
+        old_sheet = spreadsheet.worksheet("Discrepancies")
+        spreadsheet.del_worksheet(old_sheet)
     except:
-        sh = spreadsheet.add_worksheet("Discrepancies", 200, 12)
+        pass
+    
+    sh = spreadsheet.add_worksheet("Discrepancies", 200, 12)
     
     apply_base_formatting(spreadsheet, sh)
     
@@ -331,10 +357,12 @@ def setup_cross_reference(spreadsheet):
     print("Creating Cross-Reference...")
     
     try:
-        sh = spreadsheet.worksheet("Cross-Reference")
-        sh.clear()
+        old_sheet = spreadsheet.worksheet("Cross-Reference")
+        spreadsheet.del_worksheet(old_sheet)
     except:
-        sh = spreadsheet.add_worksheet("Cross-Reference", 500, 14)
+        pass
+    
+    sh = spreadsheet.add_worksheet("Cross-Reference", 500, 14)
     
     apply_base_formatting(spreadsheet, sh)
     
@@ -365,10 +393,12 @@ def setup_duplicate_check(spreadsheet):
     print("Creating Duplicate Check...")
     
     try:
-        sh = spreadsheet.worksheet("Duplicate Check")
-        sh.clear()
+        old_sheet = spreadsheet.worksheet("Duplicate Check")
+        spreadsheet.del_worksheet(old_sheet)
     except:
-        sh = spreadsheet.add_worksheet("Duplicate Check", 200, 12)
+        pass
+    
+    sh = spreadsheet.add_worksheet("Duplicate Check", 200, 12)
     
     apply_base_formatting(spreadsheet, sh)
     
@@ -399,10 +429,12 @@ def setup_paid_invoices(spreadsheet):
     print("Creating Paid Invoices...")
     
     try:
-        sh = spreadsheet.worksheet("Paid Invoices")
-        sh.clear()
+        old_sheet = spreadsheet.worksheet("Paid Invoices")
+        spreadsheet.del_worksheet(old_sheet)
     except:
-        sh = spreadsheet.add_worksheet("Paid Invoices", 5000, 10)
+        pass
+    
+    sh = spreadsheet.add_worksheet("Paid Invoices", 5000, 10)
     
     apply_base_formatting(spreadsheet, sh)
     
@@ -433,10 +465,12 @@ def setup_config(spreadsheet):
     print("Creating Config...")
     
     try:
-        sh = spreadsheet.worksheet("Config")
-        sh.clear()
+        old_sheet = spreadsheet.worksheet("Config")
+        spreadsheet.del_worksheet(old_sheet)
     except:
-        sh = spreadsheet.add_worksheet("Config", 50, 8)
+        pass
+    
+    sh = spreadsheet.add_worksheet("Config", 50, 8)
     
     apply_base_formatting(spreadsheet, sh)
     
