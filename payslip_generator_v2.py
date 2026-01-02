@@ -363,7 +363,8 @@ def update_dashboard(spreadsheet, payslips, period_str):
     sh.update_acell('C5', period_str)
     sh.update_acell('H5', datetime.now().strftime('%d/%m/%Y'))
     
-    # Update each dentist row (starting at row 8)
+    # Collect all row data for batch update
+    all_rows = []
     row = 8
     total_nhs = 0
     total_private_gross = 0
@@ -394,7 +395,7 @@ def update_dashboard(spreadsheet, payslips, period_str):
                 f"£{p['total_payment']:,.2f}",
                 "✅" if p['total_payment'] > 0 else "⏳"
             ]
-            sh.update(values=[row_data], range_name=f'A{row}')
+            all_rows.append(row_data)
             
             # Totals
             if DENTISTS[name]['has_nhs']:
@@ -403,12 +404,14 @@ def update_dashboard(spreadsheet, payslips, period_str):
             total_private_net += p['net_private']
             total_deductions += p['total_deductions']
             total_net_pay += p['total_payment']
+        else:
+            all_rows.append([""] * 14)  # Empty row for missing dentist
         
         row += 1
     
-    # Update totals row
-    totals_row = row + 1
-    sh.update(values=[[
+    # Add totals row
+    all_rows.append([])  # Empty row before totals
+    all_rows.append([
         "", "TOTAL", "", "",
         f"£{total_nhs:,.2f}",
         f"£{total_private_gross:,.2f}",
@@ -418,7 +421,11 @@ def update_dashboard(spreadsheet, payslips, period_str):
         f"£{total_deductions:,.2f}",
         f"£{total_net_pay:,.2f}",
         ""
-    ]], range_name=f'A{totals_row}')
+    ])
+    
+    # Batch update all rows at once
+    sh.update(values=all_rows, range_name='A8')
+    time.sleep(1)  # Rate limit protection
 
 
 def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
@@ -587,6 +594,7 @@ def update_finance_flags(spreadsheet, finance_flags):
                 "⚠️ Enter term"
             ])
         sh.update(values=rows, range_name='A6')
+        time.sleep(1)  # Rate limit protection
 
 
 def update_cross_reference(spreadsheet, xref_results, period_str):
@@ -742,12 +750,83 @@ def update_cross_reference(spreadsheet, xref_results, period_str):
     
     # Write to sheet
     sh.update(values=rows, range_name='A1')
+    time.sleep(2)  # Rate limit protection
     
     # Formatting
     sh.format('B1', {'textFormat': {'bold': True, 'fontSize': 16}})
     sh.format('B4', {'textFormat': {'bold': True, 'fontSize': 12}})
+    time.sleep(1)  # Rate limit protection
     
     print(f"   ✅ Cross-Reference tab updated")
+
+
+def update_discrepancies(spreadsheet, xref_results, period_str):
+    """Update Discrepancies tab with items needing attention"""
+    print("   Updating Discrepancies tab...")
+    
+    try:
+        sh = spreadsheet.worksheet("Discrepancies")
+    except:
+        return
+    
+    # Clear existing data (keep headers)
+    sh.batch_clear(['A6:I500'])
+    
+    rows = []
+    row_num = 6
+    
+    for dentist_name, xref in xref_results.items():
+        if "error" in xref:
+            continue
+        
+        # Add items in log but not in Dentally (PM needs to check)
+        for item in xref.get("log_only", []):
+            rows.append([
+                "",
+                dentist_name,
+                item.get("patient", ""),
+                "❌ Not found",
+                f"£{item.get('amount', 0):,.2f}",
+                f"-£{item.get('amount', 0):,.2f}",
+                "In log but not Dentally",
+                "Check if missed or incorrect entry",
+                "⚠️ Review"
+            ])
+        
+        # Add amount mismatches
+        for item in xref.get("amount_mismatch", []):
+            diff = item.get("dentally_amount", 0) - item.get("log_amount", 0)
+            rows.append([
+                "",
+                dentist_name,
+                item.get("patient", ""),
+                f"£{item.get('dentally_amount', 0):,.2f}",
+                f"£{item.get('log_amount', 0):,.2f}",
+                f"£{diff:,.2f}",
+                "Amount mismatch",
+                "Verify correct amount",
+                "⚠️ Review"
+            ])
+        
+        # Add items in Dentally but not in log
+        for item in xref.get("dentally_only", []):
+            rows.append([
+                "",
+                dentist_name,
+                item.get("patient", ""),
+                f"£{item.get('amount', 0):,.2f}",
+                "❌ Not found",
+                f"+£{item.get('amount', 0):,.2f}",
+                "In Dentally but not in log",
+                "Dentist may need to add to log",
+                "ℹ️ Info"
+            ])
+    
+    if rows:
+        sh.update(values=rows, range_name='A6')
+        time.sleep(1)  # Rate limit protection
+    
+    print(f"   ✅ Discrepancies tab updated ({len(rows)} items)")
 
 
 # =============================================================================
@@ -1173,6 +1252,14 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
             print(f"   📋 DEBUG - Sample item fields: {list(line_items[0].keys())}")
             debug_logged = True
         
+        # Check if this invoice was paid via Finance (Tabeo)
+        is_finance_payment = False
+        payments = get_payments_for_invoice(invoice_id)
+        for payment in payments:
+            if payment.get("method", "").lower() == "finance":
+                is_finance_payment = True
+                break
+        
         # Process line items - group by practitioner
         for item in line_items:
             practitioner_id = item.get("practitioner_id")
@@ -1222,6 +1309,17 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
                 })
                 unpaid_skipped += 1
             
+            # Flag finance payments for term length entry
+            if is_finance_payment and is_paid:
+                finance_flags.append({
+                    "patient": patient_name,
+                    "dentist": dentist_name,
+                    "amount": item_amount,
+                    "date": invoice_date,
+                    "treatment": item_name,
+                    "invoice_id": invoice_id
+                })
+            
             # Add to patient totals (for cross-reference - includes all)
             if patient_id not in payslips[dentist_name]["patient_totals"]:
                 payslips[dentist_name]["patient_totals"][patient_id] = {
@@ -1246,6 +1344,7 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
     
     print(f"   ✅ Processed {processed} invoices ({skipped} API errors, {unpaid_skipped} unpaid items, {nhs_skipped} NHS items skipped)")
     print(f"   📋 Cached {len(patient_cache)} patient names")
+    print(f"   💳 Found {len(finance_flags)} finance payments needing term length")
     
     # Calculate final figures and consolidate patients
     print("\n📋 RESULTS:")
@@ -1368,6 +1467,7 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                 # Update cross-reference tab
                 if xref_results:
                     update_cross_reference(spreadsheet, xref_results, period_str)
+                    update_discrepancies(spreadsheet, xref_results, period_str)
                 
             except Exception as e:
                 print(f"   ⚠️ Sheets error: {e}")
