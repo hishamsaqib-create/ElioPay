@@ -1064,6 +1064,167 @@ def update_finance_flags(spreadsheet, finance_flags):
         time.sleep(1)  # Rate limit protection
 
 
+def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
+    """
+    Add discrepancies section to individual dentist payslip.
+    Shows items from cross-reference that need review.
+    """
+    first_name = dentist_name.split()[0]
+    tab_name = f"{first_name} Payslip"
+    
+    try:
+        sh = spreadsheet.worksheet(tab_name)
+    except:
+        print(f"   ⚠️ Tab not found: {tab_name}")
+        return
+    
+    # Get current data to find where to append
+    existing = sh.get_all_values()
+    next_row = len(existing) + 3  # Leave 2 blank rows
+    
+    discrepancy_rows = []
+    
+    # Header section
+    discrepancy_rows.extend([
+        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
+        ["", "⚠️ DISCREPANCIES TO REVIEW", "", "", "", "", "", ""],
+        ["", "Tick checkbox and re-run generator to add to payslip", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+    ])
+    
+    has_discrepancies = False
+    
+    # 1. Items in dentist log but NOT in Dentally (PM needs to check)
+    log_only = xref.get("log_only", [])
+    if log_only:
+        has_discrepancies = True
+        discrepancy_rows.append(["", "🔴 IN LOG BUT NOT IN DENTALLY (Check if missed)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "Add?", "Patient Name", "", "Date", "", "Amount", "Issue"])
+        for item in log_only:
+            discrepancy_rows.append([
+                "",
+                False,  # Checkbox
+                item.get("patient", ""),
+                "",
+                item.get("date", ""),
+                "",
+                f"£{item.get('amount', 0):,.2f}",
+                "Not in Dentally - verify"
+            ])
+        discrepancy_rows.append(["", "", "", "", "", "", "", ""])
+    
+    # 2. Amount mismatches
+    amount_mismatch = xref.get("amount_mismatch", [])
+    if amount_mismatch:
+        has_discrepancies = True
+        discrepancy_rows.append(["", "🟡 AMOUNT MISMATCHES (Verify correct amount)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "Add?", "Patient Name", "", "Date", "Dentally £", "Log £", "Difference"])
+        for item in amount_mismatch:
+            diff = item.get("dentally_amount", 0) - item.get("log_amount", 0)
+            discrepancy_rows.append([
+                "",
+                False,  # Checkbox
+                item.get("patient", ""),
+                "",
+                "",
+                f"£{item.get('dentally_amount', 0):,.2f}",
+                f"£{item.get('log_amount', 0):,.2f}",
+                f"£{diff:,.2f}"
+            ])
+        discrepancy_rows.append(["", "", "", "", "", "", "", ""])
+    
+    # 3. Items in Dentally but NOT in log (dentist may have forgotten)
+    dentally_only = xref.get("dentally_only", [])
+    if dentally_only:
+        has_discrepancies = True
+        discrepancy_rows.append(["", "🔵 IN DENTALLY BUT NOT IN LOG (Already included above - FYI)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "", "Patient Name", "", "Date", "", "Amount", "Note"])
+        for item in dentally_only:
+            discrepancy_rows.append([
+                "",
+                "",  # No checkbox - already included
+                item.get("patient", ""),
+                "",
+                item.get("date", ""),
+                "",
+                f"£{item.get('amount', 0):,.2f}",
+                "Dentist may need to add to their log"
+            ])
+        discrepancy_rows.append(["", "", "", "", "", "", "", ""])
+    
+    # 4. Unpaid/Balance flags
+    unpaid_flags = xref.get("unpaid_flags", [])
+    if unpaid_flags:
+        has_discrepancies = True
+        discrepancy_rows.append(["", "🟠 UNPAID / BALANCE FLAGS (Not included - chase payment)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "Add?", "Patient Name", "", "Date", "", "Amount", "Flag"])
+        for item in unpaid_flags:
+            discrepancy_rows.append([
+                "",
+                False,  # Checkbox
+                item.get("patient", ""),
+                "",
+                "",
+                "",
+                f"£{item.get('amount', 0):,.2f}",
+                item.get("flag", "")
+            ])
+        discrepancy_rows.append(["", "", "", "", "", "", "", ""])
+    
+    if not has_discrepancies:
+        discrepancy_rows.append(["", "✅ No discrepancies found - all items match!", "", "", "", "", "", ""])
+    
+    # Update the sheet
+    if discrepancy_rows:
+        sh.update(values=discrepancy_rows, range_name=f'A{next_row}')
+        
+        # Track which rows need checkboxes
+        checkbox_rows = []
+        row_offset = next_row
+        
+        for i, row in enumerate(discrepancy_rows):
+            if len(row) > 1 and row[1] is False:
+                checkbox_rows.append(row_offset + i)
+        
+        # Add checkboxes using batch_update
+        if checkbox_rows:
+            try:
+                requests = []
+                sheet_id = sh.id
+                for row_num in checkbox_rows:
+                    requests.append({
+                        'repeatCell': {
+                            'range': {
+                                'sheetId': sheet_id,
+                                'startRowIndex': row_num - 1,
+                                'endRowIndex': row_num,
+                                'startColumnIndex': 1,
+                                'endColumnIndex': 2
+                            },
+                            'cell': {
+                                'dataValidation': {
+                                    'condition': {
+                                        'type': 'BOOLEAN'
+                                    }
+                                }
+                            },
+                            'fields': 'dataValidation'
+                        }
+                    })
+                
+                if requests:
+                    spreadsheet.batch_update({'requests': requests})
+            except Exception as e:
+                print(f"      Note: Could not add checkboxes: {e}")
+        
+        # Bold headers
+        sh.format(f'B{next_row + 3}', {'textFormat': {'bold': True, 'fontSize': 12}})
+        
+        time.sleep(1)  # Rate limit protection
+
+
 def update_cross_reference(spreadsheet, xref_results, period_str):
     """Update Cross-Reference tab with comparison results"""
     print("   Updating Cross-Reference tab...")
@@ -1987,6 +2148,14 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                 if xref_results:
                     update_cross_reference(spreadsheet, xref_results, period_str)
                     update_discrepancies(spreadsheet, xref_results, period_str)
+                    
+                    # Add discrepancies to each dentist's individual payslip
+                    print("   Adding discrepancies to individual payslips...")
+                    for dentist_name, xref in xref_results.items():
+                        if "error" not in xref:
+                            update_payslip_discrepancies(spreadsheet, dentist_name, xref)
+                            time.sleep(1)  # Rate limit protection
+                    print("   ✅ Discrepancies added to payslips")
                 
                 # Update duplicate check tab
                 if all_duplicates:
