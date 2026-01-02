@@ -901,11 +901,14 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     first_name = dentist_name.split()[0]
     tab_name = f"{first_name} Payslip"
     
+    # Delete and recreate sheet to fully clear all formatting
     try:
-        sh = spreadsheet.worksheet(tab_name)
+        old_sheet = spreadsheet.worksheet(tab_name)
+        spreadsheet.del_worksheet(old_sheet)
     except:
-        print(f"   ⚠️ Tab not found: {tab_name}")
-        return
+        pass
+    
+    sh = spreadsheet.add_worksheet(tab_name, 200, 7)
     
     config = DENTISTS[dentist_name]
     
@@ -1023,18 +1026,14 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             status,
             f"£{patient['amount']:,.2f}",
             "",
-            "",
             ""
         ])
     
     patient_end_row = len(rows)
     
-    # Update the sheet
-    sh.clear()
-    sh.update(values=rows, range_name='A1')
-    
-    # Apply formatting
+    # Update the sheet (freshly created, no need to clear)
     sheet_id = sh.id
+    sh.update(values=rows, range_name='A1')
     
     # Set column widths
     width_requests = [
