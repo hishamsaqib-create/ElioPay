@@ -1,5 +1,4 @@
 name: Generate Payslips
-
 on:
   # Manual trigger
   workflow_dispatch:
@@ -17,15 +16,12 @@ on:
         required: false
         type: boolean
         default: false
-
   # Scheduled: 10th of each month at 9am UK
   schedule:
     - cron: '0 9 10 * *'
-
   # Webhook trigger for iPhone shortcut
   repository_dispatch:
     types: [generate-payslips]
-
 jobs:
   generate:
     runs-on: ubuntu-latest
@@ -41,7 +37,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install requests gspread google-auth reportlab python-dateutil
+          pip install requests gspread google-auth reportlab python-dateutil google-api-python-client pdfplumber
       
       - name: Generate Payslips
         env:
