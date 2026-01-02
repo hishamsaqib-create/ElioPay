@@ -716,8 +716,8 @@ def update_cross_reference(spreadsheet, xref_results, period_str):
             for m in xref["log_only"]:
                 rows.append([
                     "",
-                    m["patient"],
-                    f"£{m['amount']:,.2f}",
+                    m.get("patient", "Unknown"),
+                    f"£{m.get('amount', 0):,.2f}",
                     m.get("date", ""),
                     m.get("treatment", ""),
                     "⚠️ Check & assign or delete",
@@ -732,11 +732,11 @@ def update_cross_reference(spreadsheet, xref_results, period_str):
             for m in xref["amount_mismatch"]:
                 rows.append([
                     "",
-                    m["patient"],
-                    f"£{m['dentally_amount']:,.2f}",
-                    f"£{m['log_amount']:,.2f}",
-                    f"£{m['difference']:,.2f}",
-                    m["status"],
+                    m.get("patient", "Unknown"),
+                    f"£{m.get('dentally_amount', 0):,.2f}",
+                    f"£{m.get('log_amount', 0):,.2f}",
+                    f"£{m.get('difference', 0):,.2f}",
+                    m.get("status", ""),
                     "", "", "", "", ""
                 ])
             rows.append(["", "", "", "", "", "", "", "", "", "", ""])
@@ -748,9 +748,9 @@ def update_cross_reference(spreadsheet, xref_results, period_str):
             for m in xref["unpaid_flags"]:
                 rows.append([
                     "",
-                    m["patient"],
-                    f"£{m['amount']:,.2f}",
-                    m["flag"],
+                    m.get("patient", "Unknown"),
+                    f"£{m.get('amount', 0):,.2f}",
+                    m.get("flag", ""),
                     "", "", "", "", "", "", ""
                 ])
             rows.append(["", "", "", "", "", "", "", "", "", "", ""])
@@ -763,8 +763,8 @@ def update_cross_reference(spreadsheet, xref_results, period_str):
             for m in xref["dentally_only"][:30]:  # Limit to 30
                 rows.append([
                     "",
-                    m["patient"],
-                    f"£{m['amount']:,.2f}",
+                    m.get("patient", "Unknown"),
+                    f"£{m.get('amount', 0):,.2f}",
                     m.get("date", ""),
                     "ℹ️ Not in log",
                     "", "", "", "", "", ""
@@ -780,11 +780,11 @@ def update_cross_reference(spreadsheet, xref_results, period_str):
             for m in xref["matched"][:20]:  # Limit to 20
                 rows.append([
                     "",
-                    m["patient"],
-                    f"£{m['dentally_amount']:,.2f}",
-                    f"£{m['log_amount']:,.2f}",
-                    m["log_patient"],
-                    m["status"],
+                    m.get("patient", "Unknown"),
+                    f"£{m.get('dentally_amount', 0):,.2f}",
+                    f"£{m.get('log_amount', 0):,.2f}",
+                    m.get("log_patient", ""),
+                    m.get("status", ""),
                     "", "", "", "", ""
                 ])
             if len(xref["matched"]) > 20:
@@ -1091,7 +1091,23 @@ def cross_reference_dentist(dentist_name, dentally_patients, log_entries):
     
     if not log_entries:
         result["log_only"] = []
-        result["dentally_only"] = dentally_patients.copy()
+        result["dentally_only"] = [
+            {
+                "patient": dp["name"],
+                "amount": dp["amount"],
+                "date": dp.get("date", ""),
+                "status": "❌ Not in log"
+            }
+            for dp in dentally_patients
+        ]
+        # Still check for unpaid flags
+        for dp in dentally_patients:
+            if dp.get("payment_flag"):
+                result["unpaid_flags"].append({
+                    "patient": dp["name"],
+                    "amount": dp["amount"],
+                    "flag": dp["payment_flag"]
+                })
         return result
     
     # Track which log entries have been matched
