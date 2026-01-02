@@ -1047,7 +1047,7 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     # Patient Breakdown section
     patient_header_row = len(rows) + 1
-    rows.append(["", "Patient Breakdown", "", "", "", "", "Paid", ""])
+    rows.append(["", "Patient Breakdown", "", "", "", "", "", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     
@@ -1073,30 +1073,18 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Gross/Share summary after patients
-    gross_row = len(rows) + 1
-    if num_patients > 0:
-        rows.append(["", "Gross Private (Patient Breakdown)", "", "", f"=SUM(E{patient_start_row}:E{patient_end_row})", "", "", ""])
-    else:
-        rows.append(["", "Gross Private (Patient Breakdown)", "", "", 0, "", "", ""])
-    
-    share_row = len(rows) + 1
-    rows.append(["", f"Your Share ({split_str})", "", "", f"=E{gross_row}*{config['split']}", "", "", ""])
-    
-    rows.append(["", "", "", "", "", "", "", ""])
-    
     # Discrepancies section divider
     rows.append(["", "─" * 50, "", "", "", "", "", ""])
     
     discrep_header_row = len(rows) + 1
     rows.append(["", "⚠️ DISCREPANCIES TO REVIEW", "", "", "", "", "", ""])
-    rows.append(["", "Tick checkbox and re-run generator to add to payslip", "", "", "", "", "", ""])
+    rows.append(["", "Select action, enter amount if needed, tick Confirm to apply", "", "", "", "", "", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Log only header
+    # Log only header - new format with action dropdown
     rows.append(["", "🔴 IN LOG BUT NOT IN DENTALLY (Check if missed)", "", "", "", "", "", ""])
-    rows.append(["", "Add?", "Patient Name", "Date", "Amount", "", "", ""])
+    rows.append(["", "Patient Name", "Date", "Amount", "New £", "Action", "Confirm", ""])
     
     # Write all data
     sh.update(values=rows, range_name='A1', value_input_option='USER_ENTERED')
@@ -1125,7 +1113,7 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5}, 'properties': {'pixelSize': 180}, 'fields': 'pixelSize'}},
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 6, 'endIndex': 7}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 30}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},
         
         # Row 1 height for logo (80px for 1:1 ratio)
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 80}, 'fields': 'pixelSize'}},
@@ -1245,7 +1233,10 @@ def update_finance_flags(spreadsheet, finance_flags):
 def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
     """
     Add discrepancies section to individual dentist payslip.
-    Shows items from cross-reference that need review.
+    New format with action dropdown and confirm button.
+    
+    Columns: Patient Name | Date | Amount | New £ | Action | Confirm
+    Actions: Add to Pay, Remove from Pay, Update Amount
     """
     first_name = dentist_name.split()[0]
     tab_name = f"{first_name} Payslip"
@@ -1261,6 +1252,8 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
     next_row = len(existing) + 3  # Leave 2 blank rows
     
     discrepancy_rows = []
+    action_dropdown_rows = []  # Track rows that need action dropdowns
+    confirm_checkbox_rows = []  # Track rows that need confirm checkboxes
     
     # Header section
     discrepancy_rows.extend([
@@ -1268,87 +1261,98 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
         ["", "", "", "", "", "", "", ""],
         ["", "─────────────────────────────────────", "", "", "", "", "", ""],
         ["", "⚠️ DISCREPANCIES TO REVIEW", "", "", "", "", "", ""],
-        ["", "Tick checkbox and re-run generator to add to payslip", "", "", "", "", "", ""],
+        ["", "Select action, enter amount if needed, tick Confirm to apply", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
     ])
     
     has_discrepancies = False
     
-    # 1. Items in dentist log but NOT in Dentally (PM needs to check)
+    # 1. Items in dentist log but NOT in Dentally (PM needs to check - may need to ADD)
     log_only = xref.get("log_only", [])
     if log_only:
         has_discrepancies = True
         discrepancy_rows.append(["", "🔴 IN LOG BUT NOT IN DENTALLY (Check if missed)", "", "", "", "", "", ""])
-        discrepancy_rows.append(["", "Add?", "Patient Name", "", "Date", "", "Amount", "Issue"])
+        discrepancy_rows.append(["", "Patient Name", "Date", "Amount", "New £", "Action", "Confirm", ""])
         for item in log_only:
+            row_idx = len(discrepancy_rows)
             discrepancy_rows.append([
                 "",
-                False,  # Checkbox
                 item.get("patient", ""),
-                "",
                 item.get("date", ""),
-                "",
-                f"£{item.get('amount', 0):,.2f}",
-                "Not in Dentally - verify"
+                item.get('amount', 0),
+                "",  # New £ - editable
+                "",  # Action dropdown
+                False,  # Confirm checkbox
+                ""
             ])
+            action_dropdown_rows.append(next_row + row_idx)
+            confirm_checkbox_rows.append(next_row + row_idx)
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
-    # 2. Amount mismatches
+    # 2. Amount mismatches (may need to UPDATE amount)
     amount_mismatch = xref.get("amount_mismatch", [])
     if amount_mismatch:
         has_discrepancies = True
         discrepancy_rows.append(["", "🟡 AMOUNT MISMATCHES (Verify correct amount)", "", "", "", "", "", ""])
-        discrepancy_rows.append(["", "Add?", "Patient Name", "", "Date", "Dentally £", "Log £", "Difference"])
+        discrepancy_rows.append(["", "Patient Name", "Dentally £", "Log £", "New £", "Action", "Confirm", ""])
         for item in amount_mismatch:
-            diff = item.get("dentally_amount", 0) - item.get("log_amount", 0)
+            row_idx = len(discrepancy_rows)
             discrepancy_rows.append([
                 "",
-                False,  # Checkbox
                 item.get("patient", ""),
-                "",
-                "",
-                f"£{item.get('dentally_amount', 0):,.2f}",
-                f"£{item.get('log_amount', 0):,.2f}",
-                f"£{diff:,.2f}"
+                item.get('dentally_amount', 0),
+                item.get('log_amount', 0),
+                "",  # New £ - editable
+                "",  # Action dropdown
+                False,  # Confirm checkbox
+                ""
             ])
+            action_dropdown_rows.append(next_row + row_idx)
+            confirm_checkbox_rows.append(next_row + row_idx)
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
-    # 3. Items in Dentally but NOT in log (dentist may have forgotten)
+    # 3. Items in Dentally but NOT in log (may need to REMOVE from pay)
     dentally_only = xref.get("dentally_only", [])
     if dentally_only:
         has_discrepancies = True
-        discrepancy_rows.append(["", "🔵 IN DENTALLY BUT NOT IN LOG (Already included above - FYI)", "", "", "", "", "", ""])
-        discrepancy_rows.append(["", "", "Patient Name", "", "Date", "", "Amount", "Note"])
+        discrepancy_rows.append(["", "🔵 IN DENTALLY BUT NOT IN LOG (Already in pay - verify)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "Patient Name", "Date", "Amount", "New £", "Action", "Confirm", ""])
         for item in dentally_only:
+            row_idx = len(discrepancy_rows)
             discrepancy_rows.append([
                 "",
-                "",  # No checkbox - already included
                 item.get("patient", ""),
-                "",
                 item.get("date", ""),
-                "",
-                f"£{item.get('amount', 0):,.2f}",
-                "Dentist may need to add to their log"
+                item.get('amount', 0),
+                "",  # New £ - editable
+                "",  # Action dropdown
+                False,  # Confirm checkbox
+                ""
             ])
+            action_dropdown_rows.append(next_row + row_idx)
+            confirm_checkbox_rows.append(next_row + row_idx)
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
     # 4. Unpaid/Balance flags
     unpaid_flags = xref.get("unpaid_flags", [])
     if unpaid_flags:
         has_discrepancies = True
-        discrepancy_rows.append(["", "🟠 UNPAID / BALANCE FLAGS (Not included - chase payment)", "", "", "", "", "", ""])
-        discrepancy_rows.append(["", "Add?", "Patient Name", "", "Date", "", "Amount", "Flag"])
+        discrepancy_rows.append(["", "🟠 UNPAID / BALANCE FLAGS (Not in pay - chase payment)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "Patient Name", "Date", "Amount", "New £", "Action", "Confirm", ""])
         for item in unpaid_flags:
+            row_idx = len(discrepancy_rows)
             discrepancy_rows.append([
                 "",
-                False,  # Checkbox
                 item.get("patient", ""),
                 "",
-                "",
-                "",
-                f"£{item.get('amount', 0):,.2f}",
+                item.get('amount', 0),
+                "",  # New £ - editable
+                "",  # Action dropdown
+                False,  # Confirm checkbox
                 item.get("flag", "")
             ])
+            action_dropdown_rows.append(next_row + row_idx)
+            confirm_checkbox_rows.append(next_row + row_idx)
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
     if not has_discrepancies:
@@ -1357,48 +1361,84 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
     # Update the sheet
     if discrepancy_rows:
         sh.update(values=discrepancy_rows, range_name=f'A{next_row}')
+        time.sleep(1)
         
-        # Track which rows need checkboxes
-        checkbox_rows = []
-        row_offset = next_row
-        
-        for i, row in enumerate(discrepancy_rows):
-            if len(row) > 1 and row[1] is False:
-                checkbox_rows.append(row_offset + i)
-        
-        # Add checkboxes using batch_update
-        if checkbox_rows:
+        # Add dropdowns and checkboxes using batch_update
+        if action_dropdown_rows or confirm_checkbox_rows:
             try:
                 requests = []
                 sheet_id = sh.id
-                for row_num in checkbox_rows:
+                
+                # Add action dropdowns (column F = index 5)
+                for row_num in action_dropdown_rows:
+                    requests.append({
+                        'setDataValidation': {
+                            'range': {
+                                'sheetId': sheet_id,
+                                'startRowIndex': row_num - 1,
+                                'endRowIndex': row_num,
+                                'startColumnIndex': 5,
+                                'endColumnIndex': 6
+                            },
+                            'rule': {
+                                'condition': {
+                                    'type': 'ONE_OF_LIST',
+                                    'values': [
+                                        {'userEnteredValue': 'Add to Pay'},
+                                        {'userEnteredValue': 'Remove from Pay'},
+                                        {'userEnteredValue': 'Update Amount'}
+                                    ]
+                                },
+                                'showCustomUi': True,
+                                'strict': True
+                            }
+                        }
+                    })
+                
+                # Add confirm checkboxes (column G = index 6)
+                for row_num in confirm_checkbox_rows:
+                    requests.append({
+                        'setDataValidation': {
+                            'range': {
+                                'sheetId': sheet_id,
+                                'startRowIndex': row_num - 1,
+                                'endRowIndex': row_num,
+                                'startColumnIndex': 6,
+                                'endColumnIndex': 7
+                            },
+                            'rule': {
+                                'condition': {
+                                    'type': 'BOOLEAN'
+                                },
+                                'showCustomUi': True
+                            }
+                        }
+                    })
+                
+                # Currency format for Amount columns (D and E)
+                for row_num in action_dropdown_rows:
                     requests.append({
                         'repeatCell': {
                             'range': {
                                 'sheetId': sheet_id,
                                 'startRowIndex': row_num - 1,
                                 'endRowIndex': row_num,
-                                'startColumnIndex': 1,
-                                'endColumnIndex': 2
+                                'startColumnIndex': 3,
+                                'endColumnIndex': 5
                             },
                             'cell': {
-                                'dataValidation': {
-                                    'condition': {
-                                        'type': 'BOOLEAN'
-                                    }
+                                'userEnteredFormat': {
+                                    'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}
                                 }
                             },
-                            'fields': 'dataValidation'
+                            'fields': 'userEnteredFormat.numberFormat'
                         }
                     })
                 
                 if requests:
                     spreadsheet.batch_update({'requests': requests})
             except Exception as e:
-                print(f"      Note: Could not add checkboxes: {e}")
-        
-        # Bold headers
-        sh.format(f'B{next_row + 3}', {'textFormat': {'bold': True, 'fontSize': 12}})
+                print(f"      Note: Could not add dropdowns/checkboxes: {e}")
         
         time.sleep(1)  # Rate limit protection
 
@@ -2338,8 +2378,8 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                 if all_duplicates:
                     update_duplicate_check_tab(spreadsheet, all_duplicates, period_str)
                 
-                # Log paid invoices for future duplicate detection
-                update_paid_invoices_log(spreadsheet, payslips, period_str)
+                # DISABLED: Log paid invoices for future duplicate detection
+                # update_paid_invoices_log(spreadsheet, payslips, period_str)
                 
             except Exception as e:
                 print(f"   ⚠️ Sheets error: {e}")
