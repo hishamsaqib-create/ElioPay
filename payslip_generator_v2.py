@@ -910,7 +910,6 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     config = DENTISTS[dentist_name]
     
     # Calculate payment date (15th of following month)
-    # Parse period to get month/year
     try:
         period_date = datetime.strptime(period_str, "%B %Y")
         if period_date.month == 12:
@@ -921,16 +920,16 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     except:
         payment_str = "15th of following month"
     
-    # Build the payslip data - cleaner layout
+    # Build the payslip data - clean black/white design
     rows = [
-        ["", "", "", "", "", "", "", ""],
-        ["", "PAYSLIP", "", "", "", "", "", ""],
-        ["", "", "", "", "", "", "", ""],
-        ["", "Payslip Date:", payment_str, "", "", "", "", ""],
-        ["", "Private Period:", period_str, "", "", "", "", ""],
-        ["", "Performer:", config['display_name'], "", "", "", "", ""],
-        ["", "Practice:", PRACTICE_NAME, "", "", "", "", ""],
-        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", f'=IMAGE("{LOGO_URL}", 2)', ""],
+        ["", "PAYSLIP", "", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "Payslip Date:", payment_str, "", "", "", ""],
+        ["", "Private Period:", period_str, "", "", "", ""],
+        ["", "Performer:", config['display_name'], "", "", "", ""],
+        ["", "Practice:", PRACTICE_NAME, "", "", "", ""],
+        ["", "", "", "", "", "", ""],
     ]
     
     current_row = 9
@@ -1037,13 +1036,26 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     # Apply formatting
     sheet_id = sh.id
     
-    # Format requests
+    # Set column widths
+    width_requests = [
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 20}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 200}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 150}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 3, 'endIndex': 4}, 'properties': {'pixelSize': 80}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 6, 'endIndex': 7}, 'properties': {'pixelSize': 20}, 'fields': 'pixelSize'}},
+        # Set row height for logo row
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 60}, 'fields': 'pixelSize'}},
+    ]
+    
+    # Format requests - black and white theme
     format_requests = [
-        # Header band - teal
+        # Header band - BLACK
         {
             'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 3, 'startColumnIndex': 0, 'endColumnIndex': 8},
-                'cell': {'userEnteredFormat': {'backgroundColor': {'red': 0.0, 'green': 0.4, 'blue': 0.4}}},
+                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 3, 'startColumnIndex': 0, 'endColumnIndex': 7},
+                'cell': {'userEnteredFormat': {'backgroundColor': {'red': 0.1, 'green': 0.1, 'blue': 0.1}}},
                 'fields': 'userEnteredFormat.backgroundColor'
             }
         },
@@ -1051,27 +1063,41 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         {
             'repeatCell': {
                 'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 4},
-                'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'bold': True, 'fontSize': 20}}},
+                'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'bold': True, 'fontSize': 22, 'fontFamily': 'Arial'}}},
                 'fields': 'userEnteredFormat.textFormat'
             }
         },
         # Info labels bold
         {
             'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 9, 'startColumnIndex': 1, 'endColumnIndex': 2},
-                'cell': {'userEnteredFormat': {'textFormat': {'bold': True}}},
+                'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 8, 'startColumnIndex': 1, 'endColumnIndex': 2},
+                'cell': {'userEnteredFormat': {'textFormat': {'bold': True, 'fontFamily': 'Arial'}}},
                 'fields': 'userEnteredFormat.textFormat'
             }
         },
-        # Patient breakdown header row
+        # Patient breakdown header row - light gray background
         {
             'repeatCell': {
                 'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 2, 'endRowIndex': patient_start_row - 1, 'startColumnIndex': 1, 'endColumnIndex': 5},
                 'cell': {'userEnteredFormat': {
-                    'backgroundColor': {'red': 0.85, 'green': 0.93, 'blue': 0.93},
-                    'textFormat': {'bold': True},
+                    'backgroundColor': {'red': 0.93, 'green': 0.93, 'blue': 0.93},
+                    'textFormat': {'bold': True, 'fontFamily': 'Arial'},
                     'borders': {
-                        'bottom': {'style': 'SOLID', 'width': 2, 'color': {'red': 0.0, 'green': 0.4, 'blue': 0.4}}
+                        'bottom': {'style': 'SOLID', 'width': 2, 'color': {'red': 0.2, 'green': 0.2, 'blue': 0.2}}
+                    }
+                }},
+                'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'
+            }
+        },
+        # All patient rows - white background with bottom border
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 1, 'endRowIndex': patient_end_row, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {
+                    'backgroundColor': {'red': 1.0, 'green': 1.0, 'blue': 1.0},
+                    'textFormat': {'fontFamily': 'Arial'},
+                    'borders': {
+                        'bottom': {'style': 'SOLID', 'width': 1, 'color': {'red': 0.85, 'green': 0.85, 'blue': 0.85}}
                     }
                 }},
                 'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'
@@ -1079,24 +1105,8 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         },
     ]
     
-    # Add alternating row colors and borders for patient rows
-    for i in range(patient_start_row - 1, patient_end_row):
-        bg_color = {'red': 0.98, 'green': 0.98, 'blue': 0.98} if (i - patient_start_row) % 2 == 0 else {'red': 1.0, 'green': 1.0, 'blue': 1.0}
-        format_requests.append({
-            'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': i, 'endRowIndex': i + 1, 'startColumnIndex': 1, 'endColumnIndex': 5},
-                'cell': {'userEnteredFormat': {
-                    'backgroundColor': bg_color,
-                    'borders': {
-                        'bottom': {'style': 'SOLID', 'width': 1, 'color': {'red': 0.9, 'green': 0.9, 'blue': 0.9}}
-                    }
-                }},
-                'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.borders'
-            }
-        })
-    
     try:
-        spreadsheet.batch_update({'requests': format_requests})
+        spreadsheet.batch_update({'requests': width_requests + format_requests})
     except Exception as e:
         print(f"      Note: Formatting error: {e}")
 
