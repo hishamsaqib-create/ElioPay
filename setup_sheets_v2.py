@@ -7,12 +7,13 @@ Better UX, logo, and NHS UDA tracking
 import os
 import json
 import base64
+import time
 import gspread
 from google.oauth2.service_account import Credentials
 
 # Configuration
 SPREADSHEET_ID = os.environ.get("PAYSLIP_SPREADSHEET_ID", "1BANM1mdxxtjLAHHc8jSkchHHNbiRC474phtMEINeYHs")
-GOOGLE_SHEETS_CREDENTIALS = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
+GOOGLE_SHEETS_CREDENTIALS = os.environ.get("GO OGLE_SHEETS_CREDENTIALS", "")
 
 # Dentists with their config
 DENTISTS = {
@@ -436,17 +437,24 @@ def main():
     
     # Create main tabs
     setup_dashboard(spreadsheet)
+    time.sleep(1)
     setup_lab_bills(spreadsheet)
+    time.sleep(1)
     setup_finance_flags(spreadsheet)
+    time.sleep(1)
     setup_discrepancies(spreadsheet)
+    time.sleep(1)
     setup_incomplete(spreadsheet)
+    time.sleep(1)
     setup_config(spreadsheet)
+    time.sleep(1)
     
     # Create individual payslips
     print("\nCreating individual payslips...")
     for name, config in DENTISTS.items():
         setup_dentist_payslip(spreadsheet, name, config)
         print(f"   ✅ {name.split()[0]} Payslip")
+        time.sleep(2)  # Rate limit protection
     
     print("\n" + "=" * 60)
     print("✅ SETUP COMPLETE!")
