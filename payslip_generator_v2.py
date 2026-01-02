@@ -1,1319 +1,459 @@
 #!/usr/bin/env python3
 """
-Aura Dental Clinic - Payslip Generator v2.0
-Pulls from Dentally, updates Google Sheets, generates PDFs
-
-Author: Built for Hisham @ Aura Dental
+Aura Dental Clinic - Enhanced Google Sheet Setup
+Better UX, logo, and NHS UDA tracking
 """
 
 import os
 import json
 import base64
-import requests
-import re
-from datetime import datetime, timedelta
-from collections import defaultdict
-
-# Google Sheets
 import gspread
 from google.oauth2.service_account import Credentials
 
-# PDF Generation
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
-
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
-# Dentally API
-DENTALLY_API_TOKEN = os.environ.get("DENTALLY_API_TOKEN", "")
-DENTALLY_SITE_ID = os.environ.get("DENTALLY_SITE_ID", "212f9c01-f4f2-446d-b7a3-0162b135e9d3")
-DENTALLY_API_BASE = "https://api.dentally.co/v1"
-
-# Google Sheets
-GOOGLE_SHEETS_CREDENTIALS = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
+# Configuration
 SPREADSHEET_ID = os.environ.get("PAYSLIP_SPREADSHEET_ID", "1BANM1mdxxtjLAHHc8jSkchHHNbiRC474phtMEINeYHs")
+GOOGLE_SHEETS_CREDENTIALS = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
 
-# Logo
-LOGO_URL = "https://drive.google.com/uc?export=view&id=1Z4d-u7P8XzOOm3IKyssYrRD0o_jZ5fjd"
-
-# Practice Info
-PRACTICE_NAME = "Aura Dental Clinic"
-PRACTICE_ADDRESS = "East Avenue, Billingham, TS23 1BY"
-
-# Dentist Configuration - with Dentally practitioner_id mapping
+# Dentists with their config
 DENTISTS = {
-    "Zeeshan Abbas": {
-        "practitioner_id": 283516,
-        "split": 0.45,  # 45%
-        "uda_rate": None,
-        "has_nhs": False,
-        "display_name": "Dr Zeeshan Abbas",
-    },
-    "Peter Throw": {
-        "practitioner_id": 189357,
-        "split": 0.50,  # 50%
-        "uda_rate": 16,
-        "has_nhs": True,  # NHS
-        "display_name": "Dr Peter Throw",
-    },
-    "Priyanka Kapoor": {
-        "practitioner_id": 189361,
-        "split": 0.50,  # 50%
-        "uda_rate": 15,
-        "has_nhs": True,  # NHS
-        "display_name": "Dr Priyanka Kapoor",
-    },
-    "Moneeb Ahmad": {
-        "practitioner_id": 293046,
-        "split": 0.50,  # 50%
-        "uda_rate": 15,
-        "has_nhs": True,  # NHS
-        "display_name": "Dr Moneeb Ahmad",
-    },
-    "Hani Dalati": {
-        "practitioner_id": None,  # Add ID when known
-        "split": 0.50,  # 50%
-        "uda_rate": None,
-        "has_nhs": False,
-        "display_name": "Dr Hani Dalati",
-    },
-    "Ankush Patel": {
-        "practitioner_id": 110701,
-        "split": 0.45,  # 45%
-        "uda_rate": None,
-        "has_nhs": False,
-        "display_name": "Dr Ankush Patel",
-    },
-    "Hisham Saqib": {
-        "practitioner_id": 127844,
-        "split": 0.50,  # 50%
-        "uda_rate": None,
-        "has_nhs": False,
-        "display_name": "Dr Hisham Saqib",
-    }
+    "Zeeshan Abbas": {"split": "45%", "uda_rate": None, "has_nhs": False},
+    "Peter Throw": {"split": "50%", "uda_rate": 16, "has_nhs": True},
+    "Priyanka Kapoor": {"split": "50%", "uda_rate": 15, "has_nhs": True},
+    "Moneeb Ahmad": {"split": "50%", "uda_rate": 15, "has_nhs": True},
+    "Hani Dalati": {"split": "50%", "uda_rate": None, "has_nhs": False},
+    "Ankush Patel": {"split": "50%", "uda_rate": None, "has_nhs": False},
+    "Hisham Saqib": {"split": "50%", "uda_rate": None, "has_nhs": False},
 }
 
-# Therapist (for tracking therapy work)
-THERAPIST_ID = 288298  # Taryn Dawson
-
-# Reverse lookup: practitioner_id -> dentist_name
-PRACTITIONER_TO_DENTIST = {
-    config["practitioner_id"]: name 
-    for name, config in DENTISTS.items() 
-    if config["practitioner_id"]
-}
-
-# Private Takings Logs (read-only)
-PRIVATE_TAKINGS_LOGS = {
-    "Moneeb Ahmad": "1Y-cSU-8rZHr3uHswaZjY2MA0umZT3rxcws6nvwGIMFo",
-    "Peter Throw": "1vdKw3_hDWHaenh7OUjrwTdvN-zvf1a8dR45K08HLxr0",
-    "Priyanka Kapoor": "13EDcD6zfOdrBwUzQmn9rPXboCTUFeYiuaRHO-gCrjlo",
-    "Zeeshan Abbas": "1NWwKzMO7B12WjDnkp-MiKF4j1ge4T6yICSE1anKJhxQ",
-    "Ankush Patel": "111HtVp2ShaJm9fxzuaRHNGBWUGRq831joUfawCfevUg",
-    # Hani Dalati - no takings log (trusts practice)
-}
-
-# Deduction rates
-LAB_BILL_SPLIT = 0.50
-FINANCE_FEE_SPLIT = 0.50
-THERAPY_RATE_PER_MINUTE = 0.583333  # £35/hour
-
-# Tabeo rates by term
-TABEO_FEE_RATES = {
-    3: 0.045,   # 4.5%
-    12: 0.08,   # 8.0%
-    36: 0.034,  # 3.4%
-    60: 0.037,  # 3.7%
-}
-TABEO_DEFAULT_RATE = 0.08  # Default to 12 month
-
-# Excluded treatments (go to practice)
-EXCLUDED_TREATMENTS = ["CBCT", "CT Scan", "Cone Beam"]
+# Logo URL (hosted on Google Drive or web)
+LOGO_URL = "https://drive.google.com/uc?export=view&id=YOUR_LOGO_ID"
 
 
-# =============================================================================
-# DENTALLY API
-# =============================================================================
-
-def dentally_request(endpoint, params=None):
-    """Make a request to Dentally API"""
-    url = f"{DENTALLY_API_BASE}/{endpoint}"
-    headers = {
-        "Authorization": f"Bearer {DENTALLY_API_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "AuraPayslipGenerator/2.0"
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"   ⚠️ API error {response.status_code}: {response.text[:100]}")
-            return None
-    except Exception as e:
-        print(f"   ⚠️ API exception: {e}")
-        return None
-
-
-def get_invoices_for_period(start_date, end_date):
-    """Get all paid invoices in period - filtered for Aura site and non-zero amounts
-    
-    Uses dated_on (invoice/treatment date) for period filtering
-    Also captures paid_on and balance for validation
-    """
-    print(f"   Fetching invoices {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
-    
-    all_invoices = []
-    page = 1
-    
-    while True:
-        params = {
-            "dated_on_after": start_date.strftime("%Y-%m-%d"),
-            "dated_on_before": end_date.strftime("%Y-%m-%d"),
-            "site_id": DENTALLY_SITE_ID,  # Only Aura Dental
-            "page": page,
-            "per_page": 100
-        }
-        
-        data = dentally_request("invoices", params)
-        if not data:
-            break
-        
-        invoices = data.get("invoices", [])
-        if not invoices:
-            break
-        
-        # Filter: only paid invoices with amount > 0
-        for inv in invoices:
-            amount = float(inv.get("amount", 0))
-            balance = float(inv.get("balance", 0))
-            is_paid = inv.get("paid", False)
-            
-            if amount > 0:
-                # Track payment status for flagging
-                inv["_amount"] = amount
-                inv["_balance"] = balance
-                inv["_is_paid"] = is_paid
-                inv["_invoice_date"] = inv.get("dated_on", "")  # Treatment/invoice date
-                inv["_paid_date"] = inv.get("paid_on", "")  # Payment date
-                
-                # Flag unpaid or partial payments
-                if not is_paid or balance > 0:
-                    inv["_payment_flag"] = f"⚠️ Balance: £{balance:.2f}" if balance > 0 else "⚠️ Not marked paid"
-                else:
-                    inv["_payment_flag"] = None
-                
-                all_invoices.append(inv)
-        
-        print(f"   Page {page}: {len(invoices)} invoices, {len(all_invoices)} valid so far...")
-        
-        if len(invoices) < 100:
-            break
-        page += 1
-    
-    # Summary
-    paid_count = sum(1 for inv in all_invoices if inv["_is_paid"] and inv["_balance"] <= 0)
-    unpaid_count = len(all_invoices) - paid_count
-    
-    print(f"   Found {len(all_invoices)} invoices (£>0): {paid_count} fully paid, {unpaid_count} with balance/unpaid")
-    return all_invoices
-
-
-def get_invoice_details(invoice_id):
-    """Get full invoice with line items"""
-    return dentally_request(f"invoices/{invoice_id}")
-
-
-def get_patient_name(patient_id):
-    """Get patient name from ID"""
-    data = dentally_request(f"patients/{patient_id}")
-    if data and data.get("patient"):
-        p = data["patient"]
-        return f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
-    return "Unknown"
-
-
-def get_payments_for_invoice(invoice_id):
-    """Get payments for an invoice"""
-    data = dentally_request(f"invoices/{invoice_id}/payments")
-    if data:
-        return data.get("payments", [])
-    return []
-
-
-# =============================================================================
-# GOOGLE SHEETS
-# =============================================================================
-
-def get_sheets_client():
+def get_client():
     """Get authenticated Google Sheets client"""
-    if not GOOGLE_SHEETS_CREDENTIALS:
-        print("   ⚠️ No Google Sheets credentials")
-        return None
-    
-    try:
-        creds_dict = json.loads(base64.b64decode(GOOGLE_SHEETS_CREDENTIALS))
-        creds = Credentials.from_service_account_info(creds_dict, scopes=[
-            'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive'
-        ])
-        return gspread.authorize(creds)
-    except Exception as e:
-        print(f"   ⚠️ Sheets auth error: {e}")
-        return None
+    creds_dict = json.loads(base64.b64decode(GOOGLE_SHEETS_CREDENTIALS))
+    creds = Credentials.from_service_account_info(creds_dict, scopes=[
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive'
+    ])
+    return gspread.authorize(creds)
 
 
-def update_dashboard(spreadsheet, payslips, period_str):
-    """Update the Dashboard tab"""
-    print("   Updating Dashboard...")
+def setup_dashboard(spreadsheet):
+    """Create enhanced Dashboard"""
+    print("Creating Dashboard...")
     
     try:
         sh = spreadsheet.worksheet("Dashboard")
+        sh.clear()
     except:
-        return
+        sh = spreadsheet.add_worksheet("Dashboard", 30, 20)
     
-    # Update period
-    sh.update_acell('C5', period_str)
-    sh.update_acell('H5', datetime.now().strftime('%d/%m/%Y'))
+    # Header section
+    data = [
+        ["", "", "", "", "", "", "", "", "", "", "", ""],
+        ["", "🦷 AURA DENTAL CLINIC", "", "", "", "", "", "", "", "", "", ""],
+        ["", "PAYSLIP DASHBOARD", "", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", ""],
+        ["", "Pay Period:", "December 2025", "", "", "Generated:", "01/01/2026", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", ""],
+        # Column headers
+        ["", "DENTIST", "NHS UDAs", "UDA Rate", "NHS Income", "PRIVATE GROSS", "SPLIT", "PRIVATE NET", "LAB 50%", "FINANCE 50%", "THERAPY", "DEDUCTIONS", "NET PAY", "STATUS"],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+    ]
     
-    # Update each dentist row (starting at row 8)
-    row = 8
-    total_nhs = 0
-    total_private_gross = 0
-    total_private_net = 0
-    total_deductions = 0
-    total_net_pay = 0
-    
-    for name in DENTISTS.keys():
-        if name in payslips:
-            p = payslips[name]
-            nhs_udas = str(p.get('udas', 0)) if DENTISTS[name]['has_nhs'] else "-"
-            uda_rate = f"£{DENTISTS[name]['uda_rate']}" if DENTISTS[name]['uda_rate'] else "-"
-            nhs_income = f"£{p.get('uda_income', 0):,.2f}" if DENTISTS[name]['has_nhs'] else "-"
-            
-            row_data = [
-                "",
-                name,
-                nhs_udas,
-                uda_rate,
-                nhs_income,
-                f"£{p['gross_total']:,.2f}",
-                f"{int(DENTISTS[name]['split']*100)}%",
-                f"£{p['net_private']:,.2f}",
-                f"£{p['lab_bills_50']:,.2f}",
-                f"£{p['finance_fees_50']:,.2f}",
-                f"£{p['therapy_total']:,.2f}",
-                f"£{p['total_deductions']:,.2f}",
-                f"£{p['total_payment']:,.2f}",
-                "✅" if p['total_payment'] > 0 else "⏳"
-            ]
-            sh.update(values=[row_data], range_name=f'A{row}')
-            
-            # Totals
-            if DENTISTS[name]['has_nhs']:
-                total_nhs += p.get('uda_income', 0)
-            total_private_gross += p['gross_total']
-            total_private_net += p['net_private']
-            total_deductions += p['total_deductions']
-            total_net_pay += p['total_payment']
+    # Add dentist rows
+    for name, config in DENTISTS.items():
+        uda_rate = f"£{config['uda_rate']}" if config['uda_rate'] else "-"
+        has_nhs = "0" if config['has_nhs'] else "-"
+        nhs_income = "£0" if config['has_nhs'] else "-"
         
-        row += 1
+        data.append([
+            "",
+            name,
+            has_nhs,
+            uda_rate,
+            nhs_income,
+            "£0",
+            config['split'],
+            "£0",
+            "£0",
+            "£0",
+            "£0",
+            "£0",
+            "£0",
+            "⏳ Pending"
+        ])
     
-    # Update totals row
-    totals_row = row + 1
-    sh.update(values=[[
-        "", "TOTAL", "", "",
-        f"£{total_nhs:,.2f}",
-        f"£{total_private_gross:,.2f}",
-        "",
-        f"£{total_private_net:,.2f}",
-        "", "", "",
-        f"£{total_deductions:,.2f}",
-        f"£{total_net_pay:,.2f}",
-        ""
-    ]], range_name=f'A{totals_row}')
+    # Totals row
+    data.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+    data.append(["", "TOTAL", "", "", "£0", "£0", "", "£0", "£0", "£0", "£0", "£0", "£0", ""])
+    
+    sh.update(values=data, range_name='A1')
+    
+    # Apply formatting
+    sh.format('B2:B3', {
+        'textFormat': {'bold': True, 'fontSize': 18},
+        'horizontalAlignment': 'LEFT'
+    })
+    sh.format('B8:N8', {
+        'textFormat': {'bold': True, 'fontSize': 10},
+        'backgroundColor': {'red': 0.2, 'green': 0.2, 'blue': 0.2},
+        'horizontalAlignment': 'CENTER',
+        'textFormat': {'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'bold': True}
+    })
+    
+    # Freeze header row
+    sh.freeze(rows=8)
+    
+    print("   ✅ Dashboard created")
 
 
-def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
-    """Update individual dentist payslip tab"""
+def setup_lab_bills(spreadsheet):
+    """Create Lab Bills input tab"""
+    print("Creating Lab Bills...")
     
-    first_name = dentist_name.split()[0]
+    try:
+        sh = spreadsheet.worksheet("Lab Bills")
+        sh.clear()
+    except:
+        sh = spreadsheet.add_worksheet("Lab Bills", 200, 12)
+    
+    data = [
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "🧪 LAB BILLS", "", "", "", "", "", "", ""],
+        ["", "Enter lab bills below. Script auto-extracts from PDFs uploaded to Drive.", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "MONTH", "LAB", "PATIENT", "DENTIST", "AMOUNT", "INVOICE LINK", "STATUS", "NOTES"],
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "Dec 2025", "Furze", "John Smith", "Zeeshan Abbas", "£500.00", "", "✅ Assigned", ""],
+        ["", "Dec 2025", "Halo", "Jane Doe", "Peter Throw", "£350.00", "", "✅ Assigned", ""],
+        ["", "Dec 2025", "Straumann", "(Unknown)", "", "£200.00", "", "⚠️ Assign dentist", "No patient name"],
+    ]
+    
+    sh.update(values=data, range_name='A1')
+    
+    sh.format('B2', {'textFormat': {'bold': True, 'fontSize': 16}})
+    sh.format('B5:I5', {
+        'textFormat': {'bold': True},
+        'backgroundColor': {'red': 0.8, 'green': 0.9, 'blue': 1.0}
+    })
+    
+    print("   ✅ Lab Bills created")
+
+
+def setup_finance_flags(spreadsheet):
+    """Create Finance Flags tab"""
+    print("Creating Finance Flags...")
+    
+    try:
+        sh = spreadsheet.worksheet("Finance Flags")
+        sh.clear()
+    except:
+        sh = spreadsheet.add_worksheet("Finance Flags", 100, 12)
+    
+    data = [
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "💳 FINANCE PAYMENTS", "", "", "", "", "", "", ""],
+        ["", "Enter the term length for each finance payment to calculate correct Tabeo fee", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "PATIENT", "DENTIST", "AMOUNT", "DATE", "TERM (months)", "SUBSIDY %", "FEE AMOUNT", "STATUS"],
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "📋 RATE REFERENCE:", "", "", "", "", "", "", ""],
+        ["", "3 months", "4.5%", "", "", "", "", "", ""],
+        ["", "12 months", "8.0%", "(most common)", "", "", "", "", ""],
+        ["", "36 months", "3.4%", "", "", "", "", "", ""],
+        ["", "60 months", "3.7%", "", "", "", "", "", ""],
+    ]
+    
+    sh.update(values=data, range_name='A1')
+    
+    sh.format('B2', {'textFormat': {'bold': True, 'fontSize': 16}})
+    sh.format('B5:I5', {
+        'textFormat': {'bold': True},
+        'backgroundColor': {'red': 1.0, 'green': 0.9, 'blue': 0.8}
+    })
+    sh.format('B9:C13', {'textFormat': {'italic': True, 'fontSize': 9}})
+    
+    print("   ✅ Finance Flags created")
+
+
+def setup_discrepancies(spreadsheet):
+    """Create Discrepancies tab"""
+    print("Creating Discrepancies...")
+    
+    try:
+        sh = spreadsheet.worksheet("Discrepancies")
+        sh.clear()
+    except:
+        sh = spreadsheet.add_worksheet("Discrepancies", 100, 12)
+    
+    data = [
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "🔍 DISCREPANCIES", "", "", "", "", "", "", ""],
+        ["", "Cross-reference between Dentally and Private Takings Logs", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "DENTIST", "PATIENT", "IN DENTALLY", "IN TAKINGS LOG", "DIFFERENCE", "ISSUE", "ACTION", "STATUS"],
+    ]
+    
+    sh.update(values=data, range_name='A1')
+    
+    sh.format('B2', {'textFormat': {'bold': True, 'fontSize': 16}})
+    sh.format('B5:I5', {
+        'textFormat': {'bold': True},
+        'backgroundColor': {'red': 1.0, 'green': 0.85, 'blue': 0.85}
+    })
+    
+    print("   ✅ Discrepancies created")
+
+
+def setup_incomplete(spreadsheet):
+    """Create Incomplete Treatment tab"""
+    print("Creating Incomplete Treatment...")
+    
+    try:
+        sh = spreadsheet.worksheet("Incomplete Treatment")
+        sh.clear()
+    except:
+        sh = spreadsheet.add_worksheet("Incomplete Treatment", 100, 12)
+    
+    data = [
+        ["", "", "", "", "", "", "", ""],
+        ["", "⚠️ INCOMPLETE TREATMENT", "", "", "", "", "", ""],
+        ["", "Items that are PAID but not marked COMPLETE in Dentally", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "PATIENT", "DENTIST", "AMOUNT", "PAID DATE", "IN TAKINGS LOG", "ACTION NEEDED", "STATUS"],
+    ]
+    
+    sh.update(values=data, range_name='A1')
+    
+    sh.format('B2', {'textFormat': {'bold': True, 'fontSize': 16}})
+    sh.format('B5:H5', {
+        'textFormat': {'bold': True},
+        'backgroundColor': {'red': 1.0, 'green': 1.0, 'blue': 0.7}
+    })
+    
+    print("   ✅ Incomplete Treatment created")
+
+
+def setup_config(spreadsheet):
+    """Create Config tab"""
+    print("Creating Config...")
+    
+    try:
+        sh = spreadsheet.worksheet("Config")
+        sh.clear()
+    except:
+        sh = spreadsheet.add_worksheet("Config", 50, 6)
+    
+    data = [
+        ["", "", "", "", ""],
+        ["", "⚙️ CONFIGURATION", "", "", ""],
+        ["", "", "", "", ""],
+        ["", "SETTING", "VALUE", "NOTES", ""],
+        ["", "Pay Period", "December 2025", "Month being processed", ""],
+        ["", "", "", "", ""],
+        ["", "💳 TABEO SUBSIDY RATES", "", "", ""],
+        ["", "3 months", "4.5%", "", ""],
+        ["", "12 months", "8.0%", "Most common", ""],
+        ["", "36 months", "3.4%", "", ""],
+        ["", "60 months", "3.7%", "", ""],
+        ["", "", "", "", ""],
+        ["", "📊 DEDUCTION SPLITS", "", "", ""],
+        ["", "Lab Bills", "50%", "Dentist pays half", ""],
+        ["", "Finance Fees", "50%", "Dentist pays half", ""],
+        ["", "Therapy Rate", "£0.583/min", "£35/hour (Taryn)", ""],
+        ["", "", "", "", ""],
+        ["", "👨‍⚕️ DENTIST CONFIGURATION", "", "", ""],
+        ["", "DENTIST", "PRIVATE SPLIT", "UDA RATE", "NHS?"],
+    ]
+    
+    for name, config in DENTISTS.items():
+        uda_rate = f"£{config['uda_rate']}" if config['uda_rate'] else "-"
+        has_nhs = "Yes" if config['has_nhs'] else "No"
+        data.append(["", name, config['split'], uda_rate, has_nhs])
+    
+    data.append(["", "", "", "", ""])
+    data.append(["", "🚫 EXCLUDED FROM DENTIST PAY", "", "", ""])
+    data.append(["", "CBCT / CT Scan", "Goes to practice", "", ""])
+    
+    sh.update(values=data, range_name='A1')
+    
+    sh.format('B2', {'textFormat': {'bold': True, 'fontSize': 16}})
+    sh.format('B4:D4', {'textFormat': {'bold': True}, 'backgroundColor': {'red': 0.9, 'green': 0.9, 'blue': 0.9}})
+    sh.format('B7', {'textFormat': {'bold': True}})
+    sh.format('B13', {'textFormat': {'bold': True}})
+    sh.format('B18', {'textFormat': {'bold': True}})
+    sh.format('B19:E19', {'textFormat': {'bold': True}, 'backgroundColor': {'red': 0.9, 'green': 0.9, 'blue': 0.9}})
+    
+    print("   ✅ Config created")
+
+
+def setup_dentist_payslip(spreadsheet, name, config):
+    """Create individual dentist payslip with enhanced design"""
+    
+    first_name = name.split()[0]
     tab_name = f"{first_name} Payslip"
     
     try:
         sh = spreadsheet.worksheet(tab_name)
+        sh.clear()
     except:
-        print(f"   ⚠️ Tab not found: {tab_name}")
-        return
+        sh = spreadsheet.add_worksheet(tab_name, 100, 12)
     
-    config = DENTISTS[dentist_name]
-    
-    # Calculate payment date (15th of following month)
-    # Parse period to get month/year
-    try:
-        period_date = datetime.strptime(period_str, "%B %Y")
-        if period_date.month == 12:
-            payment_date = datetime(period_date.year + 1, 1, 15)
-        else:
-            payment_date = datetime(period_date.year, period_date.month + 1, 15)
-        payment_str = payment_date.strftime("%dth %B %Y")
-    except:
-        payment_str = "15th of following month"
-    
-    # Build the payslip data
-    rows = [
+    # Build payslip data
+    data = [
         ["", "", "", "", "", "", "", ""],
-        [f'=IMAGE("{LOGO_URL}", 1)', "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
         ["", "PAYSLIP", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
-        ["", "Payslip Date:", "", payment_str, "", "", "", ""],
-        ["", "Private Period:", "", period_str, "", "", "", ""],
-        ["", "Performer:", "", config['display_name'], "", "", "", ""],
-        ["", "Practice:", "", PRACTICE_NAME, "", "", "", ""],
+        ["", "Payslip Date:", "", "15th January 2026", "", "", "", ""],
+        ["", "Private Period:", "", "December 2025", "", "", "", ""],
+        ["", "Performer:", "", f"Dr {name}", "", "", "", ""],
+        ["", "Practice:", "", "Aura Dental Clinic", "", "", "", ""],
         ["", "Superannuation:", "", "Opted Out", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
     ]
     
-    current_row = 11
-    
-    # NHS Section
+    # NHS Section (only for dentists with UDAs)
     if config['has_nhs']:
-        rows.extend([
-            ["", "─────────────────────────────────────", "", "", "", "", "", ""],
+        data.extend([
+            ["", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "", "", "", "", "", ""],
             ["", "SECTION 1: NHS INCOME", "", "", "", "", "", ""],
             ["", "", "", "", "", "", "", ""],
-            ["", "", "", "", "UDAs Achieved", "", "", str(payslip.get('udas', 0))],
-            ["", "", "", "", "UDA Rate", "", "", f"£{config['uda_rate']}"],
-            ["", "", "", "", "NHS Income", "", "", f"£{payslip.get('uda_income', 0):,.2f}"],
+            ["", "", "", "", "UDAs Achieved", "", "", "0"],
+            ["", "", "", "", f"UDA Rate", "", "", f"£{config['uda_rate']}"],
+            ["", "", "", "", "NHS Income", "", "", "£0.00"],
             ["", "", "", "", "", "", "", ""],
         ])
-        current_row += 7
-        priv_section = "SECTION 2: PRIVATE FEES"
-        ded_section = "SECTION 3: DEDUCTIONS"
+        private_section = "SECTION 2: PRIVATE FEES"
     else:
-        priv_section = "SECTION 1: PRIVATE FEES"
-        ded_section = "SECTION 2: DEDUCTIONS"
+        private_section = "SECTION 1: PRIVATE FEES"
     
     # Private Section
-    rows.extend([
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
-        ["", priv_section, "", "", "", "", "", ""],
+    data.extend([
+        ["", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "", "", "", "", "", ""],
+        ["", private_section, "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
-        ["", "", "", "", "Gross Private (Dentist)", "", "", f"£{payslip['gross_private_dentist']:,.2f}"],
-        ["", "", "", "", "Gross Private (Therapist)", "", "", f"£{payslip['gross_private_therapist']:,.2f}"],
-        ["", "", "", "", "Gross Total", "", "", f"£{payslip['gross_total']:,.2f}"],
+        ["", "", "", "", "Gross Private by Dentist", "", "", "£0.00"],
+        ["", "", "", "", "Gross Private by Therapist", "", "", "£0.00"],
+        ["", "", "", "", "Gross Total", "", "", "£0.00"],
         ["", "", "", "", "", "", "", ""],
-        ["", "Subtotal", "", "", f"{int(config['split']*100)}%", "", "", f"£{payslip['net_private']:,.2f}"],
+        ["", "Subtotal", "", "", config['split'], "", "", "£0.00"],
         ["", "", "", "", "", "", "", ""],
     ])
     
     # Deductions Section
-    rows.extend([
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
-        ["", ded_section, "", "", "", "", "", ""],
+    section_num = "3" if config['has_nhs'] else "2"
+    data.extend([
+        ["", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "", "", "", "", "", ""],
+        ["", f"SECTION {section_num}: DEDUCTIONS", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
         ["", "", "Labs", "", "", "", "", ""],
-    ])
-    
-    # Lab bills breakdown
-    if payslip.get('lab_bills'):
-        for lab_name, amount in payslip['lab_bills'].items():
-            rows.append(["", "", "", "", lab_name, "", "", f"£{amount:,.2f}"])
-    
-    rows.extend([
-        ["", "", "", "", "Lab Bills Total", "", "", f"£{payslip['lab_bills_total']:,.2f}"],
-        ["", "", "", "", "Lab Bills 50%", "", "", f"£{payslip['lab_bills_50']:,.2f}"],
+        ["", "", "", "", "Lab Bills Total", "", "", "£0.00"],
+        ["", "", "", "", "Lab Bills 50%", "", "", "£0.00"],
         ["", "", "", "", "", "", "", ""],
         ["", "", "Finance", "", "", "", "", ""],
-        ["", "", "", "", "Finance Fees Total", "", "", f"£{payslip['finance_fees_total']:,.2f}"],
-        ["", "", "", "", "Finance Fees 50%", "", "", f"£{payslip['finance_fees_50']:,.2f}"],
+        ["", "", "", "", "Finance Fees Total", "", "", "£0.00"],
+        ["", "", "", "", "Finance Fees 50%", "", "", "£0.00"],
         ["", "", "", "", "", "", "", ""],
         ["", "", "Therapy", "", "Taryn", "", "", ""],
-        ["", "", "", "", "Minutes", "", "", str(payslip.get('therapy_minutes', 0))],
-        ["", "", "", "", "@ £0.583/min", "", "", f"£{payslip['therapy_total']:,.2f}"],
+        ["", "", "", "", "Minutes", "", "", "0"],
+        ["", "", "", "", "@ £0.583/min", "", "", "£0.00"],
         ["", "", "", "", "", "", "", ""],
-        ["", "Total Deductions", "", "", "", "", "", f"£{payslip['total_deductions']:,.2f}"],
+        ["", "Total Deductions", "", "", "", "", "", "£0.00"],
         ["", "", "", "", "", "", "", ""],
     ])
-    
-    # Add NHS income to total if applicable
-    total_with_nhs = payslip['total_payment']
-    if config['has_nhs']:
-        total_with_nhs += payslip.get('uda_income', 0)
     
     # Total Payment
-    rows.extend([
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
-        ["", "TOTAL PAYMENT", "", "", "", "", "", f"£{total_with_nhs:,.2f}"],
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
+    data.extend([
+        ["", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "", "", "", "", "", ""],
+        ["", "TOTAL PAYMENT", "", "", "", "", "", "£0.00"],
+        ["", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
+    ])
+    
+    # Patient Breakdown
+    data.extend([
         ["", "PATIENT BREAKDOWN", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
-        ["", "Patient Name", "", "Invoice Date", "", "Status", "", "Total Paid"],
+        ["", "Patient Name", "", "Completion Date", "Finance Fee", "Finance 50%", "Therapist", "Paid"],
+        ["", "", "", "", "", "", "", ""],
     ])
     
-    # Patient breakdown - consolidated (one row per patient, sorted by amount)
-    for patient in payslip.get('patients', []):
-        status = "✅" if not patient.get('payment_flag') else patient.get('payment_flag', '')
-        rows.append([
-            "",
-            patient['name'],
-            "",
-            patient.get('date', ''),
-            "",
-            status,
-            "",
-            f"£{patient['amount']:,.2f}"
-        ])
-    
-    # Update the sheet
-    sh.clear()
-    sh.update(values=rows, range_name='A1')
+    sh.update(values=data, range_name='A1')
     
     # Formatting
-    sh.format('B3', {'textFormat': {'bold': True, 'fontSize': 18}})
+    sh.format('B3', {'textFormat': {'bold': True, 'fontSize': 20}})
     sh.format('B5:B9', {'textFormat': {'bold': True}})
-
-
-def update_finance_flags(spreadsheet, finance_flags):
-    """Update Finance Flags tab with items needing term length"""
-    print("   Updating Finance Flags...")
     
-    try:
-        sh = spreadsheet.worksheet("Finance Flags")
-    except:
+    # Find and format section headers
+    for i, row in enumerate(data):
+        if len(row) > 1:
+            if "SECTION" in str(row[1]):
+                sh.format(f'B{i+1}', {'textFormat': {'bold': True, 'fontSize': 12}})
+            if "TOTAL PAYMENT" in str(row[1]):
+                sh.format(f'B{i+1}:H{i+1}', {
+                    'textFormat': {'bold': True, 'fontSize': 14},
+                    'backgroundColor': {'red': 0.9, 'green': 0.95, 'blue': 0.9}
+                })
+            if "PATIENT BREAKDOWN" in str(row[1]):
+                sh.format(f'B{i+1}', {'textFormat': {'bold': True, 'fontSize': 12}})
+    
+    return sh
+
+
+def main():
+    """Set up the complete enhanced Google Sheet"""
+    print("=" * 60)
+    print("🦷 AURA DENTAL - ENHANCED SHEET SETUP")
+    print("=" * 60)
+    
+    if not GOOGLE_SHEETS_CREDENTIALS:
+        print("❌ GOOGLE_SHEETS_CREDENTIALS not set")
         return
     
-    # Keep header rows, update from row 6
-    if finance_flags:
-        rows = []
-        for flag in finance_flags:
-            rows.append([
-                "",
-                flag['patient'],
-                flag['dentist'],
-                f"£{flag['amount']:,.2f}",
-                flag['date'],
-                "",  # Term to be entered
-                "",  # Subsidy %
-                "",  # Fee
-                "⚠️ Enter term"
-            ])
-        sh.update(values=rows, range_name='A6')
-
-
-def update_cross_reference(spreadsheet, xref_results, period_str):
-    """Update Cross-Reference tab with comparison results"""
-    print("   Updating Cross-Reference tab...")
+    client = get_client()
+    print("✅ Connected to Google Sheets")
     
-    # Try to get or create Cross-Reference tab
     try:
-        sh = spreadsheet.worksheet("Cross-Reference")
-        sh.clear()
-    except:
-        try:
-            sh = spreadsheet.add_worksheet(title="Cross-Reference", rows=500, cols=12)
-        except Exception as e:
-            print(f"      ⚠️ Cannot create Cross-Reference tab: {e}")
-            return
-    
-    rows = [
-        ["", "CROSS-REFERENCE REPORT", "", "", "", "", "", "", "", "", ""],
-        ["", f"Period: {period_str}", "", "", f"Generated: {datetime.now().strftime('%d/%m/%Y %H:%M')}", "", "", "", "", "", ""],
-        ["", "", "", "", "", "", "", "", "", "", ""],
-        ["", "SUMMARY", "", "", "", "", "", "", "", "", ""],
-        ["", "Dentist", "Dentally Total", "Log Total", "Difference", "Status", "Matched", "Mismatched", "Dentally Only", "Log Only", "Unpaid Flags"],
-    ]
-    
-    # Summary rows for each dentist
-    for dentist_name, xref in xref_results.items():
-        if "error" in xref:
-            rows.append([
-                "",
-                dentist_name,
-                f"£{xref.get('dentally_total', 0):,.2f}",
-                "⚠️ " + xref["error"],
-                "", "", "", "", "", "", ""
-            ])
-        else:
-            diff = xref["difference"]
-            status = "✅ Match" if abs(diff) <= 10 else "⚠️ Check"
-            rows.append([
-                "",
-                dentist_name,
-                f"£{xref['dentally_total']:,.2f}",
-                f"£{xref['log_total']:,.2f}",
-                f"£{diff:,.2f}",
-                status,
-                len(xref["matched"]),
-                len(xref["amount_mismatch"]),
-                len(xref["dentally_only"]),
-                len(xref["log_only"]),
-                len(xref.get("unpaid_flags", []))
-            ])
-    
-    rows.extend([
-        ["", "", "", "", "", "", "", "", "", "", ""],
-        ["", "─" * 80, "", "", "", "", "", "", "", "", ""],
-    ])
-    
-    # Detailed breakdown per dentist
-    for dentist_name, xref in xref_results.items():
-        if "error" in xref:
-            continue
-        
-        rows.extend([
-            ["", "", "", "", "", "", "", "", "", "", ""],
-            ["", f"═══ {dentist_name.upper()} ═══", "", "", "", "", "", "", "", "", ""],
-            ["", "", "", "", "", "", "", "", "", "", ""],
-        ])
-        
-        # Matched patients
-        if xref["matched"]:
-            rows.append(["", "✅ MATCHED PATIENTS", "", "", "", "", "", "", "", "", ""])
-            rows.append(["", "Patient (Dentally)", "Dentally £", "Log £", "Patient (Log)", "Status", "", "", "", "", ""])
-            for m in xref["matched"][:20]:  # Limit to 20
-                rows.append([
-                    "",
-                    m["patient"],
-                    f"£{m['dentally_amount']:,.2f}",
-                    f"£{m['log_amount']:,.2f}",
-                    m["log_patient"],
-                    m["status"],
-                    "", "", "", "", ""
-                ])
-            if len(xref["matched"]) > 20:
-                rows.append(["", f"... and {len(xref['matched']) - 20} more matched", "", "", "", "", "", "", "", "", ""])
-            rows.append(["", "", "", "", "", "", "", "", "", "", ""])
-        
-        # Amount mismatches
-        if xref["amount_mismatch"]:
-            rows.append(["", "⚠️ AMOUNT MISMATCHES", "", "", "", "", "", "", "", "", ""])
-            rows.append(["", "Patient", "Dentally £", "Log £", "Difference", "Status", "", "", "", "", ""])
-            for m in xref["amount_mismatch"]:
-                rows.append([
-                    "",
-                    m["patient"],
-                    f"£{m['dentally_amount']:,.2f}",
-                    f"£{m['log_amount']:,.2f}",
-                    f"£{m['difference']:,.2f}",
-                    m["status"],
-                    "", "", "", "", ""
-                ])
-            rows.append(["", "", "", "", "", "", "", "", "", "", ""])
-        
-        # In Dentally but not in log
-        if xref["dentally_only"]:
-            rows.append(["", "❌ IN DENTALLY BUT NOT IN LOG", "", "", "", "", "", "", "", "", ""])
-            rows.append(["", "Patient", "Amount", "Date", "Status", "", "", "", "", "", ""])
-            for m in xref["dentally_only"][:30]:  # Limit to 30
-                rows.append([
-                    "",
-                    m["patient"],
-                    f"£{m['amount']:,.2f}",
-                    m.get("date", ""),
-                    m["status"],
-                    "", "", "", "", "", ""
-                ])
-            if len(xref["dentally_only"]) > 30:
-                rows.append(["", f"... and {len(xref['dentally_only']) - 30} more", "", "", "", "", "", "", "", "", ""])
-            rows.append(["", "", "", "", "", "", "", "", "", "", ""])
-        
-        # In log but not in Dentally
-        if xref["log_only"]:
-            rows.append(["", "❓ IN LOG BUT NOT IN DENTALLY", "", "", "", "", "", "", "", "", ""])
-            rows.append(["", "Patient", "Amount", "Date", "Treatment", "Status", "", "", "", "", ""])
-            for m in xref["log_only"]:
-                rows.append([
-                    "",
-                    m["patient"],
-                    f"£{m['amount']:,.2f}",
-                    m.get("date", ""),
-                    m.get("treatment", ""),
-                    m["status"],
-                    "", "", "", "", ""
-                ])
-            rows.append(["", "", "", "", "", "", "", "", "", "", ""])
-        
-        # Unpaid flags
-        if xref.get("unpaid_flags"):
-            rows.append(["", "🚨 UNPAID / BALANCE FLAGS", "", "", "", "", "", "", "", "", ""])
-            rows.append(["", "Patient", "Amount", "Flag", "", "", "", "", "", "", ""])
-            for m in xref["unpaid_flags"]:
-                rows.append([
-                    "",
-                    m["patient"],
-                    f"£{m['amount']:,.2f}",
-                    m["flag"],
-                    "", "", "", "", "", "", ""
-                ])
-            rows.append(["", "", "", "", "", "", "", "", "", "", ""])
-    
-    # Write to sheet
-    sh.update(values=rows, range_name='A1')
-    
-    # Formatting
-    sh.format('B1', {'textFormat': {'bold': True, 'fontSize': 16}})
-    sh.format('B4', {'textFormat': {'bold': True, 'fontSize': 12}})
-    
-    print(f"   ✅ Cross-Reference tab updated")
-
-
-# =============================================================================
-# CROSS-REFERENCE WITH DENTIST LOGS
-# =============================================================================
-
-def normalize_name(name):
-    """Normalize patient name for comparison"""
-    if not name:
-        return ""
-    # Lowercase, strip whitespace, remove extra spaces
-    name = str(name).lower().strip()
-    name = " ".join(name.split())
-    return name
-
-
-def get_initials(name):
-    """Get initials from a name"""
-    if not name:
-        return ""
-    parts = name.split()
-    return "".join(p[0].lower() for p in parts if p)
-
-
-def fuzzy_match_name(name1, name2):
-    """
-    Check if two names match (fuzzy)
-    Returns: (match_score, match_type)
-    - 1.0 = exact match
-    - 0.8 = one name contains the other
-    - 0.6 = initials match full name
-    - 0.0 = no match
-    """
-    n1 = normalize_name(name1)
-    n2 = normalize_name(name2)
-    
-    if not n1 or not n2:
-        return 0.0, "empty"
-    
-    # Exact match
-    if n1 == n2:
-        return 1.0, "exact"
-    
-    # One contains the other (e.g., "john smith" vs "john")
-    if n1 in n2 or n2 in n1:
-        return 0.8, "partial"
-    
-    # Check if one is initials of the other
-    init1 = get_initials(n1)
-    init2 = get_initials(n2)
-    
-    # "sh" matches "sam harris"
-    if len(n1) <= 3 and n1 == init2:
-        return 0.6, "initials"
-    if len(n2) <= 3 and n2 == init1:
-        return 0.6, "initials"
-    
-    # Check last name match (common in dental)
-    parts1 = n1.split()
-    parts2 = n2.split()
-    if len(parts1) > 0 and len(parts2) > 0:
-        if parts1[-1] == parts2[-1]:  # Last names match
-            return 0.7, "lastname"
-    
-    return 0.0, "none"
-
-
-def read_dentist_log(client, spreadsheet_id, month, year):
-    """
-    Read a dentist's private takings log for a specific month
-    
-    Returns list of: {"patient": str, "amount": float, "date": str, "treatment": str}
-    """
-    try:
-        spreadsheet = client.open_by_key(spreadsheet_id)
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        print(f"✅ Opened: {spreadsheet.title}")
     except Exception as e:
-        print(f"      ⚠️ Cannot access log: {e}")
-        return None
+        print(f"❌ Could not open spreadsheet: {e}")
+        return
     
-    # Try different tab name formats
-    month_names = {
-        1: ["JANUARY", "JAN", "January", "Jan"],
-        2: ["FEBRUARY", "FEB", "February", "Feb"],
-        3: ["MARCH", "MAR", "March", "Mar"],
-        4: ["APRIL", "APR", "April", "Apr"],
-        5: ["MAY", "May"],
-        6: ["JUNE", "JUN", "June", "Jun"],
-        7: ["JULY", "JUL", "July", "Jul"],
-        8: ["AUGUST", "AUG", "August", "Aug"],
-        9: ["SEPTEMBER", "SEP", "SEPT", "September", "Sept"],
-        10: ["OCTOBER", "OCT", "October", "Oct"],
-        11: ["NOVEMBER", "NOV", "November", "Nov"],
-        12: ["DECEMBER", "DEC", "December", "Dec"],
-    }
+    # Delete default Sheet1 if exists
+    try:
+        spreadsheet.del_worksheet(spreadsheet.worksheet("Sheet1"))
+    except:
+        pass
     
-    year_short = str(year)[2:]  # "2025" -> "25"
+    print("\n📊 Creating tabs...")
     
-    # Build possible tab names
-    possible_names = []
-    for name in month_names.get(month, []):
-        possible_names.extend([
-            f"{name} {year_short}",      # "DECEMBER 25"
-            f"{name} {year}",            # "DECEMBER 2025"
-            f"{name}{year_short}",       # "DECEMBER25"
-            f"{name.upper()} {year_short}",
-            f"{name.lower()} {year_short}",
-        ])
+    # Create main tabs
+    setup_dashboard(spreadsheet)
+    setup_lab_bills(spreadsheet)
+    setup_finance_flags(spreadsheet)
+    setup_discrepancies(spreadsheet)
+    setup_incomplete(spreadsheet)
+    setup_config(spreadsheet)
     
-    # Find matching sheet
-    sheet = None
-    all_sheets = [ws.title for ws in spreadsheet.worksheets()]
-    
-    for tab_name in possible_names:
-        if tab_name in all_sheets:
-            sheet = spreadsheet.worksheet(tab_name)
-            break
-        # Case insensitive match
-        for ws_name in all_sheets:
-            if ws_name.lower().strip() == tab_name.lower().strip():
-                sheet = spreadsheet.worksheet(ws_name)
-                break
-        if sheet:
-            break
-    
-    if not sheet:
-        print(f"      ⚠️ No tab found for {month}/{year}. Available: {all_sheets[:5]}...")
-        return None
-    
-    print(f"      Found tab: {sheet.title}")
-    
-    # Read all data
-    data = sheet.get_all_values()
-    
-    # Find the header row (contains "DATE", "PATIENT", etc.)
-    header_row = None
-    for i, row in enumerate(data):
-        row_lower = [str(cell).lower() for cell in row]
-        if "date" in row_lower and ("patient" in row_lower or any("patient" in c for c in row_lower)):
-            header_row = i
-            break
-    
-    if header_row is None:
-        print(f"      ⚠️ Cannot find header row")
-        return None
-    
-    # Parse entries - look for rows with data after header
-    entries = []
-    current_date = None
-    
-    for row in data[header_row + 1:]:
-        if len(row) < 4:
-            continue
-        
-        # Check for "TOTAL GROSS" row - stop here
-        if any("total" in str(cell).lower() for cell in row):
-            break
-        
-        # Column mapping (based on the log structure)
-        # Col 0/1 = DATE, Col 1/2 = PATIENT, Col 2/3 = TREATMENT, Col 3/4 = AMOUNT
-        date_val = row[0] if len(row) > 0 else ""
-        patient_val = row[1] if len(row) > 1 else ""
-        treatment_val = row[2] if len(row) > 2 else ""
-        amount_val = row[3] if len(row) > 3 else ""
-        
-        # Update current date if present
-        if date_val and str(date_val).strip():
-            current_date = str(date_val).strip()
-        
-        # Skip empty rows
-        if not patient_val or not str(patient_val).strip():
-            continue
-        
-        # Parse amount
-        try:
-            amount_str = str(amount_val).replace("£", "").replace(",", "").strip()
-            amount = float(amount_str) if amount_str else 0
-        except:
-            amount = 0
-        
-        if amount > 0:
-            entries.append({
-                "patient": str(patient_val).strip(),
-                "amount": amount,
-                "date": current_date,
-                "treatment": str(treatment_val).strip()
-            })
-    
-    print(f"      Found {len(entries)} entries, total: £{sum(e['amount'] for e in entries):,.2f}")
-    return entries
-
-
-def cross_reference_dentist(dentist_name, dentally_patients, log_entries):
-    """
-    Cross-reference Dentally data with dentist's log
-    
-    Returns:
-        {
-            "dentally_total": float,
-            "log_total": float,
-            "difference": float,
-            "matched": [...],      # Patients found in both
-            "dentally_only": [...], # In Dentally but not in log
-            "log_only": [...],      # In log but not in Dentally
-            "amount_mismatch": [...] # Same patient, different amounts
-        }
-    """
-    result = {
-        "dentist": dentist_name,
-        "dentally_total": sum(p["amount"] for p in dentally_patients),
-        "log_total": sum(e["amount"] for e in log_entries) if log_entries else 0,
-        "matched": [],
-        "dentally_only": [],
-        "log_only": [],
-        "amount_mismatch": [],
-        "unpaid_flags": []
-    }
-    
-    result["difference"] = result["dentally_total"] - result["log_total"]
-    
-    if not log_entries:
-        result["log_only"] = []
-        result["dentally_only"] = dentally_patients.copy()
-        return result
-    
-    # Track which log entries have been matched
-    log_matched = [False] * len(log_entries)
-    
-    # Try to match each Dentally patient
-    for dp in dentally_patients:
-        best_match = None
-        best_score = 0
-        best_idx = -1
-        
-        for i, le in enumerate(log_entries):
-            if log_matched[i]:
-                continue
-            
-            score, match_type = fuzzy_match_name(dp["name"], le["patient"])
-            if score > best_score:
-                best_score = score
-                best_match = le
-                best_idx = i
-        
-        if best_score >= 0.6:  # Good enough match
-            log_matched[best_idx] = True
-            
-            # Check if amounts match (within £1 tolerance)
-            if abs(dp["amount"] - best_match["amount"]) <= 1:
-                result["matched"].append({
-                    "patient": dp["name"],
-                    "dentally_amount": dp["amount"],
-                    "log_amount": best_match["amount"],
-                    "log_patient": best_match["patient"],
-                    "status": "✅"
-                })
-            else:
-                result["amount_mismatch"].append({
-                    "patient": dp["name"],
-                    "dentally_amount": dp["amount"],
-                    "log_amount": best_match["amount"],
-                    "log_patient": best_match["patient"],
-                    "difference": dp["amount"] - best_match["amount"],
-                    "status": "⚠️ Amount differs"
-                })
-        else:
-            result["dentally_only"].append({
-                "patient": dp["name"],
-                "amount": dp["amount"],
-                "date": dp.get("date", ""),
-                "status": "❌ Not in log"
-            })
-        
-        # Check for payment flags
-        if dp.get("payment_flag"):
-            result["unpaid_flags"].append({
-                "patient": dp["name"],
-                "amount": dp["amount"],
-                "flag": dp["payment_flag"]
-            })
-    
-    # Find log entries not matched to Dentally
-    for i, le in enumerate(log_entries):
-        if not log_matched[i]:
-            result["log_only"].append({
-                "patient": le["patient"],
-                "amount": le["amount"],
-                "date": le.get("date", ""),
-                "treatment": le.get("treatment", ""),
-                "status": "❓ Not in Dentally"
-            })
-    
-    return result
-
-
-def perform_cross_reference(client, payslips, month, year):
-    """
-    Perform cross-reference for all dentists with logs
-    """
-    print("\n🔍 CROSS-REFERENCING WITH DENTIST LOGS...")
-    print("=" * 50)
-    
-    results = {}
-    
-    for dentist_name, log_id in PRIVATE_TAKINGS_LOGS.items():
-        if dentist_name not in payslips:
-            continue
-        
-        print(f"\n   {dentist_name}:")
-        
-        # Get dentally patients for this dentist
-        dentally_patients = payslips[dentist_name].get("patients", [])
-        
-        # Read their log
-        log_entries = read_dentist_log(client, log_id, month, year)
-        
-        if log_entries is None:
-            print(f"      ⚠️ Could not read log - skipping cross-reference")
-            results[dentist_name] = {
-                "dentist": dentist_name,
-                "error": "Could not read log",
-                "dentally_total": payslips[dentist_name].get("gross_total", 0)
-            }
-            continue
-        
-        # Perform cross-reference
-        xref = cross_reference_dentist(dentist_name, dentally_patients, log_entries)
-        results[dentist_name] = xref
-        
-        # Print summary
-        print(f"      Dentally: £{xref['dentally_total']:,.2f}")
-        print(f"      Log:      £{xref['log_total']:,.2f}")
-        print(f"      Diff:     £{xref['difference']:,.2f} {'⚠️' if abs(xref['difference']) > 10 else '✅'}")
-        print(f"      Matched: {len(xref['matched'])}, Mismatched: {len(xref['amount_mismatch'])}")
-        print(f"      Dentally only: {len(xref['dentally_only'])}, Log only: {len(xref['log_only'])}")
-        
-        if xref['unpaid_flags']:
-            print(f"      ⚠️ {len(xref['unpaid_flags'])} unpaid/balance flags!")
-    
-    return results
-
-def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=None, nhs_udas=None):
-    """
-    Calculate payslips for all dentists
-    
-    Args:
-        start_date: First day of period
-        end_date: Last day of period
-        lab_bills: {dentist: {lab: amount}}
-        therapy_minutes: {dentist: minutes}
-        nhs_udas: {dentist: uda_count}
-    """
-    print(f"\n📊 Calculating payslips for {start_date.strftime('%B %Y')}...")
-    
-    lab_bills = lab_bills or {}
-    therapy_minutes = therapy_minutes or {}
-    nhs_udas = nhs_udas or {}
-    
-    # Initialize payslips
-    payslips = {}
+    # Create individual payslips
+    print("\nCreating individual payslips...")
     for name, config in DENTISTS.items():
-        payslips[name] = {
-            "dentist_name": name,
-            "gross_private_dentist": 0,
-            "gross_private_therapist": 0,
-            "gross_total": 0,
-            "net_private": 0,
-            "udas": nhs_udas.get(name, 0),
-            "uda_income": nhs_udas.get(name, 0) * (config['uda_rate'] or 0),
-            "lab_bills": lab_bills.get(name, {}),
-            "lab_bills_total": 0,
-            "lab_bills_50": 0,
-            "finance_fees_total": 0,
-            "finance_fees_50": 0,
-            "therapy_minutes": therapy_minutes.get(name, 0),
-            "therapy_total": 0,
-            "total_deductions": 0,
-            "total_payment": 0,
-            "invoice_count": 0,
-            "patient_totals": {},  # {patient_id: {"name": str, "total": float, ...}}
-            "patients": [],  # Final consolidated list
-            "payment_flags": [],  # Unpaid or balance issues
-        }
+        setup_dentist_payslip(spreadsheet, name, config)
+        print(f"   ✅ {name.split()[0]} Payslip")
     
-    # Track finance payments needing term length
-    finance_flags = []
-    
-    # Get invoices (already filtered for site)
-    invoices = get_invoices_for_period(start_date, end_date)
-    
-    # Patient name cache
-    patient_cache = {}
-    
-    # Process each invoice
-    processed = 0
-    skipped = 0
-    unpaid_skipped = 0
-    
-    print(f"   Processing {len(invoices)} invoices...")
-    
-    for invoice in invoices:
-        invoice_id = invoice.get("id")
-        patient_id = invoice.get("patient_id")
-        is_paid = invoice.get("_is_paid", False)
-        balance = invoice.get("_balance", 0)
-        payment_flag = invoice.get("_payment_flag")
-        invoice_date = invoice.get("_invoice_date", "")
-        paid_date = invoice.get("_paid_date", "")
-        
-        # Get invoice details with line items
-        details = get_invoice_details(invoice_id)
-        if not details:
-            skipped += 1
-            continue
-        
-        invoice_data = details.get("invoice", {})
-        line_items = invoice_data.get("invoice_items", [])
-        
-        # Process line items - group by practitioner
-        for item in line_items:
-            practitioner_id = item.get("practitioner_id")
-            item_name = item.get("name", "")
-            item_amount = float(item.get("total_price", 0))
-            
-            if item_amount <= 0:
-                continue
-            
-            # Skip excluded treatments (CBCT etc)
-            if any(excl.lower() in item_name.lower() for excl in EXCLUDED_TREATMENTS):
-                continue
-            
-            # Skip therapist work (handled via therapy_minutes input)
-            if practitioner_id == THERAPIST_ID:
-                continue
-            
-            # Look up dentist by practitioner_id
-            dentist_name = PRACTITIONER_TO_DENTIST.get(practitioner_id)
-            if not dentist_name:
-                continue
-            
-            # Get patient name (with caching)
-            if patient_id not in patient_cache:
-                patient_cache[patient_id] = get_patient_name(patient_id)
-            patient_name = patient_cache[patient_id]
-            
-            # Only add to gross total if PAID and no balance
-            if is_paid and balance <= 0:
-                payslips[dentist_name]["gross_private_dentist"] += item_amount
-                payslips[dentist_name]["invoice_count"] += 1
-            else:
-                # Track as payment flag
-                payslips[dentist_name]["payment_flags"].append({
-                    "patient": patient_name,
-                    "amount": item_amount,
-                    "treatment": item_name,
-                    "invoice_date": invoice_date,
-                    "balance": balance,
-                    "is_paid": is_paid,
-                    "flag": payment_flag or "⚠️ Unpaid"
-                })
-                unpaid_skipped += 1
-            
-            # Add to patient totals (for cross-reference - includes all)
-            if patient_id not in payslips[dentist_name]["patient_totals"]:
-                payslips[dentist_name]["patient_totals"][patient_id] = {
-                    "name": patient_name,
-                    "total": 0,
-                    "paid_total": 0,  # Only fully paid amounts
-                    "last_date": invoice_date,
-                    "payment_flag": None
-                }
-            
-            payslips[dentist_name]["patient_totals"][patient_id]["total"] += item_amount
-            payslips[dentist_name]["patient_totals"][patient_id]["last_date"] = invoice_date
-            
-            if is_paid and balance <= 0:
-                payslips[dentist_name]["patient_totals"][patient_id]["paid_total"] += item_amount
-            else:
-                payslips[dentist_name]["patient_totals"][patient_id]["payment_flag"] = payment_flag
-        
-        processed += 1
-        if processed % 100 == 0:
-            print(f"   Processed {processed}/{len(invoices)} invoices...")
-    
-    print(f"   ✅ Processed {processed} invoices ({skipped} API errors, {unpaid_skipped} unpaid items)")
-    print(f"   📋 Cached {len(patient_cache)} patient names")
-    
-    # Calculate final figures and consolidate patients
-    print("\n📋 RESULTS:")
-    print("=" * 50)
-    
-    for name, p in payslips.items():
-        config = DENTISTS[name]
-        
-        # Consolidate patient_totals into patients list (sorted by date chronologically)
-        p["patients"] = sorted([
-            {
-                "name": pt["name"], 
-                "amount": pt["total"],  # Total for cross-reference
-                "paid_amount": pt["paid_total"],  # Paid amount for payslip
-                "date": pt["last_date"],
-                "payment_flag": pt["payment_flag"]
-            }
-            for pt in p["patient_totals"].values()
-        ], key=lambda x: x["date"] or "9999-99-99")  # Sort by date, empty dates at end
-        
-        # Remove the working dict
-        del p["patient_totals"]
-        
-        p["gross_total"] = p["gross_private_dentist"] + p["gross_private_therapist"]
-        p["net_private"] = p["gross_total"] * config["split"]
-        
-        p["lab_bills_total"] = sum(p["lab_bills"].values())
-        p["lab_bills_50"] = p["lab_bills_total"] * LAB_BILL_SPLIT
-        
-        p["finance_fees_50"] = p["finance_fees_total"] * FINANCE_FEE_SPLIT
-        
-        p["therapy_total"] = p["therapy_minutes"] * THERAPY_RATE_PER_MINUTE
-        
-        p["total_deductions"] = (
-            p["lab_bills_50"] +
-            p["finance_fees_50"] +
-            p["therapy_total"]
-        )
-        
-        p["total_payment"] = p["net_private"] - p["total_deductions"]
-        
-        if p["gross_total"] > 0 or p["payment_flags"]:
-            split_pct = int(config["split"] * 100)
-            flags_str = f" ⚠️ {len(p['payment_flags'])} unpaid" if p['payment_flags'] else ""
-            print(f"   {name} ({split_pct}%): Gross £{p['gross_total']:,.2f} → Net £{p['total_payment']:,.2f} ({len(p['patients'])} patients){flags_str}")
-    
-    return payslips, finance_flags
-
-
-# =============================================================================
-# MAIN
-# =============================================================================
-
-def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes=None, nhs_udas=None):
-    """Main function to generate payslips"""
-    
-    print("=" * 60)
-    print("🦷 AURA DENTAL CLINIC - PAYSLIP GENERATOR")
-    print("=" * 60)
-    
-    # Determine period
-    if year is None or month is None:
-        today = datetime.now()
-        # Default to previous month
-        if today.month == 1:
-            year = today.year - 1
-            month = 12
-        else:
-            year = today.year
-            month = today.month - 1
-    
-    start_date = datetime(year, month, 1)
-    if month == 12:
-        end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
-    else:
-        end_date = datetime(year, month + 1, 1) - timedelta(days=1)
-    
-    period_str = start_date.strftime("%B %Y")
-    
-    print(f"\n📅 Period: {period_str}")
-    print(f"📅 {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
-    
-    # Validate credentials
-    if not DENTALLY_API_TOKEN:
-        print("\n❌ DENTALLY_API_TOKEN not set")
-        return None
-    
-    # Calculate payslips
-    payslips, finance_flags = calculate_payslips(
-        start_date, end_date,
-        lab_bills, therapy_minutes, nhs_udas
-    )
-    
-    # Update Google Sheets
-    xref_results = None
-    if GOOGLE_SHEETS_CREDENTIALS:
-        print("\n📊 Updating Google Sheets...")
-        client = get_sheets_client()
-        if client:
-            try:
-                spreadsheet = client.open_by_key(SPREADSHEET_ID)
-                
-                # Update Dashboard
-                update_dashboard(spreadsheet, payslips, period_str)
-                
-                # Update individual payslips
-                for name, payslip in payslips.items():
-                    update_dentist_payslip(spreadsheet, name, payslip, period_str)
-                    print(f"   ✅ {name.split()[0]} Payslip")
-                
-                # Update finance flags
-                if finance_flags:
-                    update_finance_flags(spreadsheet, finance_flags)
-                    print(f"   ⚠️ {len(finance_flags)} finance payments need term length")
-                
-                # Perform cross-reference with dentist logs
-                xref_results = perform_cross_reference(client, payslips, month, year)
-                
-                # Update cross-reference tab
-                if xref_results:
-                    update_cross_reference(spreadsheet, xref_results, period_str)
-                
-            except Exception as e:
-                print(f"   ⚠️ Sheets error: {e}")
-                import traceback
-                traceback.print_exc()
-    
-    # Summary
     print("\n" + "=" * 60)
-    print("✅ PAYSLIP GENERATION COMPLETE")
+    print("✅ SETUP COMPLETE!")
     print("=" * 60)
-    
-    total_payout = sum(p['total_payment'] for p in payslips.values())
-    print(f"\n💰 Total Payout: £{total_payout:,.2f}")
-    print(f"\n🔗 View: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
-    
-    # Warnings
-    if finance_flags:
-        print(f"\n⚠️ ACTION REQUIRED: Enter term lengths for {len(finance_flags)} finance payments")
-    
-    # Cross-reference summary
-    if xref_results:
-        print("\n📋 CROSS-REFERENCE SUMMARY:")
-        for dentist, xref in xref_results.items():
-            if "error" not in xref:
-                diff = xref["difference"]
-                status = "✅" if abs(diff) <= 10 else "⚠️"
-                print(f"   {status} {dentist}: Diff £{diff:,.2f} | {len(xref['dentally_only'])} not in log, {len(xref['log_only'])} not in Dentally")
-    
-    # Payment flags summary
-    total_flags = sum(len(p.get("payment_flags", [])) for p in payslips.values())
-    if total_flags > 0:
-        print(f"\n🚨 {total_flags} UNPAID/BALANCE FLAGS - Check Cross-Reference tab!")
-    
-    return payslips
+    print(f"\n🔗 View your sheet:")
+    print(f"   https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
 
 
 if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Generate dental practice payslips")
-    parser.add_argument("--year", type=int, help="Year (default: previous month)")
-    parser.add_argument("--month", type=int, help="Month 1-12 (default: previous month)")
-    
-    args = parser.parse_args()
-    
-    run_payslip_generator(args.year, args.month)
+    main()
