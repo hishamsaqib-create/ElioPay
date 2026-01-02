@@ -347,8 +347,8 @@ def setup_dentist_payslip(spreadsheet, name, config):
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
         # Column G - Amounts
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 6, 'endIndex': 7}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
-        # Column H - right spacer
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 30}, 'fields': 'pixelSize'}},
+        # Column H - Status/Notes
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},
         
         # Row 1 height for logo - 80px for 1:1 ratio with 80px wide logo
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 80}, 'fields': 'pixelSize'}},
@@ -672,8 +672,8 @@ def main():
     time.sleep(3)
     setup_duplicate_check(spreadsheet)
     time.sleep(3)
-    setup_paid_invoices(spreadsheet)
-    time.sleep(3)
+    # DISABLED: setup_paid_invoices(spreadsheet)
+    # time.sleep(3)
     setup_config(spreadsheet)
     time.sleep(3)
     
