@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Aura Dental Clinic - Professional Google Sheet Setup
-Corporate-level design with brand colors and clean UX
+Aura Dental Clinic - Professional Sheet Setup v2.0
+Black/White/Beige branding matching Aura website
 """
 
 import os
@@ -15,49 +15,33 @@ from google.oauth2.service_account import Credentials
 SPREADSHEET_ID = os.environ.get("PAYSLIP_SPREADSHEET_ID", "1BANM1mdxxtjLAHHc8jSkchHHNbiRC474phtMEINeYHs")
 GOOGLE_SHEETS_CREDENTIALS = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
 
-# =============================================================================
-# DESIGN SYSTEM - Aura Brand Colors
-# =============================================================================
-
+# Aura Brand Colors
 COLORS = {
-    # Primary palette (dark teal from Aura logo)
-    'primary': {'red': 0.0, 'green': 0.4, 'blue': 0.4},
-    'primary_light': {'red': 0.0, 'green': 0.5, 'blue': 0.5},
-    'primary_lighter': {'red': 0.85, 'green': 0.95, 'blue': 0.95},
-    
-    # Accent colors (gold)
-    'accent': {'red': 0.95, 'green': 0.77, 'blue': 0.06},
-    'accent_light': {'red': 1.0, 'green': 0.95, 'blue': 0.8},
-    
-    # Neutrals
+    'black': {'red': 0.1, 'green': 0.1, 'blue': 0.1},
     'white': {'red': 1.0, 'green': 1.0, 'blue': 1.0},
-    'off_white': {'red': 0.98, 'green': 0.98, 'blue': 0.98},
-    'light_gray': {'red': 0.95, 'green': 0.95, 'blue': 0.95},
-    'medium_gray': {'red': 0.85, 'green': 0.85, 'blue': 0.85},
-    'dark_gray': {'red': 0.3, 'green': 0.3, 'blue': 0.3},
-    
-    # Status colors
-    'success': {'red': 0.85, 'green': 0.95, 'blue': 0.85},
-    'success_text': {'red': 0.13, 'green': 0.55, 'blue': 0.13},
-    'warning': {'red': 1.0, 'green': 0.95, 'blue': 0.8},
-    'warning_text': {'red': 0.8, 'green': 0.52, 'blue': 0.0},
-    'error': {'red': 1.0, 'green': 0.9, 'blue': 0.9},
-    'error_text': {'red': 0.8, 'green': 0.2, 'blue': 0.2},
-    'info': {'red': 0.9, 'green': 0.95, 'blue': 1.0},
-    'info_text': {'red': 0.2, 'green': 0.4, 'blue': 0.8},
+    'beige': {'red': 0.96, 'green': 0.93, 'blue': 0.88},      # #F5EDE1
+    'beige_light': {'red': 0.98, 'green': 0.96, 'blue': 0.93}, # #FAF5EE
+    'gold': {'red': 0.83, 'green': 0.65, 'blue': 0.45},        # #D4A574
+    'gold_light': {'red': 0.96, 'green': 0.90, 'blue': 0.83},  # #F5E6D3
+    'green': {'red': 0.85, 'green': 0.92, 'blue': 0.85},       # Success
+    'red_light': {'red': 0.99, 'green': 0.90, 'blue': 0.90},   # Warning
+    'gray': {'red': 0.95, 'green': 0.95, 'blue': 0.95},
+    'gray_dark': {'red': 0.3, 'green': 0.3, 'blue': 0.3},
 }
 
+# Dentists config
 DENTISTS = {
-    "Zeeshan Abbas": {"split": "45%", "uda_rate": None, "has_nhs": False, "display": "Dr Zeeshan Abbas"},
-    "Peter Throw": {"split": "50%", "uda_rate": 16, "has_nhs": True, "display": "Dr Peter Throw"},
-    "Priyanka Kapoor": {"split": "50%", "uda_rate": 15, "has_nhs": True, "display": "Dr Priyanka Kapoor"},
-    "Moneeb Ahmad": {"split": "50%", "uda_rate": 15, "has_nhs": True, "display": "Dr Moneeb Ahmad"},
-    "Hani Dalati": {"split": "50%", "uda_rate": None, "has_nhs": False, "display": "Dr Hani Dalati"},
-    "Ankush Patel": {"split": "50%", "uda_rate": None, "has_nhs": False, "display": "Dr Ankush Patel"},
-    "Hisham Saqib": {"split": "50%", "uda_rate": None, "has_nhs": False, "display": "Dr Hisham Saqib"},
+    "Zeeshan Abbas": {"split": "45%", "uda_rate": None, "has_nhs": False},
+    "Peter Throw": {"split": "50%", "uda_rate": 16, "has_nhs": True},
+    "Priyanka Kapoor": {"split": "50%", "uda_rate": 15, "has_nhs": True},
+    "Moneeb Ahmad": {"split": "50%", "uda_rate": 15, "has_nhs": True},
+    "Hani Dalati": {"split": "50%", "uda_rate": None, "has_nhs": False},
+    "Ankush Patel": {"split": "45%", "uda_rate": None, "has_nhs": False},
+    "Hisham Saqib": {"split": "50%", "uda_rate": None, "has_nhs": False},
 }
 
-LOGO_URL = "https://drive.google.com/uc?export=view&id=1Z4d-u7P8XzOOm3IKyssYrRD0o_jZ5fjd"
+# Logo - share this file with the service account email
+LOGO_FILE_ID = "1Z4d-u7P8XzOOm3IKyssYrRD0o_jZ5fjd"
 
 
 def get_client():
@@ -70,412 +54,546 @@ def get_client():
     return gspread.authorize(creds)
 
 
-def apply_base_formatting(spreadsheet, sheet):
-    """Apply professional base formatting to a sheet"""
-    sheet_id = sheet.id
-    
-    requests = [
-        {
-            'repeatCell': {
-                'range': {'sheetId': sheet_id},
-                'cell': {'userEnteredFormat': {'textFormat': {'fontFamily': 'Google Sans', 'fontSize': 11}}},
-                'fields': 'userEnteredFormat.textFormat'
-            }
-        },
-        {
-            'updateSheetProperties': {
-                'properties': {'sheetId': sheet_id, 'gridProperties': {'hideGridlines': True}},
-                'fields': 'gridProperties.hideGridlines'
-            }
-        }
-    ]
-    
-    try:
-        spreadsheet.batch_update({'requests': requests})
-    except:
-        pass
-
-
 def setup_dashboard(spreadsheet):
-    """Create professional executive Dashboard"""
-    print("Creating Dashboard...")
+    """Setup Dashboard with Aura branding"""
+    print("   Setting up Dashboard...")
     
     try:
         sh = spreadsheet.worksheet("Dashboard")
         sh.clear()
     except:
-        sh = spreadsheet.add_worksheet("Dashboard", 50, 16)
+        sh = spreadsheet.add_worksheet(title="Dashboard", rows=100, cols=20)
     
-    apply_base_formatting(spreadsheet, sh)
-    
-    data = [
-        [""],
+    # Header data
+    rows = [
         ["", "", "", "", "", "", "", "", "", "", "", "", "", "", ""],
         ["", "AURA DENTAL CLINIC", "", "", "", "", "", "", "", "", "", "", "", "", ""],
         ["", "Payroll Dashboard", "", "", "", "", "", "", "", "", "", "", "", "", ""],
-        [""],
-        ["", "Pay Period", "", "December 2025", "", "", "Generated", "", "02/01/2026", "", "", "", "", "", ""],
-        [""], [""],
-        ["", "KEY METRICS", "", "", "", "", "", "", "", "", "", "", "", "", ""],
-        [""],
-        ["", "£0.00", "", "", "£0.00", "", "", "0", "", "", "0", "", "", "", ""],
-        ["", "Total Payout", "", "", "Gross Revenue", "", "", "Invoices", "", "", "Finance Cases", "", "", "", ""],
-        [""], [""],
-        ["", "DENTIST SUMMARY", "", "", "", "", "", "", "", "", "", "", "", "", ""],
-        [""],
-        ["", "Dentist", "", "Gross Private", "", "Split", "", "Net Pay", "", "Deductions", "", "Total Payment", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+        ["", "Pay Period", "", "", "", "Generated", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+        # Headers
+        ["", "Dentist", "UDAs", "Rate", "NHS", "Gross Private", "Split", "Net Pay", "Labs", "Finance", "Therapy", "Deductions", "Total", "Status"],
     ]
     
+    # Dentist rows
     for name in DENTISTS.keys():
-        data.append(["", name, "", "£0.00", "", DENTISTS[name]['split'], "", "£0.00", "", "£0.00", "", "£0.00", "", "", ""])
+        rows.append(["", name, "-", "-", "-", "£0.00", DENTISTS[name]["split"], "£0.00", "£0.00", "£0.00", "£0.00", "£0.00", "£0.00", "⏳"])
     
-    data.extend([[""], ["", "TOTAL", "", "", "", "", "", "", "", "", "", "£0.00", "", "", ""]])
+    # Totals
+    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "TOTAL", "", "", "", "", "", "", "", "", "", "", "£0.00", ""])
     
-    sh.update(values=data, range_name='A1')
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)
     
+    # Formatting
     sheet_id = sh.id
     requests = [
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 5, 'startColumnIndex': 0, 'endColumnIndex': 16},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary']}}, 'fields': 'userEnteredFormat.backgroundColor'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 2, 'endRowIndex': 3, 'startColumnIndex': 1, 'endColumnIndex': 10},
-            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['white'], 'bold': True, 'fontSize': 22}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 4, 'startColumnIndex': 1, 'endColumnIndex': 10},
-            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['white'], 'fontSize': 14}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 8, 'endRowIndex': 9, 'startColumnIndex': 1, 'endColumnIndex': 6},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True, 'fontSize': 14, 'foregroundColor': COLORS['primary']}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 10, 'endRowIndex': 11, 'startColumnIndex': 1, 'endColumnIndex': 14},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True, 'fontSize': 24}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 11, 'endRowIndex': 12, 'startColumnIndex': 1, 'endColumnIndex': 14},
-            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'foregroundColor': COLORS['dark_gray']}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 14, 'endRowIndex': 15, 'startColumnIndex': 1, 'endColumnIndex': 6},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True, 'fontSize': 14, 'foregroundColor': COLORS['primary']}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 16, 'endRowIndex': 17, 'startColumnIndex': 1, 'endColumnIndex': 13},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary_lighter'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['primary']},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['primary']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+        # Black header band
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 4, 'startColumnIndex': 0, 'endColumnIndex': 15},
+                'cell': {'userEnteredFormat': {'backgroundColor': COLORS['black']}},
+                'fields': 'userEnteredFormat.backgroundColor'
+            }
+        },
+        # Title - white text
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 6},
+                'cell': {'userEnteredFormat': {
+                    'textFormat': {'foregroundColor': COLORS['white'], 'bold': True, 'fontSize': 22}
+                }},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # Subtitle - gold text
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 2, 'endRowIndex': 3, 'startColumnIndex': 1, 'endColumnIndex': 6},
+                'cell': {'userEnteredFormat': {
+                    'textFormat': {'foregroundColor': COLORS['gold'], 'bold': False, 'fontSize': 12}
+                }},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # Column headers - beige background
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 7, 'endRowIndex': 8, 'startColumnIndex': 1, 'endColumnIndex': 15},
+                'cell': {'userEnteredFormat': {
+                    'backgroundColor': COLORS['beige'],
+                    'textFormat': {'bold': True, 'fontSize': 10},
+                    'borders': {
+                        'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['gold']}
+                    }
+                }},
+                'fields': 'userEnteredFormat'
+            }
+        },
+        # Freeze header rows
+        {
+            'updateSheetProperties': {
+                'properties': {'sheetId': sheet_id, 'gridProperties': {'frozenRowCount': 8}},
+                'fields': 'gridProperties.frozenRowCount'
+            }
+        },
+        # Hide gridlines
+        {
+            'updateSheetProperties': {
+                'properties': {'sheetId': sheet_id, 'gridProperties': {'hideGridlines': True}},
+                'fields': 'gridProperties.hideGridlines'
+            }
+        },
     ]
     
+    # Alternating rows for dentists
     for i in range(len(DENTISTS)):
-        if i % 2 == 0:
-            requests.append({'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 17 + i, 'endRowIndex': 18 + i, 'startColumnIndex': 1, 'endColumnIndex': 13},
-                'cell': {'userEnteredFormat': {'backgroundColor': COLORS['off_white']}}, 'fields': 'userEnteredFormat.backgroundColor'}})
+        row_idx = 8 + i
+        bg = COLORS['white'] if i % 2 == 0 else COLORS['beige_light']
+        requests.append({
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': row_idx, 'endRowIndex': row_idx + 1, 'startColumnIndex': 1, 'endColumnIndex': 15},
+                'cell': {'userEnteredFormat': {'backgroundColor': bg}},
+                'fields': 'userEnteredFormat.backgroundColor'
+            }
+        })
     
     spreadsheet.batch_update({'requests': requests})
-    sh.freeze(rows=7)
-    print("   ✅ Dashboard created")
+    print("   ✅ Dashboard ready")
 
 
-def setup_dentist_payslip(spreadsheet, name, config):
-    """Create professional individual dentist payslip"""
-    first_name = name.split()[0]
+def setup_dentist_payslip(spreadsheet, dentist_name, config):
+    """Setup individual dentist payslip with Aura branding"""
+    first_name = dentist_name.split()[0]
     tab_name = f"{first_name} Payslip"
-    print(f"Creating {tab_name}...")
     
     try:
         sh = spreadsheet.worksheet(tab_name)
         sh.clear()
     except:
-        sh = spreadsheet.add_worksheet(tab_name, 150, 10)
+        sh = spreadsheet.add_worksheet(title=tab_name, rows=300, cols=10)
     
-    apply_base_formatting(spreadsheet, sh)
+    split_pct = config["split"]
     
-    data = [
-        [""], [""],
-        ["", "PAYSLIP", "", "", "", "", "", "", "", ""],
-        [""],
-        ["", "Payslip Date", "", "15th January 2026", "", "", "", "", "", ""],
-        ["", "Private Period", "", "December 2025", "", "", "", "", "", ""],
-        ["", "Performer", "", config['display'], "", "", "", "", "", ""],
-        ["", "Practice", "", "Aura Dental Clinic", "", "", "", "", "", ""],
-        [""], [""],
-        ["", "PRIVATE FEES", "", "", "", "", "", "", "", ""],
-        [""],
-        ["", "", "", "", "Gross Private (Dentist)", "", "", "£0.00", "", ""],
-        ["", "", "", "", "Gross Private (Therapist)", "", "", "£0.00", "", ""],
-        ["", "", "", "", "Gross Total", "", "", "£0.00", "", ""],
-        [""],
-        ["", "SUBTOTAL", "", "", config['split'], "", "", "£0.00", "", ""],
-        [""], 
-        ["", "DEDUCTIONS", "", "", "", "", "", "", "", ""],
-        [""],
-        ["", "", "Labs", "", "", "", "", "", "", ""],
-        ["", "", "", "", "Lab Bills Total", "", "", "£0.00", "", ""],
-        ["", "", "", "", "Lab Bills 50%", "", "", "£0.00", "", ""],
-        [""],
-        ["", "", "Finance", "", "", "", "", "", "", ""],
-        ["", "", "", "", "Finance Fees 50%", "", "", "£0.00", "", ""],
-        [""],
-        ["", "", "Therapy", "", "", "", "", "", "", ""],
-        ["", "", "", "", "@ £0.583/min", "", "", "£0.00", "", ""],
-        [""],
-        ["", "TOTAL DEDUCTIONS", "", "", "", "", "", "£0.00", "", ""],
-        [""],
-        ["", "TOTAL PAYMENT", "", "", "", "", "", "£0.00", "", ""],
-        [""], [""],
-        ["", "PATIENT BREAKDOWN", "", "", "", "", "", "", "", ""],
-        [""],
-        ["", "Patient Name", "", "Date", "", "Status", "", "Amount", "", ""],
+    # Build payslip structure
+    rows = [
+        ["", "", "", "", "", "", "", ""],
+        ["", "PAYSLIP", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "Payslip Date:", "", "", "", "", "", ""],
+        ["", "Private Period:", "", "", "", "", "", ""],
+        ["", "Performer:", f"Dr {dentist_name}", "", "", "", "", ""],
+        ["", "Practice:", "Aura Dental Clinic", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
     ]
     
-    sh.update(values=data, range_name='A1')
+    current_row = 9
     
+    # NHS Section (if applicable)
+    if config["has_nhs"]:
+        rows.extend([
+            ["", "", "", "", "", "", "", ""],
+            ["", "NHS INCOME", "", "", "", "", "", ""],
+            ["", "", "", "", "", "", "", ""],
+            ["", "", "", "", "UDAs Achieved", "", "", "0"],
+            ["", "", "", "", "UDA Rate", "", "", f"£{config['uda_rate']}"],
+            ["", "", "", "", "NHS Income", "", "", "£0.00"],
+            ["", "", "", "", "", "", "", ""],
+        ])
+        current_row += 7
+    
+    # Private Fees Section
+    rows.extend([
+        ["", "", "", "", "", "", "", ""],
+        ["", "PRIVATE FEES", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "", "Gross Private (Dentist)", "", "", "£0.00"],
+        ["", "", "", "", "Gross Private (Therapist)", "", "", "£0.00"],
+        ["", "", "", "", "Gross Total", "", "", "£0.00"],
+        ["", "", "", "", "", "", "", ""],
+        ["", "Subtotal", "", "", split_pct, "", "", "£0.00"],
+        ["", "", "", "", "", "", "", ""],
+    ])
+    
+    # Deductions Section
+    rows.extend([
+        ["", "", "", "", "", "", "", ""],
+        ["", "DEDUCTIONS", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "", "Lab Bills 50%", "", "", "£0.00"],
+        ["", "", "", "", "Finance Fees 50%", "", "", "£0.00"],
+        ["", "", "", "", "Therapy", "", "", "£0.00"],
+        ["", "", "", "", "", "", "", ""],
+        ["", "Total Deductions", "", "", "", "", "", "£0.00"],
+        ["", "", "", "", "", "", "", ""],
+    ])
+    
+    # Total Payment
+    rows.extend([
+        ["", "", "", "", "", "", "", ""],
+        ["", "TOTAL PAYMENT", "", "", "", "", "", "£0.00"],
+        ["", "", "", "", "", "", "", ""],
+    ])
+    
+    # Patient Breakdown Section
+    rows.extend([
+        ["", "", "", "", "", "", "", ""],
+        ["", "PATIENT BREAKDOWN", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "Patient Name", "Date", "Status", "Amount", "", "", ""],
+    ])
+    
+    # Empty rows for patients (will be filled by generator)
+    for _ in range(30):
+        rows.append(["", "", "", "", "", "", "", ""])
+    
+    # Discrepancies Section
+    rows.extend([
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "DISCREPANCIES TO REVIEW", "", "", "", "", "", "", ""],
+        ["", "Enter correct £ in yellow column, then tick checkbox", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", ""],
+    ])
+    
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)
+    
+    # Apply formatting
     sheet_id = sh.id
     requests = [
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 4, 'startColumnIndex': 0, 'endColumnIndex': 10},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary']}}, 'fields': 'userEnteredFormat.backgroundColor'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 2, 'endRowIndex': 3, 'startColumnIndex': 1, 'endColumnIndex': 5},
-            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['white'], 'bold': True, 'fontSize': 24}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 8, 'startColumnIndex': 1, 'endColumnIndex': 2},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 10, 'endRowIndex': 11, 'startColumnIndex': 1, 'endColumnIndex': 5},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary_lighter'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['primary']}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 18, 'endRowIndex': 19, 'startColumnIndex': 1, 'endColumnIndex': 5},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary_lighter'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['primary']}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 16, 'endRowIndex': 17, 'startColumnIndex': 1, 'endColumnIndex': 9},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['light_gray'], 'textFormat': {'bold': True}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 30, 'endRowIndex': 31, 'startColumnIndex': 1, 'endColumnIndex': 9},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['light_gray'], 'textFormat': {'bold': True}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 32, 'endRowIndex': 33, 'startColumnIndex': 1, 'endColumnIndex': 9},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['accent_light'], 'textFormat': {'bold': True, 'fontSize': 14},
-                'borders': {'top': {'style': 'SOLID', 'width': 2, 'color': COLORS['accent']}, 'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['accent']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 35, 'endRowIndex': 36, 'startColumnIndex': 1, 'endColumnIndex': 5},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary_lighter'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['primary']}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 37, 'endRowIndex': 38, 'startColumnIndex': 1, 'endColumnIndex': 9},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['off_white'], 'textFormat': {'bold': True},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 1, 'color': COLORS['medium_gray']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+        # Black header
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 3, 'startColumnIndex': 0, 'endColumnIndex': 8},
+                'cell': {'userEnteredFormat': {'backgroundColor': COLORS['black']}},
+                'fields': 'userEnteredFormat.backgroundColor'
+            }
+        },
+        # PAYSLIP title - white
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 4},
+                'cell': {'userEnteredFormat': {
+                    'textFormat': {'foregroundColor': COLORS['white'], 'bold': True, 'fontSize': 24}
+                }},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # Section headers - gold underline
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 9, 'endRowIndex': 10, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {
+                    'textFormat': {'bold': True, 'fontSize': 12},
+                    'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['gold']}}
+                }},
+                'fields': 'userEnteredFormat'
+            }
+        },
+        # Hide gridlines
+        {
+            'updateSheetProperties': {
+                'properties': {'sheetId': sheet_id, 'gridProperties': {'hideGridlines': True}},
+                'fields': 'gridProperties.hideGridlines'
+            }
+        },
     ]
     
     spreadsheet.batch_update({'requests': requests})
-    print(f"   ✅ {tab_name} created")
+    print(f"   ✅ {tab_name}")
 
 
 def setup_finance_flags(spreadsheet):
-    """Create professional Finance Flags tab"""
-    print("Creating Finance Flags...")
+    """Setup Finance Flags with dropdown for term months"""
+    print("   Setting up Finance Flags...")
     
     try:
         sh = spreadsheet.worksheet("Finance Flags")
         sh.clear()
     except:
-        sh = spreadsheet.add_worksheet("Finance Flags", 100, 12)
+        sh = spreadsheet.add_worksheet(title="Finance Flags", rows=200, cols=12)
     
-    apply_base_formatting(spreadsheet, sh)
+    rows = [
+        ["", "", "", "", "", "", "", "", "", "", ""],
+        ["", "FINANCE PAYMENTS", "", "", "", "", "", "", "", "", ""],
+        ["", "Select term length to calculate fee", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", ""],
+        ["", "Patient", "Dentist", "Amount", "Date", "Term (months)", "Rate", "Fee", "Status", "", ""],
+    ]
     
-    data = [[""], ["", "FINANCE PAYMENTS", "", "", "", "", "", "", "", "", "", ""],
-        ["", "Enter term length to calculate subsidy", "", "", "", "", "", "", "", "", "", ""], [""],
-        ["", "Patient", "Dentist", "Amount", "Date", "Term", "Subsidy %", "Fee", "Status", "", "", ""]]
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)
     
-    sh.update(values=data, range_name='A1')
-    
+    # Formatting
     sheet_id = sh.id
     requests = [
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 4, 'startColumnIndex': 0, 'endColumnIndex': 12},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary']}}, 'fields': 'userEnteredFormat.backgroundColor'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 6},
-            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['white'], 'bold': True, 'fontSize': 18}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 10},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary_lighter'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['primary']},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['primary']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+        # Black header
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 2, 'startColumnIndex': 0, 'endColumnIndex': 11},
+                'cell': {'userEnteredFormat': {'backgroundColor': COLORS['black']}},
+                'fields': 'userEnteredFormat.backgroundColor'
+            }
+        },
+        # Title white
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {
+                    'textFormat': {'foregroundColor': COLORS['white'], 'bold': True, 'fontSize': 16}
+                }},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # Column headers - beige
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 10},
+                'cell': {'userEnteredFormat': {
+                    'backgroundColor': COLORS['beige'],
+                    'textFormat': {'bold': True},
+                    'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['gold']}}
+                }},
+                'fields': 'userEnteredFormat'
+            }
+        },
+        # Dropdown validation for Term column (F6:F200)
+        {
+            'setDataValidation': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 5, 'endRowIndex': 200, 'startColumnIndex': 5, 'endColumnIndex': 6},
+                'rule': {
+                    'condition': {
+                        'type': 'ONE_OF_LIST',
+                        'values': [
+                            {'userEnteredValue': '3'},
+                            {'userEnteredValue': '12'},
+                            {'userEnteredValue': '36'},
+                            {'userEnteredValue': '60'}
+                        ]
+                    },
+                    'showCustomUi': True,
+                    'strict': True
+                }
+            }
+        },
+        # Hide gridlines
+        {
+            'updateSheetProperties': {
+                'properties': {'sheetId': sheet_id, 'gridProperties': {'hideGridlines': True}},
+                'fields': 'gridProperties.hideGridlines'
+            }
+        },
     ]
+    
     spreadsheet.batch_update({'requests': requests})
-    sh.freeze(rows=5)
-    print("   ✅ Finance Flags created")
-
-
-def setup_discrepancies(spreadsheet):
-    """Create professional Discrepancies tab"""
-    print("Creating Discrepancies...")
-    
-    try:
-        sh = spreadsheet.worksheet("Discrepancies")
-        sh.clear()
-    except:
-        sh = spreadsheet.add_worksheet("Discrepancies", 200, 12)
-    
-    apply_base_formatting(spreadsheet, sh)
-    
-    data = [[""], ["", "DISCREPANCIES", "", "", "", "", "", "", "", "", "", ""],
-        ["", "Items requiring review and action", "", "", "", "", "", "", "", "", "", ""], [""],
-        ["", "Dentist", "Patient", "Dentally £", "Log £", "Difference", "Issue", "Action", "Status", "", "", ""]]
-    
-    sh.update(values=data, range_name='A1')
-    
-    sheet_id = sh.id
-    requests = [
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 4, 'startColumnIndex': 0, 'endColumnIndex': 12},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['warning']}}, 'fields': 'userEnteredFormat.backgroundColor'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 6},
-            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['warning_text'], 'bold': True, 'fontSize': 18}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 10},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['accent_light'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['warning_text']},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['accent']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
-    ]
-    spreadsheet.batch_update({'requests': requests})
-    sh.freeze(rows=5)
-    print("   ✅ Discrepancies created")
+    print("   ✅ Finance Flags ready (with dropdown)")
 
 
 def setup_cross_reference(spreadsheet):
-    """Create professional Cross-Reference tab"""
-    print("Creating Cross-Reference...")
+    """Setup Cross-Reference tab"""
+    print("   Setting up Cross-Reference...")
     
     try:
         sh = spreadsheet.worksheet("Cross-Reference")
         sh.clear()
     except:
-        sh = spreadsheet.add_worksheet("Cross-Reference", 500, 14)
+        sh = spreadsheet.add_worksheet(title="Cross-Reference", rows=500, cols=12)
     
-    apply_base_formatting(spreadsheet, sh)
+    rows = [
+        ["", "", "", "", "", "", "", "", "", "", ""],
+        ["", "CROSS-REFERENCE REPORT", "", "", "", "", "", "", "", "", ""],
+        ["", "Dentally vs Dentist Logs comparison", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", ""],
+        ["", "Dentist", "Dentally Total", "Log Total", "Difference", "Status", "Matched", "Mismatched", "Log Only", "Dentally Only", ""],
+    ]
     
-    data = [[""], ["", "CROSS-REFERENCE", "", "", "", "", "", "", "", "", "", "", "", ""],
-        ["", "Dentally vs Dentist Takings Logs", "", "", "", "", "", "", "", "", "", "", "", ""], [""],
-        ["", "Dentist", "Dentally Total", "Log Total", "Difference", "Matched", "Mismatched", "Dentally Only", "Log Only", "Flags", "", "", "", ""]]
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)
     
-    sh.update(values=data, range_name='A1')
-    
+    # Formatting
     sheet_id = sh.id
     requests = [
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 4, 'startColumnIndex': 0, 'endColumnIndex': 14},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['info']}}, 'fields': 'userEnteredFormat.backgroundColor'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 6},
-            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['info_text'], 'bold': True, 'fontSize': 18}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 11},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary_lighter'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['primary']},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['primary']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+        # Black header
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 2, 'startColumnIndex': 0, 'endColumnIndex': 11},
+                'cell': {'userEnteredFormat': {'backgroundColor': COLORS['black']}},
+                'fields': 'userEnteredFormat.backgroundColor'
+            }
+        },
+        # Title
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 6},
+                'cell': {'userEnteredFormat': {
+                    'textFormat': {'foregroundColor': COLORS['white'], 'bold': True, 'fontSize': 16}
+                }},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # Column headers
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 11},
+                'cell': {'userEnteredFormat': {
+                    'backgroundColor': COLORS['beige'],
+                    'textFormat': {'bold': True},
+                    'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['gold']}}
+                }},
+                'fields': 'userEnteredFormat'
+            }
+        },
+        # Hide gridlines
+        {
+            'updateSheetProperties': {
+                'properties': {'sheetId': sheet_id, 'gridProperties': {'hideGridlines': True}},
+                'fields': 'gridProperties.hideGridlines'
+            }
+        },
     ]
+    
     spreadsheet.batch_update({'requests': requests})
-    sh.freeze(rows=5)
-    print("   ✅ Cross-Reference created")
+    print("   ✅ Cross-Reference ready")
 
 
 def setup_duplicate_check(spreadsheet):
-    """Create professional Duplicate Check tab"""
-    print("Creating Duplicate Check...")
+    """Setup Duplicate Check tab"""
+    print("   Setting up Duplicate Check...")
     
     try:
         sh = spreadsheet.worksheet("Duplicate Check")
         sh.clear()
     except:
-        sh = spreadsheet.add_worksheet("Duplicate Check", 200, 12)
+        sh = spreadsheet.add_worksheet(title="Duplicate Check", rows=200, cols=12)
     
-    apply_base_formatting(spreadsheet, sh)
+    rows = [
+        ["", "", "", "", "", "", "", "", "", ""],
+        ["", "DUPLICATE CHECK", "", "", "", "", "", "", "", ""],
+        ["", "Checks against historical payslips", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", ""],
+        ["", "Patient", "Dentist", "Current £", "Date", "Previous £", "Period", "Match Type", "Status", ""],
+    ]
     
-    data = [[""], ["", "DUPLICATE CHECK", "", "", "", "", "", "", "", "", "", ""],
-        ["", "Comparing against historical payslips", "", "", "", "", "", "", "", "", "", ""], [""],
-        ["", "Patient", "Dentist", "Current £", "Current Date", "Previous £", "Previous Period", "Match Type", "Status", "", "", ""]]
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)
     
-    sh.update(values=data, range_name='A1')
-    
+    # Formatting
     sheet_id = sh.id
     requests = [
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 4, 'startColumnIndex': 0, 'endColumnIndex': 12},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['error']}}, 'fields': 'userEnteredFormat.backgroundColor'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 6},
-            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['error_text'], 'bold': True, 'fontSize': 18}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 10},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['error'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['error_text']},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['error_text']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+        # Black header
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 2, 'startColumnIndex': 0, 'endColumnIndex': 10},
+                'cell': {'userEnteredFormat': {'backgroundColor': COLORS['black']}},
+                'fields': 'userEnteredFormat.backgroundColor'
+            }
+        },
+        # Title
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {
+                    'textFormat': {'foregroundColor': COLORS['white'], 'bold': True, 'fontSize': 16}
+                }},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # Column headers
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 10},
+                'cell': {'userEnteredFormat': {
+                    'backgroundColor': COLORS['beige'],
+                    'textFormat': {'bold': True},
+                    'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['gold']}}
+                }},
+                'fields': 'userEnteredFormat'
+            }
+        },
+        # Hide gridlines
+        {
+            'updateSheetProperties': {
+                'properties': {'sheetId': sheet_id, 'gridProperties': {'hideGridlines': True}},
+                'fields': 'gridProperties.hideGridlines'
+            }
+        },
     ]
+    
     spreadsheet.batch_update({'requests': requests})
-    sh.freeze(rows=5)
-    print("   ✅ Duplicate Check created")
+    print("   ✅ Duplicate Check ready")
 
 
 def setup_paid_invoices(spreadsheet):
-    """Create professional Paid Invoices log tab"""
-    print("Creating Paid Invoices...")
+    """Setup Paid Invoices log"""
+    print("   Setting up Paid Invoices...")
     
     try:
         sh = spreadsheet.worksheet("Paid Invoices")
         sh.clear()
     except:
-        sh = spreadsheet.add_worksheet("Paid Invoices", 5000, 10)
+        sh = spreadsheet.add_worksheet(title="Paid Invoices", rows=5000, cols=10)
     
-    apply_base_formatting(spreadsheet, sh)
-    
-    data = [[""], ["", "PAID INVOICES LOG", "", "", "", "", "", "", "", ""],
-        ["", "Running record for duplicate detection", "", "", "", "", "", "", "", ""], [""],
-        ["", "Invoice ID", "Patient", "Dentist", "Amount", "Date", "Period", "Added On", "Treatment", ""]]
-    
-    sh.update(values=data, range_name='A1')
-    
-    sheet_id = sh.id
-    requests = [
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 4, 'startColumnIndex': 0, 'endColumnIndex': 10},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['success']}}, 'fields': 'userEnteredFormat.backgroundColor'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 6},
-            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['success_text'], 'bold': True, 'fontSize': 18}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 10},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['success'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['success_text']},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['success_text']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+    rows = [
+        ["Invoice ID", "Patient", "Dentist", "Amount", "Date", "Period", "Added On", "Treatment", "", ""],
     ]
-    spreadsheet.batch_update({'requests': requests})
-    sh.freeze(rows=5)
-    print("   ✅ Paid Invoices created")
+    
+    sh.update(values=rows, range_name='A1')
+    sh.format('A1:H1', {'textFormat': {'bold': True}, 'backgroundColor': {'red': 0.96, 'green': 0.93, 'blue': 0.88}})
+    print("   ✅ Paid Invoices ready")
 
 
 def setup_config(spreadsheet):
-    """Create professional Config tab"""
-    print("Creating Config...")
+    """Setup Config tab"""
+    print("   Setting up Config...")
     
     try:
         sh = spreadsheet.worksheet("Config")
         sh.clear()
     except:
-        sh = spreadsheet.add_worksheet("Config", 50, 8)
+        sh = spreadsheet.add_worksheet(title="Config", rows=50, cols=6)
     
-    apply_base_formatting(spreadsheet, sh)
-    
-    data = [[""], ["", "CONFIGURATION", "", "", "", "", "", ""],
-        ["", "System settings and dentist rates", "", "", "", "", "", ""], [""],
-        ["", "TABEO SUBSIDY RATES", "", "", "", "", "", ""],
-        ["", "Term", "Subsidy %", "", "", "", "", ""],
-        ["", "3 months", "4.5%", "", "", "", "", ""],
-        ["", "12 months", "8.0%", "", "", "", "", ""],
-        ["", "36 months", "3.4%", "", "", "", "", ""],
-        ["", "60 months", "3.7%", "", "", "", "", ""], [""],
-        ["", "DENTIST CONFIGURATION", "", "", "", "", "", ""],
-        ["", "Dentist", "Split", "UDA Rate", "NHS?", "", "", ""]]
+    rows = [
+        ["Configuration", "", "", "", "", ""],
+        ["", "", "", "", "", ""],
+        ["Dentist", "Split %", "UDA Rate", "Has NHS", "Practitioner ID", ""],
+    ]
     
     for name, config in DENTISTS.items():
-        uda_rate = f"£{config['uda_rate']}" if config['uda_rate'] else "-"
-        has_nhs = "Yes" if config['has_nhs'] else "No"
-        data.append(["", name, config['split'], uda_rate, has_nhs, "", "", ""])
+        rows.append([
+            name,
+            config["split"],
+            f"£{config['uda_rate']}" if config['uda_rate'] else "-",
+            "Yes" if config["has_nhs"] else "No",
+            "",
+            ""
+        ])
     
-    sh.update(values=data, range_name='A1')
-    
-    sheet_id = sh.id
-    requests = [
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 4, 'startColumnIndex': 0, 'endColumnIndex': 8},
-            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['primary']}}, 'fields': 'userEnteredFormat.backgroundColor'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 5},
-            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['white'], 'bold': True, 'fontSize': 18}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 4},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True, 'foregroundColor': COLORS['primary']}}}, 'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 11, 'endRowIndex': 12, 'startColumnIndex': 1, 'endColumnIndex': 4},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True, 'foregroundColor': COLORS['primary']}}}, 'fields': 'userEnteredFormat.textFormat'}},
-    ]
-    spreadsheet.batch_update({'requests': requests})
-    print("   ✅ Config created")
+    sh.update(values=rows, range_name='A1')
+    sh.format('A1', {'textFormat': {'bold': True, 'fontSize': 14}})
+    sh.format('A3:E3', {'textFormat': {'bold': True}, 'backgroundColor': {'red': 0.96, 'green': 0.93, 'blue': 0.88}})
+    print("   ✅ Config ready")
 
 
-def main():
-    """Main setup function"""
-    print("=" * 60)
-    print("🦷 AURA DENTAL - PROFESSIONAL SHEET SETUP")
-    print("=" * 60)
+def delete_discrepancies_tab(spreadsheet):
+    """Delete the standalone Discrepancies tab if it exists"""
+    print("   Removing standalone Discrepancies tab...")
+    try:
+        sh = spreadsheet.worksheet("Discrepancies")
+        spreadsheet.del_worksheet(sh)
+        print("   ✅ Discrepancies tab removed")
+    except:
+        print("   ℹ️ No Discrepancies tab found")
+
+
+def run_setup():
+    """Run full sheet setup with Aura branding"""
+    print("=" * 50)
+    print("🦷 AURA DENTAL - SHEET SETUP")
+    print("=" * 50)
     
     if not GOOGLE_SHEETS_CREDENTIALS:
         print("❌ No credentials found")
@@ -484,33 +602,43 @@ def main():
     client = get_client()
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
     
-    print(f"\n📊 Setting up: {spreadsheet.title}")
+    print("\n📋 Setting up tabs with Aura branding...")
     
-    setup_dashboard(spreadsheet)
+    # Delete old Discrepancies tab
+    delete_discrepancies_tab(spreadsheet)
     time.sleep(1)
+    
+    # Setup main tabs
+    setup_dashboard(spreadsheet)
+    time.sleep(2)
+    
     setup_cross_reference(spreadsheet)
     time.sleep(1)
+    
     setup_finance_flags(spreadsheet)
     time.sleep(1)
-    setup_discrepancies(spreadsheet)
-    time.sleep(1)
+    
     setup_duplicate_check(spreadsheet)
     time.sleep(1)
+    
     setup_paid_invoices(spreadsheet)
     time.sleep(1)
+    
     setup_config(spreadsheet)
     time.sleep(1)
     
-    print("\n📋 Creating dentist payslips...")
+    # Setup individual payslips
+    print("\n📋 Setting up individual payslips...")
     for name, config in DENTISTS.items():
         setup_dentist_payslip(spreadsheet, name, config)
         time.sleep(2)
     
-    print("\n" + "=" * 60)
-    print("✅ PROFESSIONAL SETUP COMPLETE!")
-    print("=" * 60)
-    print(f"\n🔗 https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
+    print("\n" + "=" * 50)
+    print("✅ SETUP COMPLETE")
+    print("=" * 50)
+    print(f"\n🔗 View: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
+    print("\n📝 Remember to share the logo file with the service account!")
 
 
 if __name__ == "__main__":
-    main()
+    run_setup()
