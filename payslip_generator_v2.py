@@ -545,10 +545,22 @@ def fuzzy_match_name(n1, n2):
     return 0.0
 
 
-def read_dentist_log(client, spreadsheet_id, month, year):
-    try:
-        spreadsheet = client.open_by_key(spreadsheet_id)
-    except:
+def read_dentist_log(client, spreadsheet_id, month, year, max_retries=3):
+    # Retry logic for 503 errors
+    for attempt in range(max_retries):
+        try:
+            spreadsheet = client.open_by_key(spreadsheet_id)
+            break
+        except Exception as e:
+            if '503' in str(e) or 'unavailable' in str(e).lower():
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 5  # 5, 10, 15 seconds
+                    print(f"      ⏳ Rate limited, waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+            print(f"      ⚠️ Error: {e}")
+            return None
+    else:
         return None
     
     month_names = {1: ["JANUARY", "JAN"], 2: ["FEBRUARY", "FEB"], 3: ["MARCH", "MAR"], 4: ["APRIL", "APR"], 5: ["MAY"], 6: ["JUNE", "JUN"], 7: ["JULY", "JUL"], 8: ["AUGUST", "AUG"], 9: ["SEPTEMBER", "SEP"], 10: ["OCTOBER", "OCT"], 11: ["NOVEMBER", "NOV"], 12: ["DECEMBER", "DEC"]}
@@ -660,10 +672,12 @@ def perform_cross_reference(client, payslips, month, year):
         log_entries = read_dentist_log(client, log_id, month, year)
         if log_entries is None:
             results[dentist_name] = {"dentist": dentist_name, "error": "Could not read log", "dentally_total": payslips[dentist_name].get("gross_total", 0)}
+            time.sleep(3)  # Wait before next to avoid rate limits
             continue
         xref = cross_reference_dentist(dentist_name, dentally_patients, log_entries)
         results[dentist_name] = xref
         print(f"      Diff: £{xref['difference']:,.2f} {'⚠️' if abs(xref['difference']) > 10 else '✅'}")
+        time.sleep(3)  # Wait before next dentist
     return results
 
 
