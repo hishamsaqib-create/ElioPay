@@ -896,7 +896,7 @@ def update_dashboard(spreadsheet, payslips, period_str):
 
 
 def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
-    """Update individual dentist payslip tab"""
+    """Update individual dentist payslip tab with formulas and proper formatting"""
     
     first_name = dentist_name.split()[0]
     tab_name = f"{first_name} Payslip"
@@ -908,7 +908,7 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     except:
         pass
     
-    sh = spreadsheet.add_worksheet(tab_name, 200, 7)
+    sh = spreadsheet.add_worksheet(tab_name, 300, 6)
     
     config = DENTISTS[dentist_name]
     
@@ -923,100 +923,33 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     except:
         payment_str = "15th of following month"
     
-    # Build the payslip data - clean black/white design
+    # Count patients to calculate row numbers for formulas
+    num_patients = len(payslip.get('patients', []))
+    
+    # Patient breakdown starts at row 10
+    BREAKDOWN_START = 10
+    BREAKDOWN_END = BREAKDOWN_START + num_patients - 1 if num_patients > 0 else BREAKDOWN_START
+    
+    # Build the payslip data
     rows = [
-        ["", "", "", "", "", f'=IMAGE("{LOGO_URL}", 2)', ""],
-        ["", "PAYSLIP", "", "", "", "", ""],
-        ["", "", "", "", "", "", ""],
-        ["", "Payslip Date:", payment_str, "", "", "", ""],
-        ["", "Private Period:", period_str, "", "", "", ""],
-        ["", "Performer:", config['display_name'], "", "", "", ""],
-        ["", "Practice:", PRACTICE_NAME, "", "", "", ""],
-        ["", "", "", "", "", "", ""],
+        # Row 1: Logo row
+        ["", "", "", "", f'=IMAGE("{LOGO_URL}", 2)', ""],
+        # Row 2: Title
+        ["", "PAYSLIP", "", "", "", ""],
+        # Row 3: Empty
+        ["", "", "", "", "", ""],
+        # Row 4-7: Info
+        ["", "Payslip Date:", payment_str, "", "", ""],
+        ["", "Private Period:", period_str, "", "", ""],
+        ["", "Performer:", config['display_name'], "", "", ""],
+        ["", "Practice:", PRACTICE_NAME, "", "", ""],
+        # Row 8: Empty
+        ["", "", "", "", "", ""],
+        # Row 9: Patient Breakdown Header
+        ["", "Patient Name", "Date", "Status", "Amount", ""],
     ]
     
-    current_row = 9
-    
-    # NHS Section
-    if config['has_nhs']:
-        rows.extend([
-            ["", "─────────────────────────────────────", "", "", "", "", "", ""],
-            ["", "SECTION 1: NHS INCOME", "", "", "", "", "", ""],
-            ["", "", "", "", "", "", "", ""],
-            ["", "", "", "", "UDAs Achieved", "", "", str(payslip.get('udas', 0))],
-            ["", "", "", "", "UDA Rate", "", "", f"£{config['uda_rate']}"],
-            ["", "", "", "", "NHS Income", "", "", f"£{payslip.get('uda_income', 0):,.2f}"],
-            ["", "", "", "", "", "", "", ""],
-        ])
-        current_row += 7
-        priv_section = "SECTION 2: PRIVATE FEES"
-        ded_section = "SECTION 3: DEDUCTIONS"
-    else:
-        priv_section = "SECTION 1: PRIVATE FEES"
-        ded_section = "SECTION 2: DEDUCTIONS"
-    
-    # Private Section
-    rows.extend([
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
-        ["", priv_section, "", "", "", "", "", ""],
-        ["", "", "", "", "", "", "", ""],
-        ["", "", "", "", "Gross Private (Dentist)", "", "", f"£{payslip['gross_private_dentist']:,.2f}"],
-        ["", "", "", "", "Gross Private (Therapist)", "", "", f"£{payslip['gross_private_therapist']:,.2f}"],
-        ["", "", "", "", "Gross Total", "", "", f"£{payslip['gross_total']:,.2f}"],
-        ["", "", "", "", "", "", "", ""],
-        ["", "Subtotal", "", "", f"{int(config['split']*100)}%", "", "", f"£{payslip['net_private']:,.2f}"],
-        ["", "", "", "", "", "", "", ""],
-    ])
-    
-    # Deductions Section
-    rows.extend([
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
-        ["", ded_section, "", "", "", "", "", ""],
-        ["", "", "", "", "", "", "", ""],
-        ["", "", "Labs", "", "", "", "", ""],
-    ])
-    
-    # Lab bills breakdown
-    if payslip.get('lab_bills'):
-        for lab_name, amount in payslip['lab_bills'].items():
-            rows.append(["", "", "", "", lab_name, "", "", f"£{amount:,.2f}"])
-    
-    rows.extend([
-        ["", "", "", "", "Lab Bills Total", "", "", f"£{payslip['lab_bills_total']:,.2f}"],
-        ["", "", "", "", "Lab Bills 50%", "", "", f"£{payslip['lab_bills_50']:,.2f}"],
-        ["", "", "", "", "", "", "", ""],
-        ["", "", "Finance", "", "", "", "", ""],
-        ["", "", "", "", "Finance Fees Total", "", "", f"£{payslip['finance_fees_total']:,.2f}"],
-        ["", "", "", "", "Finance Fees 50%", "", "", f"£{payslip['finance_fees_50']:,.2f}"],
-        ["", "", "", "", "", "", "", ""],
-        ["", "", "Therapy", "", "Taryn", "", "", ""],
-        ["", "", "", "", "Minutes", "", "", str(payslip.get('therapy_minutes', 0))],
-        ["", "", "", "", "@ £0.583/min", "", "", f"£{payslip['therapy_total']:,.2f}"],
-        ["", "", "", "", "", "", "", ""],
-        ["", "Total Deductions", "", "", "", "", "", f"£{payslip['total_deductions']:,.2f}"],
-        ["", "", "", "", "", "", "", ""],
-    ])
-    
-    # Add NHS income to total if applicable
-    total_with_nhs = payslip['total_payment']
-    if config['has_nhs']:
-        total_with_nhs += payslip.get('uda_income', 0)
-    
-    # Total Payment
-    rows.extend([
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
-        ["", "TOTAL PAYMENT", "", "", "", "", "", f"£{total_with_nhs:,.2f}"],
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
-        ["", "", "", "", "", "", "", ""],
-        ["", "PATIENT BREAKDOWN", "", "", "", "", "", ""],
-        ["", "", "", "", "", "", "", ""],
-        ["", "Patient Name", "Date", "Status", "Amount", "", "", ""],
-    ])
-    
-    # Track where patient rows start
-    patient_start_row = len(rows) + 1
-    
-    # Patient breakdown - consolidated (one row per patient, sorted by amount)
+    # Add patient rows (Row 10+)
     for patient in payslip.get('patients', []):
         status = "✅" if not patient.get('payment_flag') else patient.get('payment_flag', '')
         rows.append([
@@ -1024,79 +957,150 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             patient['name'],
             patient.get('date', ''),
             status,
-            f"£{patient['amount']:,.2f}",
-            "",
+            patient['amount'],  # Numeric value, not string
             ""
         ])
     
-    patient_end_row = len(rows)
+    # Empty row after patients
+    rows.append(["", "", "", "", "", ""])
     
-    # Update the sheet (freshly created, no need to clear)
+    # Summary section with formulas
+    gross_row = len(rows) + 1
+    if num_patients > 0:
+        rows.append(["", "Gross Private (Patient Breakdown)", "", "", f"=SUM(E{BREAKDOWN_START}:E{BREAKDOWN_END})", ""])
+    else:
+        rows.append(["", "Gross Private (Patient Breakdown)", "", "", 0, ""])
+    
+    split_pct = config['split']
+    split_row = len(rows) + 1
+    rows.append(["", f"Your Share ({int(split_pct*100)}%)", "", "", f"=E{gross_row}*{split_pct}", ""])
+    
+    rows.append(["", "", "", "", "", ""])
+    rows.append(["", "DEDUCTIONS", "", "", "", ""])
+    
+    lab_row = len(rows) + 1
+    rows.append(["", "Lab Bills (50%)", "", "", payslip['lab_bills_50'], ""])
+    
+    finance_row = len(rows) + 1
+    rows.append(["", "Finance Fees (50%)", "", "", payslip['finance_fees_50'], ""])
+    
+    therapy_row = len(rows) + 1
+    rows.append(["", f"Therapy ({payslip.get('therapy_minutes', 0)} mins)", "", "", payslip['therapy_total'], ""])
+    
+    deductions_row = len(rows) + 1
+    rows.append(["", "Total Deductions", "", "", f"=E{lab_row}+E{finance_row}+E{therapy_row}", ""])
+    
+    rows.append(["", "", "", "", "", ""])
+    
+    total_row = len(rows) + 1
+    rows.append(["", "TOTAL PAYMENT", "", "", f"=E{split_row}-E{deductions_row}", ""])
+    
+    # Add NHS income if applicable
+    if config['has_nhs'] and payslip.get('uda_income', 0) > 0:
+        rows.append(["", "", "", "", "", ""])
+        nhs_row = len(rows) + 1
+        rows.append(["", f"NHS Income ({payslip.get('udas', 0)} UDAs @ £{config['uda_rate']})", "", "", payslip.get('uda_income', 0), ""])
+        grand_total_row = len(rows) + 1
+        rows.append(["", "GRAND TOTAL (inc NHS)", "", "", f"=E{total_row}+E{nhs_row}", ""])
+    
+    # Update the sheet
+    sh.update(values=rows, range_name='A1', value_input_option='USER_ENTERED')
+    
+    # Apply formatting
     sheet_id = sh.id
-    sh.update(values=rows, range_name='A1')
     
-    # Set column widths
-    width_requests = [
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 20}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 200}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 150}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 3, 'endIndex': 4}, 'properties': {'pixelSize': 80}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 6, 'endIndex': 7}, 'properties': {'pixelSize': 20}, 'fields': 'pixelSize'}},
-        # Set row height for logo row
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 60}, 'fields': 'pixelSize'}},
-    ]
-    
-    # Format requests - black and white theme
     format_requests = [
+        # Set uniform font for entire sheet
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id},
+                'cell': {'userEnteredFormat': {'textFormat': {'fontFamily': 'Arial', 'fontSize': 11}}},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # Column widths
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 20}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 250}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 3, 'endIndex': 4}, 'properties': {'pixelSize': 70}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 20}, 'fields': 'pixelSize'}},
+        # Row height for logo
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 50}, 'fields': 'pixelSize'}},
         # Header band - BLACK
         {
             'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 3, 'startColumnIndex': 0, 'endColumnIndex': 7},
+                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 3, 'startColumnIndex': 0, 'endColumnIndex': 6},
                 'cell': {'userEnteredFormat': {'backgroundColor': {'red': 0.1, 'green': 0.1, 'blue': 0.1}}},
                 'fields': 'userEnteredFormat.backgroundColor'
             }
         },
-        # PAYSLIP title - white text
+        # PAYSLIP title - white, larger
         {
             'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 4},
-                'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'bold': True, 'fontSize': 22, 'fontFamily': 'Arial'}}},
+                'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 3},
+                'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'bold': True, 'fontSize': 18, 'fontFamily': 'Arial'}}},
                 'fields': 'userEnteredFormat.textFormat'
             }
         },
         # Info labels bold
         {
             'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 8, 'startColumnIndex': 1, 'endColumnIndex': 2},
-                'cell': {'userEnteredFormat': {'textFormat': {'bold': True, 'fontFamily': 'Arial'}}},
+                'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 1, 'endColumnIndex': 2},
+                'cell': {'userEnteredFormat': {'textFormat': {'bold': True}}},
                 'fields': 'userEnteredFormat.textFormat'
             }
         },
-        # Patient breakdown header row - light gray background
+        # Patient breakdown header row - gray background, bold
         {
             'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 2, 'endRowIndex': patient_start_row - 1, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'range': {'sheetId': sheet_id, 'startRowIndex': 8, 'endRowIndex': 9, 'startColumnIndex': 1, 'endColumnIndex': 5},
                 'cell': {'userEnteredFormat': {
-                    'backgroundColor': {'red': 0.93, 'green': 0.93, 'blue': 0.93},
-                    'textFormat': {'bold': True, 'fontFamily': 'Arial'},
-                    'borders': {
-                        'bottom': {'style': 'SOLID', 'width': 2, 'color': {'red': 0.2, 'green': 0.2, 'blue': 0.2}}
-                    }
+                    'backgroundColor': {'red': 0.9, 'green': 0.9, 'blue': 0.9},
+                    'textFormat': {'bold': True},
+                    'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': {'red': 0.3, 'green': 0.3, 'blue': 0.3}}}
                 }},
                 'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'
             }
         },
-        # All patient rows - white background with bottom border
+        # Patient rows - borders
         {
             'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 1, 'endRowIndex': patient_end_row, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'range': {'sheetId': sheet_id, 'startRowIndex': 9, 'endRowIndex': 9 + num_patients, 'startColumnIndex': 1, 'endColumnIndex': 5},
                 'cell': {'userEnteredFormat': {
-                    'backgroundColor': {'red': 1.0, 'green': 1.0, 'blue': 1.0},
-                    'textFormat': {'fontFamily': 'Arial'},
+                    'borders': {'bottom': {'style': 'SOLID', 'width': 1, 'color': {'red': 0.85, 'green': 0.85, 'blue': 0.85}}}
+                }},
+                'fields': 'userEnteredFormat.borders'
+            }
+        },
+        # Amount column - currency format
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 9, 'endRowIndex': len(rows), 'startColumnIndex': 4, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {
+                    'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}
+                }},
+                'fields': 'userEnteredFormat.numberFormat'
+            }
+        },
+        # Summary labels bold
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 9 + num_patients, 'endRowIndex': len(rows), 'startColumnIndex': 1, 'endColumnIndex': 2},
+                'cell': {'userEnteredFormat': {'textFormat': {'bold': True}}},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # TOTAL PAYMENT row - highlight
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': total_row - 1, 'endRowIndex': total_row, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {
+                    'backgroundColor': {'red': 0.95, 'green': 0.95, 'blue': 0.95},
+                    'textFormat': {'bold': True, 'fontSize': 12},
                     'borders': {
-                        'bottom': {'style': 'SOLID', 'width': 1, 'color': {'red': 0.85, 'green': 0.85, 'blue': 0.85}}
+                        'top': {'style': 'SOLID', 'width': 2, 'color': {'red': 0.2, 'green': 0.2, 'blue': 0.2}},
+                        'bottom': {'style': 'SOLID', 'width': 2, 'color': {'red': 0.2, 'green': 0.2, 'blue': 0.2}}
                     }
                 }},
                 'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'
@@ -1105,7 +1109,7 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     ]
     
     try:
-        spreadsheet.batch_update({'requests': width_requests + format_requests})
+        spreadsheet.batch_update({'requests': format_requests})
     except Exception as e:
         print(f"      Note: Formatting error: {e}")
 
