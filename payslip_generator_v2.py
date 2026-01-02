@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 Aura Dental Clinic - Payslip Generator v2.0
@@ -921,21 +922,19 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     except:
         payment_str = "15th of following month"
     
-    # Build the payslip data
+    # Build the payslip data - cleaner layout
     rows = [
         ["", "", "", "", "", "", "", ""],
-        [f'=IMAGE("{LOGO_URL}", 1)', "", "", "", "", "", "", ""],
         ["", "PAYSLIP", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
-        ["", "Payslip Date:", "", payment_str, "", "", "", ""],
-        ["", "Private Period:", "", period_str, "", "", "", ""],
-        ["", "Performer:", "", config['display_name'], "", "", "", ""],
-        ["", "Practice:", "", PRACTICE_NAME, "", "", "", ""],
-        ["", "Superannuation:", "", "Opted Out", "", "", "", ""],
+        ["", "Payslip Date:", payment_str, "", "", "", "", ""],
+        ["", "Private Period:", period_str, "", "", "", "", ""],
+        ["", "Performer:", config['display_name'], "", "", "", "", ""],
+        ["", "Practice:", PRACTICE_NAME, "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
     ]
     
-    current_row = 11
+    current_row = 9
     
     # NHS Section
     if config['has_nhs']:
@@ -1010,8 +1009,11 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         ["", "", "", "", "", "", "", ""],
         ["", "PATIENT BREAKDOWN", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
-        ["", "Patient Name", "", "Invoice Date", "", "Status", "", "Total Paid"],
+        ["", "Patient Name", "Date", "Status", "Amount", "", "", ""],
     ])
+    
+    # Track where patient rows start
+    patient_start_row = len(rows) + 1
     
     # Patient breakdown - consolidated (one row per patient, sorted by amount)
     for patient in payslip.get('patients', []):
@@ -1019,21 +1021,85 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         rows.append([
             "",
             patient['name'],
-            "",
             patient.get('date', ''),
-            "",
             status,
+            f"£{patient['amount']:,.2f}",
             "",
-            f"£{patient['amount']:,.2f}"
+            "",
+            ""
         ])
+    
+    patient_end_row = len(rows)
     
     # Update the sheet
     sh.clear()
     sh.update(values=rows, range_name='A1')
     
-    # Formatting
-    sh.format('B3', {'textFormat': {'bold': True, 'fontSize': 18}})
-    sh.format('B5:B9', {'textFormat': {'bold': True}})
+    # Apply formatting
+    sheet_id = sh.id
+    
+    # Format requests
+    format_requests = [
+        # Header band - teal
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 3, 'startColumnIndex': 0, 'endColumnIndex': 8},
+                'cell': {'userEnteredFormat': {'backgroundColor': {'red': 0.0, 'green': 0.4, 'blue': 0.4}}},
+                'fields': 'userEnteredFormat.backgroundColor'
+            }
+        },
+        # PAYSLIP title - white text
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 4},
+                'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'bold': True, 'fontSize': 20}}},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # Info labels bold
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 9, 'startColumnIndex': 1, 'endColumnIndex': 2},
+                'cell': {'userEnteredFormat': {'textFormat': {'bold': True}}},
+                'fields': 'userEnteredFormat.textFormat'
+            }
+        },
+        # Patient breakdown header row
+        {
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 2, 'endRowIndex': patient_start_row - 1, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {
+                    'backgroundColor': {'red': 0.85, 'green': 0.93, 'blue': 0.93},
+                    'textFormat': {'bold': True},
+                    'borders': {
+                        'bottom': {'style': 'SOLID', 'width': 2, 'color': {'red': 0.0, 'green': 0.4, 'blue': 0.4}}
+                    }
+                }},
+                'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'
+            }
+        },
+    ]
+    
+    # Add alternating row colors and borders for patient rows
+    for i in range(patient_start_row - 1, patient_end_row):
+        bg_color = {'red': 0.98, 'green': 0.98, 'blue': 0.98} if (i - patient_start_row) % 2 == 0 else {'red': 1.0, 'green': 1.0, 'blue': 1.0}
+        format_requests.append({
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': i, 'endRowIndex': i + 1, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {
+                    'backgroundColor': bg_color,
+                    'borders': {
+                        'bottom': {'style': 'SOLID', 'width': 1, 'color': {'red': 0.9, 'green': 0.9, 'blue': 0.9}}
+                    }
+                }},
+                'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.borders'
+            }
+        })
+    
+    try:
+        spreadsheet.batch_update({'requests': format_requests})
+    except Exception as e:
+        print(f"      Note: Formatting error: {e}")
 
 
 def update_finance_flags(spreadsheet, finance_flags):
@@ -2147,7 +2213,6 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                 # Update cross-reference tab
                 if xref_results:
                     update_cross_reference(spreadsheet, xref_results, period_str)
-                    update_discrepancies(spreadsheet, xref_results, period_str)
                     
                     # Add discrepancies to each dentist's individual payslip
                     print("   Adding discrepancies to individual payslips...")
