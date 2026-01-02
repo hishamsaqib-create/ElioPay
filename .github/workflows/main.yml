@@ -53,7 +53,7 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.setup_sheets }}" == "true" ]; then
             echo "🎨 Running professional sheet setup..."
-            python setup_sheets_v2.py
+            python setup_sheets_v3.py
           elif [ "${{ github.event.inputs.sheets_only }}" == "true" ]; then
             echo "📊 Sheets-only mode - skipping Dentally API"
             python push_to_sheets.py
@@ -65,5 +65,5 @@ jobs:
             if [ -n "${{ github.event.inputs.month }}" ]; then
               ARGS="$ARGS --month ${{ github.event.inputs.month }}"
             fi
-            python payslip_generator_v2.py $ARGS
+            python payslip_generator_v3.py $ARGS
           fi
