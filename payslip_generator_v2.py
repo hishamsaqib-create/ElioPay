@@ -1158,7 +1158,7 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
     for name, p in payslips.items():
         config = DENTISTS[name]
         
-        # Consolidate patient_totals into patients list (sorted by amount descending)
+        # Consolidate patient_totals into patients list (sorted by date chronologically)
         p["patients"] = sorted([
             {
                 "name": pt["name"], 
@@ -1168,7 +1168,7 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
                 "payment_flag": pt["payment_flag"]
             }
             for pt in p["patient_totals"].values()
-        ], key=lambda x: x["amount"], reverse=True)
+        ], key=lambda x: x["date"] or "9999-99-99")  # Sort by date, empty dates at end
         
         # Remove the working dict
         del p["patient_totals"]
