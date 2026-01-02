@@ -13,7 +13,7 @@ from google.oauth2.service_account import Credentials
 
 # Configuration
 SPREADSHEET_ID = os.environ.get("PAYSLIP_SPREADSHEET_ID", "1BANM1mdxxtjLAHHc8jSkchHHNbiRC474phtMEINeYHs")
-GOOGLE_SHEETS_CREDENTIALS = os.environ.get("GO OGLE_SHEETS_CREDENTIALS", "")
+GOOGLE_SHEETS_CREDENTIALS = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
 
 # Dentists with their config
 DENTISTS = {
@@ -293,6 +293,61 @@ def setup_config(spreadsheet):
     print("   ✅ Config created")
 
 
+def setup_duplicate_check(spreadsheet):
+    """Create Duplicate Check tab"""
+    print("Creating Duplicate Check...")
+    
+    try:
+        sh = spreadsheet.worksheet("Duplicate Check")
+        sh.clear()
+    except:
+        sh = spreadsheet.add_worksheet("Duplicate Check", 200, 12)
+    
+    data = [
+        ["", "", "", "", "", "", "", "", "", ""],
+        ["", "🔍 DUPLICATE CHECK", "", "", "", "", "", "", "", ""],
+        ["", "Checks current payslip patients against historical payments", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", ""],
+        ["", "Patient", "Dentist", "Current £", "Current Date", "Previous £", "Previous Period", "Previous Date", "Match Type", "Status"],
+        ["", "", "", "", "", "", "", "", "", ""],
+        ["", "Run payslip generator to populate this tab", "", "", "", "", "", "", "", ""],
+    ]
+    
+    sh.update(values=data, range_name='A1')
+    
+    sh.format('B2', {'textFormat': {'bold': True, 'fontSize': 16}})
+    sh.format('B5:J5', {
+        'textFormat': {'bold': True},
+        'backgroundColor': {'red': 1.0, 'green': 0.9, 'blue': 0.6}
+    })
+    
+    print("   ✅ Duplicate Check created")
+
+
+def setup_paid_invoices(spreadsheet):
+    """Create Paid Invoices log tab"""
+    print("Creating Paid Invoices...")
+    
+    try:
+        sh = spreadsheet.worksheet("Paid Invoices")
+        sh.clear()
+    except:
+        sh = spreadsheet.add_worksheet("Paid Invoices", 5000, 8)
+    
+    data = [
+        ["Invoice ID", "Patient", "Dentist", "Amount", "Date", "Period", "Added On", "Treatment"],
+    ]
+    
+    sh.update(values=data, range_name='A1')
+    
+    sh.format('A1:H1', {
+        'textFormat': {'bold': True},
+        'backgroundColor': {'red': 0.8, 'green': 0.9, 'blue': 0.8}
+    })
+    
+    print("   ✅ Paid Invoices created")
+
+
 def setup_dentist_payslip(spreadsheet, name, config):
     """Create individual dentist payslip with enhanced design"""
     
@@ -447,6 +502,10 @@ def main():
     setup_incomplete(spreadsheet)
     time.sleep(1)
     setup_config(spreadsheet)
+    time.sleep(1)
+    setup_duplicate_check(spreadsheet)
+    time.sleep(1)
+    setup_paid_invoices(spreadsheet)
     time.sleep(1)
     
     # Create individual payslips
