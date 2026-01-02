@@ -327,6 +327,7 @@ def setup_dentist_payslip(spreadsheet, name, config):
     ]
     
     sh.update(values=data, range_name='A1')
+    time.sleep(2)  # Delay after data write to avoid rate limit
     
     sheet_id = sh.id
     
@@ -415,6 +416,7 @@ def setup_dentist_payslip(spreadsheet, name, config):
             'fields': 'userEnteredFormat.numberFormat'}},
     ]
     
+    time.sleep(2)  # Delay before formatting to avoid rate limit
     spreadsheet.batch_update({'requests': requests})
     print(f"   ✅ {tab_name} created")
 
@@ -663,22 +665,22 @@ def main():
     print(f"\n📊 Setting up: {spreadsheet.title}")
     
     setup_dashboard(spreadsheet)
-    time.sleep(1)
+    time.sleep(3)
     setup_cross_reference(spreadsheet)
-    time.sleep(1)
+    time.sleep(3)
     setup_finance_flags(spreadsheet)
-    time.sleep(1)
+    time.sleep(3)
     setup_duplicate_check(spreadsheet)
-    time.sleep(1)
+    time.sleep(3)
     setup_paid_invoices(spreadsheet)
-    time.sleep(1)
+    time.sleep(3)
     setup_config(spreadsheet)
-    time.sleep(1)
+    time.sleep(3)
     
     print("\n📋 Creating dentist payslips...")
     for name, config in DENTISTS.items():
         setup_dentist_payslip(spreadsheet, name, config)
-        time.sleep(2)
+        time.sleep(5)  # Longer delay - payslips have more API calls
     
     print("\n" + "=" * 60)
     print("✅ PROFESSIONAL SETUP v3.0 COMPLETE!")
