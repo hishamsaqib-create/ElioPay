@@ -72,7 +72,7 @@ HISTORICAL_PAYSLIPS_FOLDER_ID = "1rcE4JFqnNj8jXHUCmQyoPn5DYDKSjNpJ"
 LAB_BILLS_FOLDER_ID = "16VsBkxhg1DgKYC-SQJtRH9erJdt3v1zR"
 
 # NHS Statements Folder (for UDA data - Peter, Priyanka, Moneeb)
-NHS_STATEMENTS_FOLDER_ID = os.environ.get("NHS_STATEMENTS_FOLDER_ID", "")  # Set this after creating folder
+NHS_STATEMENTS_FOLDER_ID = os.environ.get("NHS_STATEMENTS_FOLDER_ID", "1I581BCY2NpGiOz-94pId2tRFvvGP1oHV")  # Set this after creating folder
 
 # Email Configuration (for sending PDF payslips)
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER", "")  # e.g., payslips@auradental.co.uk
