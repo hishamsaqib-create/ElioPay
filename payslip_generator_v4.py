@@ -2236,15 +2236,38 @@ def update_dashboard(spreadsheet, payslips, period_str):
     
     try:
         sh = spreadsheet.worksheet("Dashboard")
-    except:
+    except gspread.WorksheetNotFound:
+        print("      Dashboard tab not found, creating...")
+        try:
+            sh = spreadsheet.add_worksheet(title="Dashboard", rows=100, cols=15)
+        except Exception as e:
+            print(f"      ❌ Could not create Dashboard: {e}")
+            return
+    except Exception as e:
+        print(f"      ❌ Error accessing Dashboard: {e}")
         return
     
-    # Update period and date
-    sh.update_acell('D6', period_str)
-    sh.update_acell('J6', datetime.now().strftime('%d/%m/%Y'))
+    # Build complete dashboard structure
+    rows = []
     
-    # Collect all row data
-    all_rows = []
+    # Header section (rows 1-9)
+    rows.append(["", "AURA DENTAL CLINIC", "", "", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "PAYSLIP SUMMARY", "", "", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", f"Period: {period_str}", "", "", "", "", "", f"Generated: {datetime.now().strftime('%d/%m/%Y')}", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+    
+    # Column headers (row 9)
+    rows.append([
+        "", "Dentist", "UDAs", "UDA Rate", "NHS Income", 
+        "Gross Private", "Split", "Net Private", 
+        "Lab 50%", "Finance 50%", "Therapy", "Total Ded.", "Net Pay", "Status"
+    ])
+    
+    # Collect all dentist data
     total_nhs = 0
     total_private_gross = 0
     total_private_net = 0
@@ -2254,9 +2277,9 @@ def update_dashboard(spreadsheet, payslips, period_str):
     for name in DENTISTS.keys():
         if name in payslips:
             p = payslips[name]
-            nhs_udas = str(p.get('udas', 0)) if DENTISTS[name]['has_nhs'] else "-"
+            nhs_udas = str(p.get('nhs_udas', 0)) if DENTISTS[name]['has_nhs'] else "-"
             uda_rate = f"£{DENTISTS[name]['uda_rate']}" if DENTISTS[name]['uda_rate'] else "-"
-            nhs_income = f"£{p.get('uda_income', 0):,.2f}" if DENTISTS[name]['has_nhs'] else "-"
+            nhs_income = f"£{p.get('nhs_income', 0):,.2f}" if DENTISTS[name]['has_nhs'] else "-"
             
             row_data = [
                 "",
@@ -2274,20 +2297,20 @@ def update_dashboard(spreadsheet, payslips, period_str):
                 f"£{p['total_payment']:,.2f}",
                 "✅" if p['total_payment'] > 0 else "⏳"
             ]
-            all_rows.append(row_data)
+            rows.append(row_data)
             
             if DENTISTS[name]['has_nhs']:
-                total_nhs += p.get('uda_income', 0)
+                total_nhs += p.get('nhs_income', 0)
             total_private_gross += p['gross_total']
             total_private_net += p['net_private']
             total_deductions += p['total_deductions']
             total_net_pay += p['total_payment']
         else:
-            all_rows.append([""] * 14)
+            rows.append([""] * 14)
     
     # Add totals row
-    all_rows.append([])
-    all_rows.append([
+    rows.append([])
+    rows.append([
         "", "TOTAL", "", "",
         f"£{total_nhs:,.2f}",
         f"£{total_private_gross:,.2f}",
@@ -2299,8 +2322,9 @@ def update_dashboard(spreadsheet, payslips, period_str):
         ""
     ])
     
-    # Batch update all rows
-    sh.update(values=all_rows, range_name='A10')
+    # Clear and write all data
+    sh.clear()
+    sh.update(values=rows, range_name='A1')
     time.sleep(1)
 
 
@@ -2331,7 +2355,11 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     except:
         pass
     
-    sh = spreadsheet.add_worksheet(tab_name, 300, 8)
+    try:
+        sh = spreadsheet.add_worksheet(tab_name, 300, 8)
+    except Exception as e:
+        print(f"      ❌ Could not create {tab_name}: {e}")
+        return
     
     config = DENTISTS[dentist_name]
     
@@ -2767,12 +2795,23 @@ def update_finance_flags(spreadsheet, finance_flags):
     
     try:
         sh = spreadsheet.worksheet("Finance Flags")
+        sh.clear()
     except:
-        return
+        try:
+            sh = spreadsheet.add_worksheet(title="Finance Flags", rows=200, cols=10)
+        except Exception as e:
+            print(f"      ⚠️ Cannot create Finance Flags tab: {e}")
+            return
     
-    # Keep header rows, update from row 6
+    # Build full structure with headers
+    rows = [
+        ["", "FINANCE PAYMENTS - TERM LENGTH REQUIRED", "", "", "", "", "", "", ""],
+        ["", "Enter the term length for each finance payment below", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", ""],
+        ["", "Patient", "Dentist", "Amount", "Date", "Term (months)", "Subsidy %", "Fee", "Status"],
+    ]
+    
     if finance_flags:
-        rows = []
         for flag in finance_flags:
             rows.append([
                 "",
@@ -2785,8 +2824,11 @@ def update_finance_flags(spreadsheet, finance_flags):
                 "",  # Fee
                 "⚠️ Enter term"
             ])
-        sh.update(values=rows, range_name='A6')
-        time.sleep(1)  # Rate limit protection
+    else:
+        rows.append(["", "No finance payments requiring term length", "", "", "", "", "", "", ""])
+    
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)  # Rate limit protection
 
 
 def read_confirmed_adjustments(spreadsheet, dentist_name):
@@ -4457,6 +4499,8 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     drive_service = get_drive_service()
     client = get_sheets_client()
     spreadsheet = None
+    previous_sheets = []
+    processed_lab_bills = set()  # Initialize here to avoid NameError
     
     # Debug: Show configuration
     print(f"\n📁 Folder Configuration:")
@@ -4521,10 +4565,6 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                                 else:
                                     payslips[dentist]['lab_bills'][lab_name] = amount
                             
-                            # Add lab bill details for invoice links
-                            if dentist in lab_bills_details_by_dentist:
-                                payslips[dentist]['lab_bills_details'] = lab_bills_details_by_dentist[dentist]
-                            
                             # Recalculate totals
                             payslips[dentist]['lab_bills_total'] = sum(payslips[dentist]['lab_bills'].values())
                             payslips[dentist]['lab_bills_50'] = payslips[dentist]['lab_bills_total'] * LAB_BILL_SPLIT
@@ -4534,6 +4574,12 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                                 payslips[dentist]['therapy_total']
                             )
                             payslips[dentist]['total_payment'] = payslips[dentist]['net_private'] - payslips[dentist]['total_deductions']
+                
+                # Add lab bill details for invoice links (separate loop to catch all)
+                for dentist in payslips.keys():
+                    if dentist in lab_bills_details_by_dentist:
+                        payslips[dentist]['lab_bills_details'] = lab_bills_details_by_dentist[dentist]
+                        print(f"      Added {len(lab_bills_details_by_dentist[dentist])} lab bill links for {dentist}")
         except Exception as e:
             print(f"   ⚠️ Lab bill processing error: {e}")
             import traceback
@@ -4541,24 +4587,20 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     
     # Process NHS statements (for Peter, Priyanka, Moneeb)
     nhs_data = {}
-    if drive_service and NHS_STATEMENTS_FOLDER_ID:
+    if drive_service and NHS_STATEMENTS_FOLDER_ID and spreadsheet:
         try:
-            client = get_sheets_client()
-            if client:
-                spreadsheet = client.open_by_key(SPREADSHEET_ID)
-                
-                nhs_data = process_nhs_statements(
-                    drive_service, spreadsheet, period_str, month, year
-                )
-                
-                # Add NHS income to payslips
-                for dentist, data in nhs_data.items():
-                    if dentist in payslips:
-                        payslips[dentist]['nhs_udas'] = data['udas']
-                        payslips[dentist]['nhs_uda_rate'] = data['uda_rate']
-                        payslips[dentist]['nhs_income'] = data['uda_income']
-                        payslips[dentist]['nhs_period'] = data.get('nhs_period', '')
-                        print(f"   ✅ Added NHS income to {dentist}: £{data['uda_income']:,.2f}")
+            nhs_data = process_nhs_statements(
+                drive_service, spreadsheet, period_str, month, year
+            )
+            
+            # Add NHS income to payslips
+            for dentist, data in nhs_data.items():
+                if dentist in payslips:
+                    payslips[dentist]['nhs_udas'] = data['udas']
+                    payslips[dentist]['nhs_uda_rate'] = data['uda_rate']
+                    payslips[dentist]['nhs_income'] = data['uda_income']
+                    payslips[dentist]['nhs_period'] = data.get('nhs_period', '')
+                    print(f"   ✅ Added NHS income to {dentist}: £{data['uda_income']:,.2f}")
         except Exception as e:
             print(f"   ⚠️ NHS statement processing error: {e}")
             import traceback
@@ -4658,7 +4700,12 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     
     total_payout = sum(p['total_payment'] for p in payslips.values())
     print(f"\n💰 Total Payout: £{total_payout:,.2f}")
-    print(f"\n🔗 View: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
+    
+    # Show correct spreadsheet link
+    if spreadsheet:
+        print(f"\n🔗 View: https://docs.google.com/spreadsheets/d/{spreadsheet.id}")
+    else:
+        print(f"\n🔗 View: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
     
     # Warnings
     if finance_flags:
