@@ -2035,8 +2035,9 @@ def setup_new_payslip_spreadsheet(spreadsheet, period_str):
         try:
             sheet1 = spreadsheet.sheet1
             sheet1.update_title("Dashboard")
-        except:
-            pass
+            print(f"      Renamed Sheet1 to Dashboard")
+        except Exception as e:
+            print(f"      ⚠️ Could not rename Sheet1: {e}")
         
         # Create required tabs
         tabs_to_create = [
@@ -2050,16 +2051,24 @@ def setup_new_payslip_spreadsheet(spreadsheet, period_str):
             first_name = dentist_name.split()[0]
             tabs_to_create.append(f"{first_name} Payslip")
         
+        created_count = 0
         for tab_name in tabs_to_create:
             try:
                 spreadsheet.add_worksheet(title=tab_name, rows=500, cols=12)
-            except:
-                pass  # Tab might already exist
+                created_count += 1
+                print(f"      Created tab: {tab_name}")
+            except Exception as e:
+                print(f"      ⚠️ Could not create {tab_name}: {e}")
         
-        print(f"   ✅ Created {len(tabs_to_create)} tabs")
+        print(f"   ✅ Created {created_count}/{len(tabs_to_create)} tabs")
+        
+        # Small delay for API rate limiting
+        time.sleep(2)
         
     except Exception as e:
-        print(f"   ⚠️ Error setting up tabs: {e}")
+        print(f"   ❌ Error setting up tabs: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def get_previous_month_spreadsheets(client, drive_service, current_period_str, months_back=6):
@@ -4590,58 +4599,57 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     
     # Update Google Sheets
     xref_results = None
-    if GOOGLE_SHEETS_CREDENTIALS:
+    if GOOGLE_SHEETS_CREDENTIALS and spreadsheet:
         print("\n📊 Updating Google Sheets...")
-        client = get_sheets_client()
-        if client:
-            try:
-                spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        print(f"   Using spreadsheet: {spreadsheet.title} (ID: {spreadsheet.id[:20]}...)")
+        
+        try:
+            # Update Dashboard
+            update_dashboard(spreadsheet, payslips, period_str)
+            
+            # Update individual payslips
+            for name, payslip in payslips.items():
+                update_dentist_payslip(spreadsheet, name, payslip, period_str)
+                print(f"   ✅ {name.split()[0]} Payslip")
+                time.sleep(2)  # Rate limit protection
+            
+            # Update finance flags
+            if finance_flags:
+                update_finance_flags(spreadsheet, finance_flags)
+                print(f"   ⚠️ {len(finance_flags)} finance payments need term length")
+            
+            # Perform cross-reference with dentist logs
+            client = get_sheets_client()
+            xref_results = perform_cross_reference(client, payslips, month, year)
+            
+            # Update cross-reference tab
+            if xref_results:
+                update_cross_reference(spreadsheet, xref_results, period_str)
                 
-                # Update Dashboard
-                update_dashboard(spreadsheet, payslips, period_str)
-                
-                # Update individual payslips
-                for name, payslip in payslips.items():
-                    update_dentist_payslip(spreadsheet, name, payslip, period_str)
-                    print(f"   ✅ {name.split()[0]} Payslip")
-                    time.sleep(2)  # Rate limit protection
-                
-                # Update finance flags
-                if finance_flags:
-                    update_finance_flags(spreadsheet, finance_flags)
-                    print(f"   ⚠️ {len(finance_flags)} finance payments need term length")
-                
-                # Perform cross-reference with dentist logs
-                xref_results = perform_cross_reference(client, payslips, month, year)
-                
-                # Update cross-reference tab
-                if xref_results:
-                    update_cross_reference(spreadsheet, xref_results, period_str)
-                    
-                    # Add discrepancies to each dentist's individual payslip
-                    print("   Adding discrepancies to individual payslips...")
-                    for dentist_name, xref in xref_results.items():
-                        if "error" not in xref:
-                            update_payslip_discrepancies(spreadsheet, dentist_name, xref)
-                            time.sleep(1)  # Rate limit protection
-                    print("   ✅ Discrepancies added to payslips")
-                
-                # Update duplicate check tab
-                if all_duplicates:
-                    update_duplicate_check_tab(spreadsheet, all_duplicates, period_str)
-                
-                # Perform 4-way reconciliation
-                if historical_db and xref_results:
-                    reconciliation = perform_4way_reconciliation(payslips, historical_db, xref_results, period_str)
-                    update_reconciliation_tab(spreadsheet, reconciliation, period_str)
-                
-                # DISABLED: Log paid invoices for future duplicate detection
-                # update_paid_invoices_log(spreadsheet, payslips, period_str)
-                
-            except Exception as e:
-                print(f"   ⚠️ Sheets error: {e}")
-                import traceback
-                traceback.print_exc()
+                # Add discrepancies to each dentist's individual payslip
+                print("   Adding discrepancies to individual payslips...")
+                for dentist_name, xref in xref_results.items():
+                    if "error" not in xref:
+                        update_payslip_discrepancies(spreadsheet, dentist_name, xref)
+                        time.sleep(1)  # Rate limit protection
+                print("   ✅ Discrepancies added to payslips")
+            
+            # Update duplicate check tab
+            if all_duplicates:
+                update_duplicate_check_tab(spreadsheet, all_duplicates, period_str)
+            
+            # Perform 4-way reconciliation
+            if historical_db and xref_results:
+                reconciliation = perform_4way_reconciliation(payslips, historical_db, xref_results, period_str)
+                update_reconciliation_tab(spreadsheet, reconciliation, period_str)
+            
+            # DISABLED: Log paid invoices for future duplicate detection
+            # update_paid_invoices_log(spreadsheet, payslips, period_str)
+            
+        except Exception as e:
+            print(f"   ⚠️ Sheets error: {e}")
+            import traceback
+            traceback.print_exc()
     
     # Summary
     print("\n" + "=" * 60)
