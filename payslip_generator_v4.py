@@ -65,6 +65,9 @@ DENTALLY_API_BASE = "https://api.dentally.co/v1"
 GOOGLE_SHEETS_CREDENTIALS = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
 SPREADSHEET_ID = os.environ.get("PAYSLIP_SPREADSHEET_ID", "1BANM1mdxxtjLAHHc8jSkchHHNbiRC474phtMEINeYHs")
 
+# Monthly Payslips Folder (stores "Aura Payslips - Month Year" spreadsheets)
+PAYSLIPS_FOLDER_ID = os.environ.get("PAYSLIPS_FOLDER_ID", "")  # Folder in Shared Drive for monthly sheets
+
 # Historical Payslips Folder (for duplicate detection)
 HISTORICAL_PAYSLIPS_FOLDER_ID = "1rcE4JFqnNj8jXHUCmQyoPn5DYDKSjNpJ"
 
@@ -892,14 +895,18 @@ def get_assigned_lab_bills(spreadsheet):
     return assigned
 
 
-def process_lab_bills(drive_service, spreadsheet, period_str, target_month, target_year):
+def process_lab_bills(drive_service, spreadsheet, period_str, target_month, target_year, processed_lab_bills=None):
     """
     Process lab bills from Google Drive folder.
     
     1. List all PDFs in lab bills folder
-    2. Check which are already assigned
-    3. Parse new PDFs to extract dentist and amount
-    4. Return dict of lab bills per dentist
+    2. Check which are already assigned (current month)
+    3. Check which were processed in previous months (duplicate detection)
+    4. Parse new PDFs to extract dentist and amount
+    5. Return dict of lab bills per dentist
+    
+    Args:
+        processed_lab_bills: Set of file IDs already processed in previous months
     
     Returns:
         {
@@ -912,13 +919,18 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     print("\n📂 PROCESSING LAB BILLS...")
     print("=" * 50)
     
+    if processed_lab_bills is None:
+        processed_lab_bills = set()
+    
     lab_bills_by_dentist = defaultdict(lambda: defaultdict(float))
     unassigned_bills = []
     new_assignments = []
+    duplicate_bills = []
     
-    # Get already assigned bills
+    # Get already assigned bills (current month's spreadsheet)
     assigned = get_assigned_lab_bills(spreadsheet)
-    print(f"   Found {len(assigned)} previously assigned lab bills")
+    print(f"   Found {len(assigned)} previously assigned lab bills (this month)")
+    print(f"   Found {len(processed_lab_bills)} lab bills from previous months")
     
     # List all PDFs
     print("   Scanning lab bills folder...")
@@ -929,7 +941,13 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     for pdf_info in pdfs:
         file_id = pdf_info['id']
         
-        # Check if already assigned
+        # Check if processed in previous months (DUPLICATE)
+        if file_id in processed_lab_bills:
+            duplicate_bills.append(pdf_info)
+            print(f"   ⚠️ SKIP (previous month): {pdf_info['name'][:40]}...")
+            continue
+        
+        # Check if already assigned (current month)
         if file_id in assigned:
             # Add to dentist's lab bills if we have the info
             prev = assigned[file_id]
@@ -998,7 +1016,11 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     print("\n   📊 Lab Bills Summary:")
     for dentist, labs in lab_bills_by_dentist.items():
         total = sum(labs.values())
-        print(f"      {dentist}: £{total:,.2f} total ({len(labs)} labs)")
+        lab_list = ", ".join(labs.keys())
+        print(f"      {dentist}: £{total:,.2f} ({lab_list})")
+    
+    if duplicate_bills:
+        print(f"\n   🔴 {len(duplicate_bills)} lab bills SKIPPED (already processed in previous months)")
     
     if unassigned_bills:
         print(f"\n   ⚠️ {len(unassigned_bills)} bills need manual dentist assignment")
@@ -1858,6 +1880,195 @@ def get_sheets_client():
         return None
 
 
+def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_id=None):
+    """
+    Get or create a monthly spreadsheet named "Aura Payslips - December 2025".
+    
+    Args:
+        client: gspread client
+        drive_service: Google Drive API service
+        period_str: Period string like "December 2025"
+        folder_id: Folder ID to store the spreadsheet (optional)
+    
+    Returns:
+        spreadsheet object, is_new (bool)
+    """
+    sheet_name = f"Aura Payslips - {period_str}"
+    
+    print(f"\n📊 Looking for spreadsheet: {sheet_name}")
+    
+    # Try to find existing spreadsheet
+    try:
+        spreadsheet = client.open(sheet_name)
+        print(f"   ✅ Found existing spreadsheet")
+        return spreadsheet, False
+    except gspread.SpreadsheetNotFound:
+        print(f"   📝 Creating new spreadsheet...")
+    
+    # Create new spreadsheet
+    try:
+        spreadsheet = client.create(sheet_name)
+        print(f"   ✅ Created: {sheet_name}")
+        
+        # Move to folder if specified
+        if folder_id and drive_service:
+            try:
+                # Get current parent
+                file = drive_service.files().get(
+                    fileId=spreadsheet.id,
+                    fields='parents',
+                    supportsAllDrives=True
+                ).execute()
+                
+                previous_parents = ",".join(file.get('parents', []))
+                
+                # Move to new folder
+                drive_service.files().update(
+                    fileId=spreadsheet.id,
+                    addParents=folder_id,
+                    removeParents=previous_parents,
+                    supportsAllDrives=True,
+                    fields='id, parents'
+                ).execute()
+                
+                print(f"   📁 Moved to payslips folder")
+            except Exception as e:
+                print(f"   ⚠️ Could not move to folder: {e}")
+        
+        return spreadsheet, True
+        
+    except Exception as e:
+        print(f"   ⚠️ Error creating spreadsheet: {e}")
+        # Fall back to existing spreadsheet
+        return client.open_by_key(SPREADSHEET_ID), False
+
+
+def get_previous_month_spreadsheets(client, drive_service, current_period_str, months_back=6):
+    """
+    Find previous months' payslip spreadsheets for duplicate detection.
+    
+    Returns:
+        List of spreadsheet objects from previous months
+    """
+    previous_sheets = []
+    
+    print(f"\n📂 Searching for previous payslip spreadsheets...")
+    
+    try:
+        # Search for spreadsheets matching our naming pattern
+        query = "name contains 'Aura Payslips -' and mimeType='application/vnd.google-apps.spreadsheet'"
+        
+        results = drive_service.files().list(
+            q=query,
+            fields="files(id, name, modifiedTime)",
+            orderBy="modifiedTime desc",
+            pageSize=20,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        
+        files = results.get('files', [])
+        print(f"   Found {len(files)} payslip spreadsheets")
+        
+        for f in files:
+            # Skip current period
+            if current_period_str in f['name']:
+                continue
+            
+            print(f"   📋 {f['name']}")
+            
+            try:
+                spreadsheet = client.open_by_key(f['id'])
+                previous_sheets.append({
+                    'name': f['name'],
+                    'id': f['id'],
+                    'spreadsheet': spreadsheet
+                })
+            except Exception as e:
+                print(f"      ⚠️ Could not open: {e}")
+            
+            if len(previous_sheets) >= months_back:
+                break
+    
+    except Exception as e:
+        print(f"   ⚠️ Error searching for previous spreadsheets: {e}")
+    
+    return previous_sheets
+
+
+def get_previous_lab_bills(previous_sheets):
+    """
+    Extract lab bill file IDs from previous months' spreadsheets.
+    
+    Returns:
+        Set of lab bill file IDs that have already been processed
+    """
+    processed_lab_bills = set()
+    
+    print(f"\n🔍 Checking for previously processed lab bills...")
+    
+    for sheet_info in previous_sheets:
+        try:
+            spreadsheet = sheet_info['spreadsheet']
+            
+            # Try to find Lab Bills Log tab
+            try:
+                lab_log = spreadsheet.worksheet("Lab Bills Log")
+                data = lab_log.get_all_values()
+                
+                # Look for file IDs in the data (usually in column B)
+                for row in data[5:]:  # Skip headers
+                    if len(row) >= 2 and row[1]:
+                        file_id = row[1].strip()
+                        if file_id and len(file_id) > 20:  # Likely a file ID
+                            processed_lab_bills.add(file_id)
+            except gspread.WorksheetNotFound:
+                pass
+            
+            # Also check Config tab for processed lab bills
+            try:
+                config = spreadsheet.worksheet("Config")
+                data = config.get_all_values()
+                
+                for row in data:
+                    for cell in row:
+                        if isinstance(cell, str) and len(cell) > 25 and cell.startswith('1'):
+                            # Might be a file ID
+                            processed_lab_bills.add(cell)
+            except gspread.WorksheetNotFound:
+                pass
+                
+        except Exception as e:
+            print(f"   ⚠️ Error reading {sheet_info['name']}: {e}")
+    
+    print(f"   Found {len(processed_lab_bills)} previously processed lab bills")
+    
+    return processed_lab_bills
+
+
+def filter_new_lab_bills(all_lab_bills, processed_file_ids):
+    """
+    Filter out lab bills that have already been processed in previous months.
+    
+    Returns:
+        List of new lab bills, List of duplicate lab bills
+    """
+    new_bills = []
+    duplicate_bills = []
+    
+    for bill in all_lab_bills:
+        if bill['id'] in processed_file_ids:
+            duplicate_bills.append(bill)
+            print(f"   ⚠️ DUPLICATE: {bill['name'][:40]}... (already processed)")
+        else:
+            new_bills.append(bill)
+    
+    if duplicate_bills:
+        print(f"\n   🔴 {len(duplicate_bills)} duplicate lab bills excluded")
+    
+    return new_bills, duplicate_bills
+
+
 
 # =============================================================================
 # SHEET FORMATTING COLORS (v3.0 - Consistent styling)
@@ -2062,15 +2273,29 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     # Row 14: Section 2 header
     rows.append(["", "Section 2: Deductions", "", "", "", "", "", ""])
     
-    # Labs breakdown (rows 15-22)
-    rows.append(["", "", "", "", "", "Halo", lab_halo if lab_halo else "", ""])
-    rows.append(["", "", "", "", "", "Straumann", lab_straumann if lab_straumann else "", ""])
-    rows.append(["", "", "", "Labs", "", "Invisalign", lab_invisalign if lab_invisalign else "", ""])
-    rows.append(["", "", "", "", "", "Priory", lab_priory if lab_priory else "", ""])
-    rows.append(["", "", "", "", "", "Scan Digital", lab_scan if lab_scan else "", ""])
-    rows.append(["", "", "", "", "", "Robinsons", lab_robinsons if lab_robinsons else "", ""])
-    rows.append(["", "", "", "", "", "Lab Bills Total", payslip.get('lab_bills_total', 0), ""])
-    rows.append(["", "", "", "", "", "Lab Bills 50%", payslip.get('lab_bills_50', 0), ""])
+    # Dynamic Labs breakdown - only show labs that have invoices
+    lab_bills = payslip.get('lab_bills', {})
+    lab_bills_details = payslip.get('lab_bills_details', [])  # List of individual bills
+    
+    # Filter labs with actual values
+    labs_with_values = {k: v for k, v in lab_bills.items() if v and v > 0}
+    
+    if labs_with_values:
+        # First row with "Labs" label
+        first_lab = True
+        for lab_name, lab_amount in sorted(labs_with_values.items()):
+            if first_lab:
+                rows.append(["", "", "", "Labs", "", lab_name, lab_amount, ""])
+                first_lab = False
+            else:
+                rows.append(["", "", "", "", "", lab_name, lab_amount, ""])
+        
+        # Lab totals
+        rows.append(["", "", "", "", "", "Lab Bills Total", payslip.get('lab_bills_total', 0), ""])
+        rows.append(["", "", "", "", "", "Lab Bills 50%", payslip.get('lab_bills_50', 0), ""])
+    else:
+        # No lab bills - show placeholder
+        rows.append(["", "", "", "Labs", "", "None this period", 0, ""])
     
     rows.append(["", "", "", "", "", "", "", ""])  # spacer
     
@@ -3912,17 +4137,42 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
         lab_bills, therapy_minutes, nhs_udas
     )
     
-    # Process lab bills from Google Drive (if no manual lab_bills provided)
+    # Get or create monthly spreadsheet
     drive_service = get_drive_service()
+    client = get_sheets_client()
+    spreadsheet = None
+    
+    if client:
+        # Try to get/create monthly spreadsheet
+        if PAYSLIPS_FOLDER_ID and drive_service:
+            spreadsheet, is_new = get_or_create_monthly_spreadsheet(
+                client, drive_service, period_str, PAYSLIPS_FOLDER_ID
+            )
+            if is_new:
+                print(f"   📝 Created new monthly spreadsheet: Aura Payslips - {period_str}")
+        else:
+            # Fall back to existing spreadsheet
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            print(f"   📊 Using existing spreadsheet")
+        
+        # Get previous months' spreadsheets for duplicate detection
+        previous_sheets = []
+        if drive_service:
+            previous_sheets = get_previous_month_spreadsheets(client, drive_service, period_str, months_back=6)
+        
+        # Get previously processed lab bills
+        processed_lab_bills = set()
+        if previous_sheets:
+            processed_lab_bills = get_previous_lab_bills(previous_sheets)
+    
+    # Process lab bills from Google Drive (if no manual lab_bills provided)
     if drive_service and not lab_bills:
         try:
-            client = get_sheets_client()
-            if client:
-                spreadsheet = client.open_by_key(SPREADSHEET_ID)
-                
+            if spreadsheet:
                 # Process lab bills and get assignments
                 lab_bills_from_drive = process_lab_bills(
-                    drive_service, spreadsheet, period_str, month, year
+                    drive_service, spreadsheet, period_str, month, year,
+                    processed_lab_bills=processed_lab_bills  # Pass for duplicate detection
                 )
                 
                 # Merge lab bills into payslips
