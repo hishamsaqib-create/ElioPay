@@ -734,6 +734,83 @@ def setup_unassigned_lab_bills(spreadsheet):
     print("   ✅ Unassigned Lab Bills created")
 
 
+def setup_reconciliation(spreadsheet):
+    """Create Reconciliation tab for 4-way comparison"""
+    print("Creating Reconciliation tab...")
+    
+    try:
+        old_sheet = spreadsheet.worksheet("Reconciliation")
+        spreadsheet.del_worksheet(old_sheet)
+    except:
+        pass
+    
+    sh = spreadsheet.add_worksheet("Reconciliation", 500, 12)
+    apply_base_formatting(spreadsheet, sh)
+    
+    data = [
+        [""],
+        ["", "4-WAY RECONCILIATION REPORT", "", "", "", "", "", "", "", "", "", ""],
+        ["", "Compares: Previous Payslips | Current Claim | Private Log | Cumulative Total", "", "", "", "", "", "", "", "", "", ""],
+        [""],
+        ["", "Auto-populated during payslip generation", "", "", "", "", "", "", "", "", "", ""]
+    ]
+    
+    sh.update(values=data, range_name='A1')
+    
+    sheet_id = sh.id
+    requests = [
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 150}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 8}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
+        
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 6},
+            'cell': {'userEnteredFormat': {'textFormat': {'bold': True, 'fontSize': 14}}}, 'fields': 'userEnteredFormat.textFormat'}},
+    ]
+    spreadsheet.batch_update({'requests': requests})
+    print("   ✅ Reconciliation tab created")
+
+
+def setup_nhs_statements_log(spreadsheet):
+    """Create NHS Statements Log tab"""
+    print("Creating NHS Statements Log...")
+    
+    try:
+        old_sheet = spreadsheet.worksheet("NHS Statements Log")
+        spreadsheet.del_worksheet(old_sheet)
+    except:
+        pass
+    
+    sh = spreadsheet.add_worksheet("NHS Statements Log", 500, 10)
+    apply_base_formatting(spreadsheet, sh)
+    
+    data = [
+        [""],
+        ["", "NHS STATEMENTS LOG", "", "", "", "", "", "", "", ""],
+        ["", "Tracks processed NHS statements for Peter, Priyanka, Moneeb", "", "", "", "", "", "", "", ""],
+        [""],
+        ["", "File ID", "Filename", "Period", "Peter UDAs", "Peter £", "Priyanka UDAs", "Priyanka £", "Moneeb UDAs", "Moneeb £"]
+    ]
+    
+    sh.update(values=data, range_name='A1')
+    
+    sheet_id = sh.id
+    requests = [
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 200}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 10}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
+        
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 4, 'startColumnIndex': 0, 'endColumnIndex': 10},
+            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['info']}}, 'fields': 'userEnteredFormat.backgroundColor'}},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 6},
+            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': COLORS['info_text'], 'bold': True, 'fontSize': 14}}}, 'fields': 'userEnteredFormat.textFormat'}},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 5, 'startColumnIndex': 1, 'endColumnIndex': 10},
+            'cell': {'userEnteredFormat': {'backgroundColor': COLORS['info'], 'textFormat': {'bold': True, 'foregroundColor': COLORS['info_text']},
+                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': COLORS['info_text']}}}},
+            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+    ]
+    spreadsheet.batch_update({'requests': requests})
+    sh.freeze(rows=5)
+    print("   ✅ NHS Statements Log created")
+
+
 def main():
     """Main setup function"""
     print("=" * 60)
@@ -757,9 +834,13 @@ def main():
     time.sleep(3)
     setup_duplicate_check(spreadsheet)
     time.sleep(3)
+    setup_reconciliation(spreadsheet)
+    time.sleep(3)
     setup_lab_bills_log(spreadsheet)
     time.sleep(3)
     setup_unassigned_lab_bills(spreadsheet)
+    time.sleep(3)
+    setup_nhs_statements_log(spreadsheet)
     time.sleep(3)
     setup_config(spreadsheet)
     time.sleep(3)
