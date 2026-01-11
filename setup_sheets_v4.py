@@ -826,21 +826,12 @@ def main():
     
     print(f"\n📊 Setting up: {spreadsheet.title}")
     
+    # Essential tabs only
     setup_dashboard(spreadsheet)
     time.sleep(3)
     setup_cross_reference(spreadsheet)
     time.sleep(3)
-    setup_finance_flags(spreadsheet)
-    time.sleep(3)
-    setup_duplicate_check(spreadsheet)
-    time.sleep(3)
     setup_reconciliation(spreadsheet)
-    time.sleep(3)
-    setup_lab_bills_log(spreadsheet)
-    time.sleep(3)
-    setup_unassigned_lab_bills(spreadsheet)
-    time.sleep(3)
-    setup_nhs_statements_log(spreadsheet)
     time.sleep(3)
     setup_config(spreadsheet)
     time.sleep(3)
