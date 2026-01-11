@@ -428,7 +428,7 @@ def get_drive_service():
     try:
         creds_dict = json.loads(base64.b64decode(GOOGLE_SHEETS_CREDENTIALS))
         creds = Credentials.from_service_account_info(creds_dict, scopes=[
-            'https://www.googleapis.com/auth/drive.readonly'
+            'https://www.googleapis.com/auth/drive'  # Full access to create/read/write files
         ])
         service = build('drive', 'v3', credentials=creds)
         return service
