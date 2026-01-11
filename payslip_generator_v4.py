@@ -1119,11 +1119,23 @@ def update_unassigned_lab_bills(spreadsheet, unassigned_bills, period_str):
 # NHS STATEMENT PROCESSING
 # =============================================================================
 
-# NHS dentists and their UDA rates
+# NHS dentists and their performer numbers from NHS statements
 NHS_DENTISTS = {
-    "Peter Throw": {"uda_rate": 16, "variations": ["peter", "throw", "p throw", "peter t"]},
-    "Priyanka Kapoor": {"uda_rate": 15, "variations": ["priyanka", "kapoor", "p kapoor", "priyanka k"]},
-    "Moneeb Ahmad": {"uda_rate": 15, "variations": ["moneeb", "ahmad", "m ahmad", "moneeb a"]},
+    "Peter Throw": {
+        "uda_rate": 16, 
+        "performer_numbers": ["780995"],
+        "name_patterns": ["pe throw", "peter", "throw", "p throw"]
+    },
+    "Priyanka Kapoor": {
+        "uda_rate": 15, 
+        "performer_numbers": ["112376"],
+        "name_patterns": ["kapoor", "priyanka", "p kapoor"]
+    },
+    "Moneeb Ahmad": {
+        "uda_rate": 15, 
+        "performer_numbers": ["701874"],
+        "name_patterns": ["m ahmad", "moneeb", "ahmad"]
+    },
 }
 
 
@@ -1131,31 +1143,30 @@ def parse_nhs_statement_pdf(pdf_content, filename):
     """
     Parse an NHS statement PDF to extract UDA data per dentist.
     
-    NHS statements typically contain:
-    - Date range (pay period)
-    - UDAs achieved per performer
-    - Sometimes broken down by Band 1/2/3
+    NHS statement format:
+    - "Activity for December (19/11/2025 - 17/12/2025)"
+    - "Units of Dental Activity per Clinician"
+    - "701874 M AHMAD"
+    - "Current Financial Year 2025/26    46.20"
     
     Returns:
         {
-            'period_start': str,
-            'period_end': str,
-            'period_str': str (e.g., "December 2025"),
+            'period_month': str (e.g., "December"),
+            'period_year': int,
+            'period_range': str (e.g., "19/11/2025 - 17/12/2025"),
             'dentists': {
-                'Peter Throw': {'udas': float, 'uda_value': float},
+                'Peter Throw': {'udas': float, 'uda_rate': float, 'uda_income': float},
                 ...
             },
             'filename': str,
-            'raw_text': str
         }
     """
     result = {
-        'period_start': None,
-        'period_end': None,
-        'period_str': None,
+        'period_month': None,
+        'period_year': None,
+        'period_range': None,
         'dentists': {},
         'filename': filename,
-        'raw_text': ''
     }
     
     try:
@@ -1165,78 +1176,70 @@ def parse_nhs_statement_pdf(pdf_content, filename):
                 page_text = page.extract_text() or ""
                 text += page_text + "\n"
             
-            result['raw_text'] = text[:3000]  # Keep for debugging
+            # Debug: print first part of text
+            print(f"      📄 PDF text preview: {text[:300]}...")
             
-            # Extract date range
-            # Common patterns: "1 December 2025 to 31 December 2025"
-            # Or: "01/12/2025 - 31/12/2025"
-            date_patterns = [
-                r'(\d{1,2})\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s*(\d{4})\s*(?:to|-)\s*(\d{1,2})\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s*(\d{4})',
-                r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})\s*(?:to|-)\s*(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})',
-                r'Period[:\s]+(\w+\s+\d{4})',
-            ]
+            # Extract period from "Activity for December (19/11/2025 - 17/12/2025)"
+            period_match = re.search(
+                r'Activity\s+for\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s*\((\d{1,2}/\d{1,2}/\d{4})\s*-\s*(\d{1,2}/\d{1,2}/\d{4})\)',
+                text, re.IGNORECASE
+            )
+            if period_match:
+                result['period_month'] = period_match.group(1)
+                start_date = period_match.group(2)
+                end_date = period_match.group(3)
+                result['period_range'] = f"{start_date} - {end_date}"
+                # Extract year from end date
+                result['period_year'] = int(end_date.split('/')[-1])
+                print(f"      📅 Found period: {result['period_month']} ({result['period_range']})")
             
-            for pattern in date_patterns[:2]:
-                match = re.search(pattern, text, re.IGNORECASE)
-                if match:
-                    groups = match.groups()
-                    if len(groups) == 6:
-                        # Full date range found
-                        result['period_end'] = f"{groups[3]} {groups[4]} {groups[5]}"
-                        result['period_str'] = f"{groups[4]} {groups[5]}"
-                    break
+            # Find "Units of Dental Activity per Clinician" section
+            uda_section_match = re.search(
+                r'Units\s+of\s+Dental\s+Activity\s+per\s+Clinician(.+?)(?:THIS STATEMENT|PROVIDER SUMMARY|$)',
+                text, re.IGNORECASE | re.DOTALL
+            )
             
-            # If no full date range, try simpler pattern
-            if not result['period_str']:
-                match = re.search(date_patterns[2], text, re.IGNORECASE)
-                if match:
-                    result['period_str'] = match.group(1)
-            
-            # Extract UDAs per dentist
-            # Look for performer names followed by UDA numbers
-            for dentist_name, config in NHS_DENTISTS.items():
-                for variation in config['variations']:
-                    # Pattern: dentist name followed by numbers (UDAs)
-                    pattern = rf'{variation}[^\d]*(\d+(?:\.\d+)?)\s*(?:UDA|units|total)?'
-                    matches = re.findall(pattern, text, re.IGNORECASE)
+            if uda_section_match:
+                uda_section = uda_section_match.group(1)
+                print(f"      📊 Found UDA section ({len(uda_section)} chars)")
+                
+                # Look for each NHS dentist by performer number or name
+                for dentist_name, config in NHS_DENTISTS.items():
+                    udas = None
                     
-                    if matches:
-                        # Take the largest number as total UDAs
-                        udas = max(float(m) for m in matches)
-                        
-                        # Only accept reasonable UDA numbers (usually 10-500 per month)
-                        if 5 < udas < 1000:
-                            result['dentists'][dentist_name] = {
-                                'udas': udas,
-                                'uda_rate': config['uda_rate'],
-                                'uda_income': udas * config['uda_rate']
-                            }
+                    # Try performer number first (e.g., "701874 M AHMAD")
+                    for perf_num in config['performer_numbers']:
+                        # Pattern: performer number, then name, then "Current Financial Year 2025/26" then number
+                        pattern = rf'{perf_num}[^\n]*\n\s*Current\s+Financial\s+Year\s+\d{{4}}/\d{{2}}\s+([\d,]+\.?\d*)'
+                        match = re.search(pattern, uda_section, re.IGNORECASE)
+                        if match:
+                            udas = float(match.group(1).replace(',', ''))
+                            print(f"      ✅ Found {dentist_name} by performer #{perf_num}: {udas} UDAs")
                             break
-            
-            # Also try table extraction for structured data
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    for row in table:
-                        if row:
-                            row_text = ' '.join(str(cell) for cell in row if cell).lower()
-                            for dentist_name, config in NHS_DENTISTS.items():
-                                for variation in config['variations']:
-                                    if variation in row_text:
-                                        # Look for numbers in the row
-                                        numbers = re.findall(r'(\d+(?:\.\d+)?)', row_text)
-                                        for num_str in numbers:
-                                            num = float(num_str)
-                                            if 5 < num < 1000 and dentist_name not in result['dentists']:
-                                                result['dentists'][dentist_name] = {
-                                                    'udas': num,
-                                                    'uda_rate': config['uda_rate'],
-                                                    'uda_income': num * config['uda_rate']
-                                                }
-                                                break
+                    
+                    # Try name patterns if performer number didn't work
+                    if udas is None:
+                        for name_pattern in config['name_patterns']:
+                            pattern = rf'{name_pattern}[^\n]*\n\s*Current\s+Financial\s+Year\s+\d{{4}}/\d{{2}}\s+([\d,]+\.?\d*)'
+                            match = re.search(pattern, uda_section, re.IGNORECASE)
+                            if match:
+                                udas = float(match.group(1).replace(',', ''))
+                                print(f"      ✅ Found {dentist_name} by name pattern: {udas} UDAs")
+                                break
+                    
+                    if udas and udas > 0:
+                        result['dentists'][dentist_name] = {
+                            'udas': udas,
+                            'uda_rate': config['uda_rate'],
+                            'uda_income': udas * config['uda_rate']
+                        }
+            else:
+                print(f"      ⚠️ Could not find 'Units of Dental Activity per Clinician' section")
     
     except Exception as e:
         print(f"      ⚠️ NHS statement parse error ({filename}): {e}")
+        import traceback
+        traceback.print_exc()
     
     return result
 
@@ -1279,6 +1282,10 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
     print("\n📋 PROCESSING NHS STATEMENTS...")
     print("=" * 50)
     
+    # Get target month name
+    target_month_name = datetime(target_year, target_month, 1).strftime("%B")
+    print(f"   Looking for: {target_month_name} {target_year}")
+    
     nhs_data = {}
     new_statements = []
     
@@ -1304,6 +1311,7 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
             file_id = pdf_info['id']
             
             if file_id in processed:
+                print(f"   ⏭️ Already processed: {pdf_info['name'][:40]}")
                 continue
             
             print(f"   Parsing: {pdf_info['name'][:40]}...")
@@ -1315,26 +1323,30 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
             parsed = parse_nhs_statement_pdf(content, pdf_info['name'])
             
             # Check if this statement is for the current period
-            if parsed['period_str']:
-                # Try to match period
-                target_period = f"{datetime(target_year, target_month, 1).strftime('%B')} {target_year}"
-                
-                if target_period.lower() in parsed['period_str'].lower():
+            if parsed['period_month'] and parsed['period_year']:
+                # Match month name (case-insensitive) and year
+                if (parsed['period_month'].lower() == target_month_name.lower() and 
+                    parsed['period_year'] == target_year):
+                    
+                    print(f"      ✅ Period matches: {parsed['period_month']} {parsed['period_year']}")
+                    
                     # This is for the current period
                     for dentist, data in parsed['dentists'].items():
+                        # Include the NHS period range in the data
+                        data['nhs_period'] = parsed.get('period_range', '')
                         nhs_data[dentist] = data
-                        print(f"      ✅ {dentist}: {data['udas']} UDAs = £{data['uda_income']:,.2f}")
+                        print(f"      💰 {dentist}: {data['udas']} UDAs × £{data['uda_rate']} = £{data['uda_income']:,.2f}")
                     
                     new_statements.append({
                         'file_id': file_id,
                         'filename': pdf_info['name'],
-                        'period': parsed['period_str'],
+                        'period': f"{parsed['period_month']} {parsed['period_year']}",
                         'dentists': parsed['dentists']
                     })
                 else:
-                    print(f"      ⏭️ Different period: {parsed['period_str']} (looking for {target_period})")
+                    print(f"      ⏭️ Different period: {parsed['period_month']} {parsed['period_year']} (looking for {target_month_name} {target_year})")
             else:
-                print(f"      ⚠️ Could not determine period")
+                print(f"      ⚠️ Could not determine period from PDF")
         
         # Log new statements
         if new_statements:
@@ -1348,8 +1360,11 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
     # Summary
     if nhs_data:
         print("\n   📊 NHS Summary:")
+        total_nhs = 0
         for dentist, data in nhs_data.items():
             print(f"      {dentist}: {data['udas']} UDAs × £{data['uda_rate']} = £{data['uda_income']:,.2f}")
+            total_nhs += data['uda_income']
+        print(f"      TOTAL NHS: £{total_nhs:,.2f}")
     else:
         print("   ℹ️ No NHS data found for this period")
     
@@ -1980,6 +1995,12 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     rows.append(["", "Private Period:", period_str, "", "", "", "", ""])
     rows.append(["", "Performer:", config['display_name'], "", "", "", "", ""])
     rows.append(["", "Practice:", PRACTICE_NAME, "", "", "", "", ""])
+    
+    # Show NHS period for NHS dentists
+    nhs_period = payslip.get('nhs_period', '')
+    if dentist_name in NHS_DENTISTS and nhs_period:
+        rows.append(["", "NHS Period:", nhs_period, "", "", "", "", ""])
+    
     rows.append(["", "Superannuation Status:", "Opted Out", "", "", "", "", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])  # Row 7 spacer
@@ -3916,6 +3937,7 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                         payslips[dentist]['nhs_udas'] = data['udas']
                         payslips[dentist]['nhs_uda_rate'] = data['uda_rate']
                         payslips[dentist]['nhs_income'] = data['uda_income']
+                        payslips[dentist]['nhs_period'] = data.get('nhs_period', '')
                         print(f"   ✅ Added NHS income to {dentist}: £{data['uda_income']:,.2f}")
         except Exception as e:
             print(f"   ⚠️ NHS statement processing error: {e}")
