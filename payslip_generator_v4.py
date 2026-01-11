@@ -681,21 +681,52 @@ def list_lab_bill_pdfs(service, folder_id):
     
     print(f"   📁 Accessing folder ID: {folder_id}")
     
+    # First, try to get the folder's metadata to confirm access
+    try:
+        folder_meta = service.files().get(
+            fileId=folder_id,
+            fields="name, mimeType, driveId",
+            supportsAllDrives=True
+        ).execute()
+        print(f"   ✅ Folder accessible: '{folder_meta.get('name')}'")
+        if folder_meta.get('driveId'):
+            print(f"   📂 This is in a Shared Drive (driveId: {folder_meta.get('driveId')})")
+    except Exception as e:
+        print(f"   ❌ Cannot access folder: {e}")
+        return all_pdfs
+    
     def search_folder(fid, lab_name=None, depth=0):
         indent = "   " + "  " * depth
         query = f"'{fid}' in parents and trashed = false"
         try:
+            # Try with shared drive support
             results = service.files().list(
                 q=query,
                 fields="files(id, name, mimeType, modifiedTime)",
-                pageSize=200
+                pageSize=200,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True
             ).execute()
         except Exception as e:
-            print(f"{indent}⚠️ Error listing folder {fid}: {e}")
-            return
+            print(f"{indent}⚠️ Error with shared drive query, trying standard: {e}")
+            try:
+                results = service.files().list(
+                    q=query,
+                    fields="files(id, name, mimeType, modifiedTime)",
+                    pageSize=200
+                ).execute()
+            except Exception as e2:
+                print(f"{indent}⚠️ Error listing folder {fid}: {e2}")
+                return
         
         files = results.get('files', [])
         print(f"{indent}Found {len(files)} items in {'root' if not lab_name else lab_name}")
+        
+        # Debug: list what we found
+        for f in files[:5]:  # Show first 5
+            print(f"{indent}  - {f['name']} ({f['mimeType']})")
+        if len(files) > 5:
+            print(f"{indent}  ... and {len(files) - 5} more")
         
         for f in files:
             if f['mimeType'] == 'application/vnd.google-apps.folder':
@@ -1938,7 +1969,7 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     - Rows 15-27: Labs breakdown, Finance, Therapy
     - Row 28: Total Deductions (green)
     - Row 30: Total Payment (green)
-    - Row 32+: Patient Breakdown
+    - Row 32+: Private Patient Breakdown
     - Bottom: Discrepancies section
     """
     first_name = dentist_name.split()[0]
@@ -2078,9 +2109,9 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     rows.append(["", "", "", "", "", "", "", ""])
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Patient Breakdown section
+    # Private Patient Breakdown section
     patient_header_row = len(rows) + 1
-    rows.append(["", "Patient Breakdown", "", "", "", "", "", ""])
+    rows.append(["", "Private Patient Breakdown", "", "", "", "", "", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     
@@ -2184,7 +2215,7 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
                            'bottom': {'style': 'SOLID', 'width': 2, 'color': SHEET_COLORS['success_dark']}}}},
             'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
         
-        # Patient Breakdown header
+        # Private Patient Breakdown header
         {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_header_row - 1, 'endRowIndex': patient_header_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
             'cell': {'userEnteredFormat': {'textFormat': {'bold': True},
                 'borders': {'bottom': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['border_gray']}}}},
@@ -3596,10 +3627,10 @@ def generate_payslip_pdf(dentist_name, payslip, period_str, output_dir="/tmp"):
     elements.append(total_table)
     elements.append(Spacer(1, 8*mm))
     
-    # Patient Breakdown
+    # Private Patient Breakdown
     patients = payslip.get('patients', [])
     if patients:
-        elements.append(Paragraph("<b>Patient Breakdown</b>", header_style))
+        elements.append(Paragraph("<b>Private Patient Breakdown</b>", header_style))
         
         patient_data = [["Patient Name", "Date", "Amount"]]
         for p in patients:
