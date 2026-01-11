@@ -1941,7 +1941,7 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
     
     - ONLY searches within the specified folder
     - If spreadsheet for this month exists, use it (overwrite)
-    - If not, create a new one in the folder
+    - If not, create a new one DIRECTLY in the folder (avoids quota issues)
     
     Args:
         client: gspread client
@@ -1990,38 +1990,27 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
         import traceback
         traceback.print_exc()
     
-    # Create new spreadsheet
+    # Create new spreadsheet DIRECTLY in the folder (bypasses service account quota)
     try:
-        # Create the spreadsheet
-        spreadsheet = client.create(sheet_name)
-        print(f"   ✅ Created spreadsheet: {sheet_name} (ID: {spreadsheet.id})")
+        # Use Drive API to create spreadsheet directly in folder
+        file_metadata = {
+            'name': sheet_name,
+            'mimeType': 'application/vnd.google-apps.spreadsheet',
+            'parents': [folder_id]  # Create directly in folder!
+        }
         
-        # Move to folder
-        try:
-            # Get current parent(s)
-            file = drive_service.files().get(
-                fileId=spreadsheet.id,
-                fields='parents',
-                supportsAllDrives=True
-            ).execute()
-            
-            previous_parents = ",".join(file.get('parents', []))
-            print(f"   Current parent(s): {previous_parents}")
-            
-            # Move to new folder
-            result = drive_service.files().update(
-                fileId=spreadsheet.id,
-                addParents=folder_id,
-                removeParents=previous_parents,
-                supportsAllDrives=True,
-                fields='id, parents'
-            ).execute()
-            
-            print(f"   📁 Moved to folder. New parent(s): {result.get('parents')}")
-        except Exception as e:
-            print(f"   ⚠️ Could not move to folder: {e}")
-            import traceback
-            traceback.print_exc()
+        file = drive_service.files().create(
+            body=file_metadata,
+            fields='id, name, parents',
+            supportsAllDrives=True
+        ).execute()
+        
+        spreadsheet_id = file.get('id')
+        print(f"   ✅ Created spreadsheet directly in folder: {sheet_name}")
+        print(f"   📋 Spreadsheet ID: {spreadsheet_id}")
+        
+        # Open with gspread
+        spreadsheet = client.open_by_key(spreadsheet_id)
         
         # Set up the new spreadsheet with required tabs
         setup_new_payslip_spreadsheet(spreadsheet, period_str)
@@ -2521,9 +2510,18 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     rows.append(["", "", "", "", "", "", "", ""])
     
     # Debug: Print lab_bills_details
-    print(f"      Lab bills details for {dentist_name}: {len(lab_bills_details)} invoices")
-    for detail in lab_bills_details:
-        print(f"         - {detail.get('lab_name')}: £{detail.get('amount', 0):.2f}, file_id: {detail.get('file_id', 'NONE')[:20]}...")
+    print(f"      Lab bills details for {dentist_name}:")
+    print(f"         lab_bills_details count: {len(lab_bills_details)}")
+    print(f"         labs_with_values: {labs_with_values}")
+    if lab_bills_details:
+        for i, detail in enumerate(lab_bills_details):
+            fid = detail.get('file_id', '')
+            fname = detail.get('filename', '')
+            print(f"         [{i}] lab: {detail.get('lab_name')}, amount: £{detail.get('amount', 0):.2f}")
+            print(f"             file_id: {fid[:30] if fid else 'EMPTY'}...")
+            print(f"             filename: {fname[:30] if fname else 'EMPTY'}")
+    else:
+        print(f"         (no lab_bills_details found)")
     
     # Lab invoice column headers
     lab_col_row = len(rows) + 1
@@ -2546,12 +2544,15 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             # Create clickable link
             if file_id:
                 link = f'=HYPERLINK("https://drive.google.com/file/d/{file_id}/view", "{link_text}")'
+                print(f"         ✅ Created link for {lab_name}: file_id={file_id[:20]}...")
             else:
-                link = "No link available"
+                link = "No link - missing file ID"
+                print(f"         ❌ No file_id for {lab_name}")
             
             rows.append(["", lab_name, amount, link, "", "", "", ""])
     else:
         # Show summary from lab_bills dict if no detailed tracking
+        print(f"         ⚠️ No lab_bills_details - showing summary only")
         for lab_name, lab_amount in sorted(labs_with_values.items()):
             rows.append(["", lab_name, lab_amount, "See folder", "", "", "", ""])
     
@@ -2939,6 +2940,7 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
     discrepancy_rows = []
     action_dropdown_rows = []  # Track rows that need action dropdowns
     confirm_checkbox_rows = []  # Track rows that need confirm checkboxes
+    amount_mismatch_rows = []  # Track amount mismatch rows for column C formatting
     
     # Header section
     discrepancy_rows.extend([
@@ -2976,6 +2978,7 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
     
     # 2. Amount mismatches (may need to UPDATE amount)
     amount_mismatch = xref.get("amount_mismatch", [])
+    amount_mismatch_rows = []  # Track these separately for column C formatting
     if amount_mismatch:
         has_discrepancies = True
         discrepancy_rows.append(["", "🟡 AMOUNT MISMATCHES (Verify correct amount)", "", "", "", "", "", ""])
@@ -2994,6 +2997,7 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
             ])
             action_dropdown_rows.append(next_row + row_idx)
             confirm_checkbox_rows.append(next_row + row_idx)
+            amount_mismatch_rows.append(next_row + row_idx)  # Track for column C formatting
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
     # 3. Items in Dentally but NOT in log (may need to REMOVE from pay)
@@ -3049,7 +3053,7 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
         time.sleep(1)
         
         # Add dropdowns and checkboxes using batch_update
-        if action_dropdown_rows or confirm_checkbox_rows:
+        if action_dropdown_rows or confirm_checkbox_rows or amount_mismatch_rows:
             try:
                 requests = []
                 sheet_id = sh.id
@@ -3110,6 +3114,27 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
                                 'endRowIndex': row_num,
                                 'startColumnIndex': 3,
                                 'endColumnIndex': 5
+                            },
+                            'cell': {
+                                'userEnteredFormat': {
+                                    'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'},
+                                    'horizontalAlignment': 'LEFT'
+                                }
+                            },
+                            'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'
+                        }
+                    })
+                
+                # Also format column C (Dentally £) for amount mismatch rows - LEFT ALIGNED
+                for row_num in amount_mismatch_rows:
+                    requests.append({
+                        'repeatCell': {
+                            'range': {
+                                'sheetId': sheet_id,
+                                'startRowIndex': row_num - 1,
+                                'endRowIndex': row_num,
+                                'startColumnIndex': 2,
+                                'endColumnIndex': 3
                             },
                             'cell': {
                                 'userEnteredFormat': {
@@ -4424,6 +4449,11 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     client = get_sheets_client()
     spreadsheet = None
     
+    # Debug: Show configuration
+    print(f"\n📁 Folder Configuration:")
+    print(f"   PAYSLIPS_FOLDER_ID: {'SET (' + PAYSLIPS_FOLDER_ID[:20] + '...)' if PAYSLIPS_FOLDER_ID else 'NOT SET'}")
+    print(f"   Template Spreadsheet: {SPREADSHEET_ID[:20]}...")
+    
     if client:
         # Check if folder ID is configured
         if not PAYSLIPS_FOLDER_ID:
@@ -4526,23 +4556,8 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
             traceback.print_exc()
     
     # Read and apply confirmed adjustments from previous run
-    if GOOGLE_SHEETS_CREDENTIALS:
-        print("\n📝 CHECKING FOR CONFIRMED ADJUSTMENTS...")
-        client = get_sheets_client()
-        if client:
-            try:
-                spreadsheet = client.open_by_key(SPREADSHEET_ID)
-                
-                for dentist_name in payslips.keys():
-                    adjustments = read_confirmed_adjustments(spreadsheet, dentist_name)
-                    if adjustments:
-                        payslips[dentist_name] = apply_adjustments_to_payslip(
-                            payslips[dentist_name], adjustments, dentist_name
-                        )
-                        print(f"   ✅ Applied {len(adjustments)} adjustments to {dentist_name}")
-                
-            except Exception as e:
-                print(f"   ⚠️ Adjustment processing error: {e}")
+    # NOTE: Adjustments are now handled manually via Apps Script
+    # User edits gross figures directly and uses "Recalculate" button
     
     # Build historical database and check for duplicates
     all_duplicates = []
