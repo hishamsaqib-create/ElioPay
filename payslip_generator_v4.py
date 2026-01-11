@@ -1319,12 +1319,16 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
     """
     Process NHS statements from Google Drive folder.
     
+    IMPORTANT: Always parses NHS statements to get data for payslips.
+    The "processed" log is just for tracking, not for skipping.
+    
     Returns:
         {
             'dentist_name': {
                 'udas': float,
                 'uda_rate': float,
-                'uda_income': float
+                'uda_income': float,
+                'nhs_period': str
             }
         }
     """
@@ -1342,9 +1346,9 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
     nhs_data = {}
     new_statements = []
     
-    # Get already processed statements
-    processed = get_processed_nhs_statements(spreadsheet)
-    print(f"   Found {len(processed)} previously processed statements")
+    # Get already logged statements (for tracking only, NOT for skipping)
+    logged = get_processed_nhs_statements(spreadsheet)
+    print(f"   Found {len(logged)} previously logged statements")
     
     # List all PDFs in NHS folder
     print(f"   Scanning NHS statements folder...")
@@ -1354,7 +1358,9 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
         results = drive_service.files().list(
             q=query,
             fields="files(id, name, modifiedTime)",
-            pageSize=100
+            pageSize=100,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
         ).execute()
         
         pdfs = results.get('files', [])
@@ -1362,10 +1368,7 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
         
         for pdf_info in pdfs:
             file_id = pdf_info['id']
-            
-            if file_id in processed:
-                print(f"   ⏭️ Already processed: {pdf_info['name'][:40]}")
-                continue
+            already_logged = file_id in logged
             
             print(f"   Parsing: {pdf_info['name'][:40]}...")
             
@@ -1383,25 +1386,27 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
                     
                     print(f"      ✅ Period matches: {parsed['period_month']} {parsed['period_year']}")
                     
-                    # This is for the current period
+                    # This is for the current period - ADD DATA TO RESULTS
                     for dentist, data in parsed['dentists'].items():
                         # Include the NHS period range in the data
                         data['nhs_period'] = parsed.get('period_range', '')
                         nhs_data[dentist] = data
                         print(f"      💰 {dentist}: {data['udas']} UDAs × £{data['uda_rate']} = £{data['uda_income']:,.2f}")
                     
-                    new_statements.append({
-                        'file_id': file_id,
-                        'filename': pdf_info['name'],
-                        'period': f"{parsed['period_month']} {parsed['period_year']}",
-                        'dentists': parsed['dentists']
-                    })
+                    # Track for logging (only if not already logged)
+                    if not already_logged:
+                        new_statements.append({
+                            'file_id': file_id,
+                            'filename': pdf_info['name'],
+                            'period': f"{parsed['period_month']} {parsed['period_year']}",
+                            'dentists': parsed['dentists']
+                        })
                 else:
                     print(f"      ⏭️ Different period: {parsed['period_month']} {parsed['period_year']} (looking for {target_month_name} {target_year})")
             else:
                 print(f"      ⚠️ Could not determine period from PDF")
         
-        # Log new statements
+        # Log new statements (for audit trail)
         if new_statements:
             update_nhs_statements_log(spreadsheet, new_statements, period_str)
     
