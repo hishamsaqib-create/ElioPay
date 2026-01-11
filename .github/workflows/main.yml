@@ -1,6 +1,7 @@
 name: Generate Payslips
+
 on:
-  # Manual trigger
+  # Manual trigger - simplified!
   workflow_dispatch:
     inputs:
       year:
@@ -11,39 +12,14 @@ on:
         description: 'Month 1-12 (leave empty for previous month)'
         required: false
         type: string
-      setup_sheets:
-        description: 'Run professional sheet setup (true/false)'
-        required: false
-        type: boolean
-        default: false
-      sheets_only:
-        description: 'Sheets only - skip Dentally API (true/false)'
-        required: false
-        type: boolean
-        default: false
-      generate_pdfs:
-        description: 'Generate PDF payslips (true/false)'
-        required: false
-        type: boolean
-        default: false
-      send_email:
-        description: 'Email payslips to Hisham (true/false)'
-        required: false
-        type: boolean
-        default: false
-      pdf_only:
-        description: 'PDF only mode - skip Dentally, read from sheets (true/false)'
-        required: false
-        type: boolean
-        default: false
 
   # Scheduled: 10th of each month at 9am UK
   schedule:
     - cron: '0 9 10 * *'
-  
+
   # Webhook trigger for iPhone shortcut
   repository_dispatch:
-    types: [generate-payslips, generate-pdfs, email-payslips]
+    types: [generate-payslips]
 
 jobs:
   generate:
@@ -68,55 +44,16 @@ jobs:
           DENTALLY_SITE_ID: ${{ secrets.DENTALLY_SITE_ID }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           PAYSLIP_SPREADSHEET_ID: ${{ secrets.PAYSLIP_SPREADSHEET_ID }}
-          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          HISHAM_EMAIL: ${{ secrets.HISHAM_EMAIL }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          LAB_BILLS_FOLDER_ID: ${{ secrets.LAB_BILLS_FOLDER_ID }}
+          NHS_STATEMENTS_FOLDER_ID: ${{ secrets.NHS_STATEMENTS_FOLDER_ID }}
+          HISTORICAL_PAYSLIPS_FOLDER_ID: ${{ secrets.HISTORICAL_PAYSLIPS_FOLDER_ID }}
         run: |
-          # Determine which mode to run
-          if [ "${{ github.event.inputs.setup_sheets }}" == "true" ]; then
-            echo "🎨 Running professional sheet setup..."
-            python setup_sheets_v4.py
-          
-          elif [ "${{ github.event.inputs.sheets_only }}" == "true" ]; then
-            echo "📊 Sheets-only mode - skipping Dentally API"
-            python push_to_sheets.py
-          
-          elif [ "${{ github.event.inputs.pdf_only }}" == "true" ] || [ "${{ github.event_name }}" == "repository_dispatch" ] && [ "${{ github.event.action }}" == "generate-pdfs" ]; then
-            echo "📄 PDF generation mode..."
-            ARGS="--pdf-only"
-            if [ "${{ github.event.inputs.send_email }}" == "true" ] || [ "${{ github.event.action }}" == "email-payslips" ]; then
-              ARGS="$ARGS --email"
-            fi
-            if [ -n "${{ github.event.inputs.year }}" ]; then
-              ARGS="$ARGS --year ${{ github.event.inputs.year }}"
-            fi
-            if [ -n "${{ github.event.inputs.month }}" ]; then
-              ARGS="$ARGS --month ${{ github.event.inputs.month }}"
-            fi
-            python payslip_generator_v4.py $ARGS
-          
-          else
-            echo "🦷 Full payslip generation..."
-            ARGS=""
-            if [ -n "${{ github.event.inputs.year }}" ]; then
-              ARGS="$ARGS --year ${{ github.event.inputs.year }}"
-            fi
-            if [ -n "${{ github.event.inputs.month }}" ]; then
-              ARGS="$ARGS --month ${{ github.event.inputs.month }}"
-            fi
-            if [ "${{ github.event.inputs.generate_pdfs }}" == "true" ]; then
-              ARGS="$ARGS --generate-pdfs"
-            fi
-            if [ "${{ github.event.inputs.send_email }}" == "true" ]; then
-              ARGS="$ARGS --email"
-            fi
-            python payslip_generator_v4.py $ARGS
+          ARGS=""
+          if [ -n "${{ github.event.inputs.year }}" ]; then
+            ARGS="$ARGS --year ${{ github.event.inputs.year }}"
           fi
-      
-      - name: Upload PDF Artifacts
-        if: ${{ github.event.inputs.generate_pdfs == 'true' || github.event.inputs.pdf_only == 'true' || github.event.inputs.send_email == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: payslip-pdfs
-          path: /tmp/*.pdf
-          if-no-files-found: ignore
+          if [ -n "${{ github.event.inputs.month }}" ]; then
+            ARGS="$ARGS --month ${{ github.event.inputs.month }}"
+          fi
+          python payslip_generator_v4.py $ARGS
