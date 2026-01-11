@@ -1935,18 +1935,19 @@ def get_sheets_client():
         return None
 
 
-def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_id=None):
+def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_id):
     """
     Get or create a monthly spreadsheet named "Aura Payslips - December 2025".
     
-    - If spreadsheet for this month exists in the folder, use it (overwrite)
-    - If not, create a new one and move it to the folder
+    - ONLY searches within the specified folder
+    - If spreadsheet for this month exists, use it (overwrite)
+    - If not, create a new one in the folder
     
     Args:
         client: gspread client
         drive_service: Google Drive API service
         period_str: Period string like "December 2025"
-        folder_id: Folder ID to store the spreadsheet
+        folder_id: Folder ID to store the spreadsheet (REQUIRED)
     
     Returns:
         spreadsheet object, is_new (bool)
@@ -1954,71 +1955,73 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
     sheet_name = f"Aura Payslips - {period_str}"
     
     print(f"\n📊 Looking for spreadsheet: {sheet_name}")
+    print(f"   📁 Searching in folder: {folder_id}")
     
-    # Search within the specific folder if provided
-    if folder_id and drive_service:
-        try:
-            # Search for existing spreadsheet in folder
-            query = f"name = '{sheet_name}' and '{folder_id}' in parents and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
-            
-            results = drive_service.files().list(
-                q=query,
-                fields="files(id, name)",
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True
-            ).execute()
-            
-            files = results.get('files', [])
-            
-            if files:
-                # Found existing spreadsheet - use it
-                file_id = files[0]['id']
-                print(f"   ✅ Found existing spreadsheet in folder (ID: {file_id[:15]}...)")
-                spreadsheet = client.open_by_key(file_id)
-                return spreadsheet, False
-            else:
-                print(f"   📝 No existing spreadsheet found, creating new...")
-                
-        except Exception as e:
-            print(f"   ⚠️ Error searching folder: {e}")
+    if not folder_id:
+        print("   ❌ No folder ID provided - cannot create monthly spreadsheet")
+        raise ValueError("PAYSLIPS_FOLDER_ID is required for monthly spreadsheet creation")
     
-    # Try to find by name (fallback - searches all accessible sheets)
+    # Search ONLY within the specific folder
     try:
-        spreadsheet = client.open(sheet_name)
-        print(f"   ✅ Found existing spreadsheet by name")
-        return spreadsheet, False
-    except gspread.SpreadsheetNotFound:
-        pass
+        # Search for existing spreadsheet in folder
+        query = f"name = '{sheet_name}' and '{folder_id}' in parents and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
+        
+        results = drive_service.files().list(
+            q=query,
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        
+        files = results.get('files', [])
+        print(f"   Found {len(files)} matching spreadsheet(s)")
+        
+        if files:
+            # Found existing spreadsheet - use it
+            file_id = files[0]['id']
+            print(f"   ✅ Using existing spreadsheet: {files[0]['name']}")
+            spreadsheet = client.open_by_key(file_id)
+            return spreadsheet, False
+        else:
+            print(f"   📝 No existing spreadsheet found, creating new...")
+            
+    except Exception as e:
+        print(f"   ⚠️ Error searching folder: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Create new spreadsheet
     try:
+        # Create the spreadsheet
         spreadsheet = client.create(sheet_name)
-        print(f"   ✅ Created: {sheet_name}")
+        print(f"   ✅ Created spreadsheet: {sheet_name} (ID: {spreadsheet.id})")
         
-        # Move to folder if specified
-        if folder_id and drive_service:
-            try:
-                # Get current parent
-                file = drive_service.files().get(
-                    fileId=spreadsheet.id,
-                    fields='parents',
-                    supportsAllDrives=True
-                ).execute()
-                
-                previous_parents = ",".join(file.get('parents', []))
-                
-                # Move to new folder
-                drive_service.files().update(
-                    fileId=spreadsheet.id,
-                    addParents=folder_id,
-                    removeParents=previous_parents,
-                    supportsAllDrives=True,
-                    fields='id, parents'
-                ).execute()
-                
-                print(f"   📁 Moved to Payslip Spreadsheets folder")
-            except Exception as e:
-                print(f"   ⚠️ Could not move to folder: {e}")
+        # Move to folder
+        try:
+            # Get current parent(s)
+            file = drive_service.files().get(
+                fileId=spreadsheet.id,
+                fields='parents',
+                supportsAllDrives=True
+            ).execute()
+            
+            previous_parents = ",".join(file.get('parents', []))
+            print(f"   Current parent(s): {previous_parents}")
+            
+            # Move to new folder
+            result = drive_service.files().update(
+                fileId=spreadsheet.id,
+                addParents=folder_id,
+                removeParents=previous_parents,
+                supportsAllDrives=True,
+                fields='id, parents'
+            ).execute()
+            
+            print(f"   📁 Moved to folder. New parent(s): {result.get('parents')}")
+        except Exception as e:
+            print(f"   ⚠️ Could not move to folder: {e}")
+            import traceback
+            traceback.print_exc()
         
         # Set up the new spreadsheet with required tabs
         setup_new_payslip_spreadsheet(spreadsheet, period_str)
@@ -2026,11 +2029,9 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
         return spreadsheet, True
         
     except Exception as e:
-        print(f"   ⚠️ Error creating spreadsheet: {e}")
-        # Fall back to existing spreadsheet
-        if SPREADSHEET_ID:
-            print(f"   ↩️ Falling back to template spreadsheet")
-            return client.open_by_key(SPREADSHEET_ID), False
+        print(f"   ❌ Error creating spreadsheet: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 
@@ -4424,17 +4425,30 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     spreadsheet = None
     
     if client:
-        # Try to get/create monthly spreadsheet
-        if PAYSLIPS_FOLDER_ID and drive_service:
-            spreadsheet, is_new = get_or_create_monthly_spreadsheet(
-                client, drive_service, period_str, PAYSLIPS_FOLDER_ID
-            )
-            if is_new:
-                print(f"   📝 Created new monthly spreadsheet: Aura Payslips - {period_str}")
-        else:
-            # Fall back to existing spreadsheet
+        # Check if folder ID is configured
+        if not PAYSLIPS_FOLDER_ID:
+            print("\n⚠️ PAYSLIPS_FOLDER_ID not set!")
+            print("   Add this secret to GitHub with the folder ID of your 'Payslip Spreadsheets' folder")
+            print("   Falling back to template spreadsheet...")
             spreadsheet = client.open_by_key(SPREADSHEET_ID)
-            print(f"   📊 Using existing spreadsheet")
+        elif not drive_service:
+            print("\n⚠️ Could not connect to Google Drive")
+            print("   Falling back to template spreadsheet...")
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        else:
+            # Create/get monthly spreadsheet in folder
+            try:
+                spreadsheet, is_new = get_or_create_monthly_spreadsheet(
+                    client, drive_service, period_str, PAYSLIPS_FOLDER_ID
+                )
+                if is_new:
+                    print(f"   ✅ Created new monthly spreadsheet in folder")
+                else:
+                    print(f"   ✅ Using existing monthly spreadsheet")
+            except Exception as e:
+                print(f"\n⚠️ Error creating monthly spreadsheet: {e}")
+                print("   Falling back to template spreadsheet...")
+                spreadsheet = client.open_by_key(SPREADSHEET_ID)
         
         # Get previous months' spreadsheets for duplicate detection
         previous_sheets = []
