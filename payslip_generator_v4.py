@@ -871,7 +871,7 @@ def parse_lab_bill_pdf(pdf_content, filename, lab_name):
 def get_assigned_lab_bills(spreadsheet):
     """
     Get list of already assigned lab bill file IDs from Lab Bills Log sheet.
-    Returns dict: {file_id: {dentist, amount, period, lab_name}}
+    Returns dict: {file_id: {dentist, amount, period, lab_name, filename}}
     """
     assigned = {}
     
@@ -888,6 +888,7 @@ def get_assigned_lab_bills(spreadsheet):
                     'dentist': row[3] if len(row) > 3 else '',
                     'amount': row[4] if len(row) > 4 else '',
                     'period': row[5] if len(row) > 5 else '',
+                    'filename': row[6] if len(row) > 6 else '',
                 }
     except Exception as e:
         print(f"      Note: Lab Bills Log not found or error: {e}")
@@ -1025,7 +1026,34 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     if unassigned_bills:
         print(f"\n   ⚠️ {len(unassigned_bills)} bills need manual dentist assignment")
     
-    return dict(lab_bills_by_dentist)
+    # Build detailed lab bills by dentist (for invoice links)
+    lab_bills_details_by_dentist = defaultdict(list)
+    for assignment in new_assignments:
+        dentist = assignment['dentist']
+        lab_bills_details_by_dentist[dentist].append({
+            'file_id': assignment['file_id'],
+            'filename': assignment['filename'],
+            'lab_name': assignment['lab_name'],
+            'amount': assignment['amount'],
+            'statement_date': assignment.get('statement_date', '')
+        })
+    
+    # Also include previously assigned bills from current month
+    for file_id, prev in assigned.items():
+        if prev.get('dentist') and prev.get('amount'):
+            try:
+                amount = float(prev['amount'].replace('£', '').replace(',', ''))
+                lab_bills_details_by_dentist[prev['dentist']].append({
+                    'file_id': file_id,
+                    'filename': prev.get('filename', '')[:50] if prev.get('filename') else '',
+                    'lab_name': prev.get('lab_name', 'Unknown'),
+                    'amount': amount,
+                    'statement_date': ''
+                })
+            except:
+                pass
+    
+    return dict(lab_bills_by_dentist), dict(lab_bills_details_by_dentist)
 
 
 def update_lab_bills_log(spreadsheet, new_assignments):
@@ -2183,19 +2211,20 @@ def update_dashboard(spreadsheet, payslips, period_str):
 
 def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     """
-    Update individual dentist payslip tab - v4.0 Aura Brand Design
+    Update individual dentist payslip tab - v4.1 Aura Brand Design
     
     Layout (following Aura Style Guide):
-    - Row 1: Company name (gold) + Logo (right)
-    - Row 2: Large "PAYSLIP" title
+    - Row 1: Logo (left-aligned with title area)
+    - Row 2: Company name (gold) + PAYSLIP title
     - Row 3: Spacer
-    - Rows 4-8: Employee Info Card (2 columns)
-    - Row 9: Spacer
-    - Row 10: TOTAL EARNINGS banner (dark bg, gold amount)
-    - Row 11: Spacer
-    - Row 12+: Earnings Breakdown with gold underlines
+    - Rows 4-7: Employee Info Card (2 columns)
+    - Row 8: Spacer
+    - Row 9: TOTAL EARNINGS banner (dark bg, gold amount)
+    - Row 10: Spacer
+    - Row 11+: Earnings Breakdown with gold underlines
     - Section 2: Deductions
     - Section 3: Private Patient Breakdown (alternating rows)
+    - Section 4: Lab Invoices with links
     """
     first_name = dentist_name.split()[0]
     tab_name = f"{first_name} Payslip"
@@ -2222,7 +2251,6 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     except:
         payment_str = "15th of following month"
     
-    generated_str = datetime.now().strftime("%d %B %Y")
     split_pct = int(config['split'] * 100)
     split_str = f"{split_pct}%"
     
@@ -2234,43 +2262,49 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     deductions = payslip.get('total_deductions', 0)
     total_payment = private_net + nhs_income - deductions
     
+    # Get lab bill details for links
+    lab_bills_details = payslip.get('lab_bills_details', [])
+    
     # ============================================
     # BUILD SHEET DATA
     # ============================================
     
     rows = []
     
-    # Row 1: Company name (gold text) + Logo
-    rows.append(["", "AURA DENTAL CLINIC", "", "", "", "", f'=IMAGE("{LOGO_URL}", 4, 80, 80)', ""])
+    # Row 1: Logo aligned left
+    rows.append(["", f'=IMAGE("{LOGO_URL}", 4, 70, 70)', "", "", "", "", "", ""])
     
-    # Row 2: Large PAYSLIP title
+    # Row 2: Company name + PAYSLIP title on same conceptual line
+    rows.append(["", "AURA DENTAL CLINIC", "", "", "", "", "", ""])
+    
+    # Row 3: Large PAYSLIP title
     rows.append(["", "PAYSLIP", "", "", "", "", "", ""])
     
-    # Row 3: Spacer
+    # Row 4: Spacer
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Row 4-8: Employee Info Card (2 columns layout)
+    # Row 5-8: Employee Info Card (2 columns layout) - NO generated date
     rows.append(["", "Performer", config['display_name'], "", "Period", period_str, "", ""])
     rows.append(["", "Practice", PRACTICE_NAME, "", "Payment Date", payment_str, "", ""])
     
-    # Show NHS period for NHS dentists
+    # Show NHS period for NHS dentists, Role for others
     nhs_period = payslip.get('nhs_period', '')
     if dentist_name in NHS_DENTISTS:
         nhs_period_display = nhs_period if nhs_period else "Not yet entered"
         rows.append(["", "Role", "Associate Dentist (NHS)", "", "NHS Period", nhs_period_display, "", ""])
     else:
-        rows.append(["", "Role", "Associate Dentist", "", "Generated", generated_str, "", ""])
+        rows.append(["", "Role", "Associate Dentist", "", "", "", "", ""])
     
     rows.append(["", "Superannuation", "Opted Out", "", "", "", "", ""])
     
-    # Row 8: Spacer
+    # Row 9: Spacer
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Row 9: TOTAL EARNINGS BANNER
+    # Row 10: TOTAL EARNINGS BANNER
     total_earnings_row = len(rows) + 1
     rows.append(["", "TOTAL EARNINGS", "", "", "", "", total_payment, ""])
     
-    # Row 10: Spacer
+    # Row 11: Spacer
     rows.append(["", "", "", "", "", "", "", ""])
     
     # ============================================
@@ -2384,9 +2418,45 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     rows.append(["", "", "", "", "", "", "", ""])
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Footer
-    footer_row = len(rows) + 1
-    rows.append(["", "Generated by Aura Payslip Generator v4.0", "", "", "", "", "", ""])
+    # ============================================
+    # SECTION 4: LAB INVOICES (with links)
+    # ============================================
+    section4_row = len(rows) + 1
+    rows.append(["", "LAB INVOICES", "", "", "", "", "", ""])
+    
+    rows.append(["", "", "", "", "", "", "", ""])
+    
+    # Lab invoice column headers
+    lab_col_row = len(rows) + 1
+    rows.append(["", "Lab Name", "Amount", "Invoice Link", "", "", "", ""])
+    
+    # Lab invoice data rows with links
+    lab_start_row = len(rows) + 1
+    if lab_bills_details:
+        for lab_detail in lab_bills_details:
+            file_id = lab_detail.get('file_id', '')
+            lab_name = lab_detail.get('lab_name', 'Unknown')
+            amount = lab_detail.get('amount', 0)
+            filename = lab_detail.get('filename', '')[:30]
+            
+            # Create clickable link
+            if file_id:
+                link = f'=HYPERLINK("https://drive.google.com/file/d/{file_id}/view", "{filename}")'
+            else:
+                link = filename
+            
+            rows.append(["", lab_name, amount, link, "", "", "", ""])
+    else:
+        # Show summary from lab_bills dict if no detailed tracking
+        for lab_name, lab_amount in sorted(labs_with_values.items()):
+            rows.append(["", lab_name, lab_amount, "See folder", "", "", "", ""])
+    
+    lab_end_row = len(rows)
+    
+    if not labs_with_values and not lab_bills_details:
+        rows.append(["", "No lab invoices this period", "", "", "", "", "", ""])
+    
+    rows.append(["", "", "", "", "", "", "", ""])
     
     # Write all data
     sh.update(values=rows, range_name='A1', value_input_option='USER_ENTERED')
@@ -2417,43 +2487,43 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             }
         },
         
-        # Column widths (matching style guide)
+        # Column widths - WIDENED F and H
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 20}, 'fields': 'pixelSize'}},   # A: margin
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 200}, 'fields': 'pixelSize'}},  # B: names
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 180}, 'fields': 'pixelSize'}},  # C: details
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 3, 'endIndex': 4}, 'properties': {'pixelSize': 70}, 'fields': 'pixelSize'}},   # D: status
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},  # E: amounts
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},  # F: values
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 200}, 'fields': 'pixelSize'}},  # C: details
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 3, 'endIndex': 4}, 'properties': {'pixelSize': 180}, 'fields': 'pixelSize'}},  # D: links/status
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5}, 'properties': {'pixelSize': 150}, 'fields': 'pixelSize'}},  # E: labels
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 180}, 'fields': 'pixelSize'}},  # F: values - WIDENED
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 6, 'endIndex': 7}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},  # G: amounts
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 30}, 'fields': 'pixelSize'}},   # H: margin
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 80}, 'fields': 'pixelSize'}},   # H: margin - WIDENED
         
-        # Row 1 height for logo (80px)
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 80}, 'fields': 'pixelSize'}},
+        # Row 1 height for logo (70px)
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 70}, 'fields': 'pixelSize'}},
         
-        # Row 1: Company name in Aura Gold
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 1, 'startColumnIndex': 1, 'endColumnIndex': 2},
+        # Row 2: Company name in Aura Gold (10pt)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 3},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'foregroundColor': SHEET_COLORS['aura_gold']}}},
             'fields': 'userEnteredFormat.textFormat'}},
         
-        # Row 2: Large PAYSLIP title (28pt bold)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 3},
+        # Row 3: Large PAYSLIP title (28pt bold)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 2, 'endRowIndex': 3, 'startColumnIndex': 1, 'endColumnIndex': 4},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 28, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
             'fields': 'userEnteredFormat.textFormat'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 45}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 45}, 'fields': 'pixelSize'}},
         
         # Employee Info Card - Labels (gray 9pt)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 1, 'endColumnIndex': 2},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 8, 'startColumnIndex': 1, 'endColumnIndex': 2},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 9, 'foregroundColor': SHEET_COLORS['label_gray']}}},
             'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 4, 'endColumnIndex': 5},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 8, 'startColumnIndex': 4, 'endColumnIndex': 5},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 9, 'foregroundColor': SHEET_COLORS['label_gray']}}},
             'fields': 'userEnteredFormat.textFormat'}},
         
         # Employee Info Card - Values (bold 10pt)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 2, 'endColumnIndex': 3},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 8, 'startColumnIndex': 2, 'endColumnIndex': 3},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
             'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 5, 'endColumnIndex': 6},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 8, 'startColumnIndex': 5, 'endColumnIndex': 6},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
             'fields': 'userEnteredFormat.textFormat'}},
         
@@ -2491,10 +2561,11 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
                 'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': SHEET_COLORS['aura_gold']}}}},
             'fields': 'userEnteredFormat.textFormat,userEnteredFormat.borders'}},
         
-        # Sub-section headers (Private Income, Lab Bills, etc.) - 10pt bold
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': section1_row + 1, 'endRowIndex': section2_row - 1, 'startColumnIndex': 1, 'endColumnIndex': 2},
-            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'bold': True}}},
-            'fields': 'userEnteredFormat.textFormat'}},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': section4_row - 1, 'endRowIndex': section4_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
+            'cell': {'userEnteredFormat': {
+                'textFormat': {'fontSize': 11, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']},
+                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': SHEET_COLORS['aura_gold']}}}},
+            'fields': 'userEnteredFormat.textFormat,userEnteredFormat.borders'}},
         
         # Total Deductions row - Light gray background
         {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': total_ded_row - 1, 'endRowIndex': total_ded_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
@@ -2517,13 +2588,15 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
                 'textFormat': {'fontSize': 9, 'bold': True}}},
             'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
         
-        # Footer - 8pt gray
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': footer_row - 1, 'endRowIndex': footer_row, 'startColumnIndex': 1, 'endColumnIndex': 5},
-            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 8, 'foregroundColor': SHEET_COLORS['label_gray']}}},
-            'fields': 'userEnteredFormat.textFormat'}},
+        # Lab invoice column headers - Light gray background
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': lab_col_row - 1, 'endRowIndex': lab_col_row, 'startColumnIndex': 1, 'endColumnIndex': 4},
+            'cell': {'userEnteredFormat': {
+                'backgroundColor': SHEET_COLORS['aura_light_gray'],
+                'textFormat': {'fontSize': 9, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
+            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
         
-        # Currency format for amount columns (G and E in patient breakdown)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 8, 'endRowIndex': patient_end_row + 5, 'startColumnIndex': 6, 'endColumnIndex': 7},
+        # Currency format for amount columns (G and E in patient breakdown, C in lab invoices)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 8, 'endRowIndex': lab_end_row + 5, 'startColumnIndex': 6, 'endColumnIndex': 7},
             'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}, 'horizontalAlignment': 'RIGHT'}},
             'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}},
         
@@ -2531,10 +2604,19 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}, 'horizontalAlignment': 'RIGHT'}},
             'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}},
         
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': lab_start_row - 1, 'endRowIndex': lab_end_row, 'startColumnIndex': 2, 'endColumnIndex': 3},
+            'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}, 'horizontalAlignment': 'RIGHT'}},
+            'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}},
+        
         # Status column - green checkmarks
         {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 1, 'endRowIndex': patient_end_row, 'startColumnIndex': 3, 'endColumnIndex': 4},
             'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': SHEET_COLORS['success_green']}, 'horizontalAlignment': 'CENTER'}},
             'fields': 'userEnteredFormat.textFormat,userEnteredFormat.horizontalAlignment'}},
+        
+        # Lab invoice links - blue color for hyperlinks
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': lab_start_row - 1, 'endRowIndex': lab_end_row, 'startColumnIndex': 3, 'endColumnIndex': 4},
+            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': {'red': 0.0, 'green': 0.4, 'blue': 0.8}}}},
+            'fields': 'userEnteredFormat.textFormat'}},
     ]
     
     # Add alternating row colors for patient table (white/cream)
@@ -2543,6 +2625,17 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         format_requests.append({
             'repeatCell': {
                 'range': {'sheetId': sheet_id, 'startRowIndex': row_idx, 'endRowIndex': row_idx + 1, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {'backgroundColor': bg_color}},
+                'fields': 'userEnteredFormat.backgroundColor'
+            }
+        })
+    
+    # Add alternating row colors for lab invoices table
+    for i, row_idx in enumerate(range(lab_start_row - 1, lab_end_row)):
+        bg_color = SHEET_COLORS['white'] if i % 2 == 0 else SHEET_COLORS['aura_cream']
+        format_requests.append({
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': row_idx, 'endRowIndex': row_idx + 1, 'startColumnIndex': 1, 'endColumnIndex': 4},
                 'cell': {'userEnteredFormat': {'backgroundColor': bg_color}},
                 'fields': 'userEnteredFormat.backgroundColor'
             }
@@ -2621,10 +2714,17 @@ def read_confirmed_adjustments(spreadsheet, dentist_name):
             if len(row) >= 7:
                 patient = str(row[1]).strip()
                 action = str(row[5]).strip()
-                confirm = str(row[6]).strip().upper()
+                confirm_val = row[6]
                 
-                # Check if confirmed (TRUE or checkbox checked)
-                if confirm in ['TRUE', 'YES', '✓', '☑']:
+                # Check if confirmed - handle both boolean True and string "TRUE"
+                is_confirmed = False
+                if isinstance(confirm_val, bool):
+                    is_confirmed = confirm_val
+                else:
+                    confirm_str = str(confirm_val).strip().upper()
+                    is_confirmed = confirm_str in ['TRUE', 'YES', '✓', '☑', '1']
+                
+                if is_confirmed:
                     if action in ['Add to Pay', 'Remove from Pay', 'Update Amount']:
                         # Parse amounts
                         amount = 0
@@ -4243,11 +4343,12 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
             processed_lab_bills = get_previous_lab_bills(previous_sheets)
     
     # Process lab bills from Google Drive (if no manual lab_bills provided)
+    lab_bills_details_by_dentist = {}
     if drive_service and not lab_bills:
         try:
             if spreadsheet:
                 # Process lab bills and get assignments
-                lab_bills_from_drive = process_lab_bills(
+                lab_bills_from_drive, lab_bills_details_by_dentist = process_lab_bills(
                     drive_service, spreadsheet, period_str, month, year,
                     processed_lab_bills=processed_lab_bills  # Pass for duplicate detection
                 )
@@ -4262,6 +4363,10 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                                     payslips[dentist]['lab_bills'][lab_name] += amount
                                 else:
                                     payslips[dentist]['lab_bills'][lab_name] = amount
+                            
+                            # Add lab bill details for invoice links
+                            if dentist in lab_bills_details_by_dentist:
+                                payslips[dentist]['lab_bills_details'] = lab_bills_details_by_dentist[dentist]
                             
                             # Recalculate totals
                             payslips[dentist]['lab_bills_total'] = sum(payslips[dentist]['lab_bills'].values())
