@@ -264,8 +264,8 @@ def is_nhs_treatment(item_name, item_amount, item_data=None):
 # DENTALLY API
 # =============================================================================
 
-def dentally_request(endpoint, params=None):
-    """Make a request to Dentally API"""
+def dentally_request(endpoint, params=None, max_retries=3):
+    """Make a request to Dentally API with retry logic"""
     url = f"{DENTALLY_API_BASE}/{endpoint}"
     headers = {
         "Authorization": f"Bearer {DENTALLY_API_TOKEN}",
@@ -274,16 +274,38 @@ def dentally_request(endpoint, params=None):
         "User-Agent": "AuraPayslipGenerator/2.0"
     }
     
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"   ⚠️ API error {response.status_code}: {response.text[:100]}")
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:  # Rate limited
+                wait_time = (attempt + 1) * 5  # 5, 10, 15 seconds
+                print(f"   ⚠️ Rate limited, waiting {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            elif response.status_code >= 500:  # Server error - retry
+                wait_time = (attempt + 1) * 2
+                print(f"   ⚠️ Server error {response.status_code}, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"   ⚠️ API error {response.status_code}: {response.text[:100]}")
+                return None
+        except requests.exceptions.Timeout:
+            wait_time = (attempt + 1) * 3
+            print(f"   ⚠️ Timeout, retrying in {wait_time}s...")
+            time.sleep(wait_time)
+            continue
+        except Exception as e:
+            print(f"   ⚠️ API exception: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
             return None
-    except Exception as e:
-        print(f"   ⚠️ API exception: {e}")
-        return None
+    
+    print(f"   ❌ Failed after {max_retries} attempts")
+    return None
 
 
 def get_invoices_for_period(start_date, end_date):
@@ -4539,9 +4561,12 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
             previous_sheets = get_previous_month_spreadsheets(client, drive_service, period_str, months_back=6)
         
         # Get previously processed lab bills
-        processed_lab_bills = set()
         if previous_sheets:
             processed_lab_bills = get_previous_lab_bills(previous_sheets)
+    else:
+        print("\n⚠️ Could not connect to Google Sheets")
+        print("   Check GOOGLE_SHEETS_CREDENTIALS secret is set correctly")
+        print("   Payslips will be calculated but not saved to spreadsheet")
     
     # Process lab bills from Google Drive (if no manual lab_bills provided)
     lab_bills_details_by_dentist = {}
@@ -4600,6 +4625,12 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                     payslips[dentist]['nhs_uda_rate'] = data['uda_rate']
                     payslips[dentist]['nhs_income'] = data['uda_income']
                     payslips[dentist]['nhs_period'] = data.get('nhs_period', '')
+                    # Recalculate total_payment to include NHS income
+                    payslips[dentist]['total_payment'] = (
+                        payslips[dentist]['net_private'] + 
+                        data['uda_income'] - 
+                        payslips[dentist]['total_deductions']
+                    )
                     print(f"   ✅ Added NHS income to {dentist}: £{data['uda_income']:,.2f}")
         except Exception as e:
             print(f"   ⚠️ NHS statement processing error: {e}")
@@ -4699,7 +4730,15 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     print("=" * 60)
     
     total_payout = sum(p['total_payment'] for p in payslips.values())
+    total_nhs = sum(p.get('nhs_income', 0) for p in payslips.values())
+    total_private = sum(p.get('net_private', 0) for p in payslips.values())
+    total_deductions = sum(p.get('total_deductions', 0) for p in payslips.values())
+    
     print(f"\n💰 Total Payout: £{total_payout:,.2f}")
+    print(f"   Private Net: £{total_private:,.2f}")
+    if total_nhs > 0:
+        print(f"   NHS Income:  £{total_nhs:,.2f}")
+    print(f"   Deductions:  £{total_deductions:,.2f}")
     
     # Show correct spreadsheet link
     if spreadsheet:
