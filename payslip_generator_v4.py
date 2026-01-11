@@ -1665,11 +1665,13 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
                 'borders': {'bottom': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['light_gray']}}}},
             'fields': 'userEnteredFormat.borders'}},
         
-        # Amount columns - currency format (E and G)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 8, 'endRowIndex': patient_end_row + 10, 'startColumnIndex': 4, 'endColumnIndex': 5},
+        # Amount column G - currency format (for fees section)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 8, 'endRowIndex': patient_end_row + 10, 'startColumnIndex': 6, 'endColumnIndex': 7},
             'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}}},
             'fields': 'userEnteredFormat.numberFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 8, 'endRowIndex': patient_end_row + 10, 'startColumnIndex': 6, 'endColumnIndex': 7},
+        
+        # Amount column E - currency format (for patient breakdown only, not the fees section)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 1, 'endRowIndex': patient_end_row, 'startColumnIndex': 4, 'endColumnIndex': 5},
             'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}}},
             'fields': 'userEnteredFormat.numberFormat'}},
     ]
