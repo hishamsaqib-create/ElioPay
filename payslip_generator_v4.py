@@ -71,6 +71,9 @@ HISTORICAL_PAYSLIPS_FOLDER_ID = "1rcE4JFqnNj8jXHUCmQyoPn5DYDKSjNpJ"
 # Lab Bills Folder (Jennie uploads lab invoices here)
 LAB_BILLS_FOLDER_ID = "16VsBkxhg1DgKYC-SQJtRH9erJdt3v1zR"
 
+# NHS Statements Folder (for UDA data - Peter, Priyanka, Moneeb)
+NHS_STATEMENTS_FOLDER_ID = os.environ.get("NHS_STATEMENTS_FOLDER_ID", "")  # Set this after creating folder
+
 # Email Configuration (for sending PDF payslips)
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER", "")  # e.g., payslips@auradental.co.uk
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")  # App password
@@ -676,7 +679,10 @@ def list_lab_bill_pdfs(service, folder_id):
     """
     all_pdfs = []
     
-    def search_folder(fid, lab_name=None):
+    print(f"   📁 Accessing folder ID: {folder_id}")
+    
+    def search_folder(fid, lab_name=None, depth=0):
+        indent = "   " + "  " * depth
         query = f"'{fid}' in parents and trashed = false"
         try:
             results = service.files().list(
@@ -685,15 +691,17 @@ def list_lab_bill_pdfs(service, folder_id):
                 pageSize=200
             ).execute()
         except Exception as e:
-            print(f"      ⚠️ Error listing folder: {e}")
+            print(f"{indent}⚠️ Error listing folder {fid}: {e}")
             return
         
         files = results.get('files', [])
+        print(f"{indent}Found {len(files)} items in {'root' if not lab_name else lab_name}")
         
         for f in files:
             if f['mimeType'] == 'application/vnd.google-apps.folder':
                 # It's a subfolder - use folder name as lab name
-                search_folder(f['id'], f['name'])
+                print(f"{indent}📁 Subfolder: {f['name']}")
+                search_folder(f['id'], f['name'], depth + 1)
             elif f['mimeType'] == 'application/pdf':
                 all_pdfs.append({
                     'id': f['id'],
@@ -701,6 +709,7 @@ def list_lab_bill_pdfs(service, folder_id):
                     'lab_name': normalize_lab_name(lab_name) if lab_name else "Unknown",
                     'modified_time': f.get('modifiedTime', '')
                 })
+                print(f"{indent}📄 PDF: {f['name'][:40]}... (Lab: {lab_name or 'Unknown'})")
     
     search_folder(folder_id)
     return all_pdfs
@@ -1106,6 +1115,296 @@ def update_unassigned_lab_bills(spreadsheet, unassigned_bills, period_str):
     print(f"   ✅ Unassigned Lab Bills tab updated ({len(unassigned_bills)} items)")
 
 
+# =============================================================================
+# NHS STATEMENT PROCESSING
+# =============================================================================
+
+# NHS dentists and their UDA rates
+NHS_DENTISTS = {
+    "Peter Throw": {"uda_rate": 16, "variations": ["peter", "throw", "p throw", "peter t"]},
+    "Priyanka Kapoor": {"uda_rate": 15, "variations": ["priyanka", "kapoor", "p kapoor", "priyanka k"]},
+    "Moneeb Ahmad": {"uda_rate": 15, "variations": ["moneeb", "ahmad", "m ahmad", "moneeb a"]},
+}
+
+
+def parse_nhs_statement_pdf(pdf_content, filename):
+    """
+    Parse an NHS statement PDF to extract UDA data per dentist.
+    
+    NHS statements typically contain:
+    - Date range (pay period)
+    - UDAs achieved per performer
+    - Sometimes broken down by Band 1/2/3
+    
+    Returns:
+        {
+            'period_start': str,
+            'period_end': str,
+            'period_str': str (e.g., "December 2025"),
+            'dentists': {
+                'Peter Throw': {'udas': float, 'uda_value': float},
+                ...
+            },
+            'filename': str,
+            'raw_text': str
+        }
+    """
+    result = {
+        'period_start': None,
+        'period_end': None,
+        'period_str': None,
+        'dentists': {},
+        'filename': filename,
+        'raw_text': ''
+    }
+    
+    try:
+        with pdfplumber.open(pdf_content) as pdf:
+            text = ""
+            for page in pdf.pages:
+                page_text = page.extract_text() or ""
+                text += page_text + "\n"
+            
+            result['raw_text'] = text[:3000]  # Keep for debugging
+            
+            # Extract date range
+            # Common patterns: "1 December 2025 to 31 December 2025"
+            # Or: "01/12/2025 - 31/12/2025"
+            date_patterns = [
+                r'(\d{1,2})\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s*(\d{4})\s*(?:to|-)\s*(\d{1,2})\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s*(\d{4})',
+                r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})\s*(?:to|-)\s*(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})',
+                r'Period[:\s]+(\w+\s+\d{4})',
+            ]
+            
+            for pattern in date_patterns[:2]:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    groups = match.groups()
+                    if len(groups) == 6:
+                        # Full date range found
+                        result['period_end'] = f"{groups[3]} {groups[4]} {groups[5]}"
+                        result['period_str'] = f"{groups[4]} {groups[5]}"
+                    break
+            
+            # If no full date range, try simpler pattern
+            if not result['period_str']:
+                match = re.search(date_patterns[2], text, re.IGNORECASE)
+                if match:
+                    result['period_str'] = match.group(1)
+            
+            # Extract UDAs per dentist
+            # Look for performer names followed by UDA numbers
+            for dentist_name, config in NHS_DENTISTS.items():
+                for variation in config['variations']:
+                    # Pattern: dentist name followed by numbers (UDAs)
+                    pattern = rf'{variation}[^\d]*(\d+(?:\.\d+)?)\s*(?:UDA|units|total)?'
+                    matches = re.findall(pattern, text, re.IGNORECASE)
+                    
+                    if matches:
+                        # Take the largest number as total UDAs
+                        udas = max(float(m) for m in matches)
+                        
+                        # Only accept reasonable UDA numbers (usually 10-500 per month)
+                        if 5 < udas < 1000:
+                            result['dentists'][dentist_name] = {
+                                'udas': udas,
+                                'uda_rate': config['uda_rate'],
+                                'uda_income': udas * config['uda_rate']
+                            }
+                            break
+            
+            # Also try table extraction for structured data
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                for table in tables:
+                    for row in table:
+                        if row:
+                            row_text = ' '.join(str(cell) for cell in row if cell).lower()
+                            for dentist_name, config in NHS_DENTISTS.items():
+                                for variation in config['variations']:
+                                    if variation in row_text:
+                                        # Look for numbers in the row
+                                        numbers = re.findall(r'(\d+(?:\.\d+)?)', row_text)
+                                        for num_str in numbers:
+                                            num = float(num_str)
+                                            if 5 < num < 1000 and dentist_name not in result['dentists']:
+                                                result['dentists'][dentist_name] = {
+                                                    'udas': num,
+                                                    'uda_rate': config['uda_rate'],
+                                                    'uda_income': num * config['uda_rate']
+                                                }
+                                                break
+    
+    except Exception as e:
+        print(f"      ⚠️ NHS statement parse error ({filename}): {e}")
+    
+    return result
+
+
+def get_processed_nhs_statements(spreadsheet):
+    """Get list of already processed NHS statement file IDs"""
+    processed = set()
+    
+    try:
+        sh = spreadsheet.worksheet("NHS Statements Log")
+        data = sh.get_all_values()
+        
+        # Skip header rows
+        for row in data[5:]:
+            if len(row) >= 2 and row[1]:
+                processed.add(row[1])  # File ID in column B
+    except:
+        pass
+    
+    return processed
+
+
+def process_nhs_statements(drive_service, spreadsheet, period_str, target_month, target_year):
+    """
+    Process NHS statements from Google Drive folder.
+    
+    Returns:
+        {
+            'dentist_name': {
+                'udas': float,
+                'uda_rate': float,
+                'uda_income': float
+            }
+        }
+    """
+    if not NHS_STATEMENTS_FOLDER_ID:
+        print("\n📋 NHS STATEMENTS: Folder not configured (NHS_STATEMENTS_FOLDER_ID)")
+        return {}
+    
+    print("\n📋 PROCESSING NHS STATEMENTS...")
+    print("=" * 50)
+    
+    nhs_data = {}
+    new_statements = []
+    
+    # Get already processed statements
+    processed = get_processed_nhs_statements(spreadsheet)
+    print(f"   Found {len(processed)} previously processed statements")
+    
+    # List all PDFs in NHS folder
+    print(f"   Scanning NHS statements folder...")
+    
+    try:
+        query = f"'{NHS_STATEMENTS_FOLDER_ID}' in parents and mimeType='application/pdf' and trashed=false"
+        results = drive_service.files().list(
+            q=query,
+            fields="files(id, name, modifiedTime)",
+            pageSize=100
+        ).execute()
+        
+        pdfs = results.get('files', [])
+        print(f"   Found {len(pdfs)} PDF files")
+        
+        for pdf_info in pdfs:
+            file_id = pdf_info['id']
+            
+            if file_id in processed:
+                continue
+            
+            print(f"   Parsing: {pdf_info['name'][:40]}...")
+            
+            content = download_pdf_content(drive_service, file_id)
+            if not content:
+                continue
+            
+            parsed = parse_nhs_statement_pdf(content, pdf_info['name'])
+            
+            # Check if this statement is for the current period
+            if parsed['period_str']:
+                # Try to match period
+                target_period = f"{datetime(target_year, target_month, 1).strftime('%B')} {target_year}"
+                
+                if target_period.lower() in parsed['period_str'].lower():
+                    # This is for the current period
+                    for dentist, data in parsed['dentists'].items():
+                        nhs_data[dentist] = data
+                        print(f"      ✅ {dentist}: {data['udas']} UDAs = £{data['uda_income']:,.2f}")
+                    
+                    new_statements.append({
+                        'file_id': file_id,
+                        'filename': pdf_info['name'],
+                        'period': parsed['period_str'],
+                        'dentists': parsed['dentists']
+                    })
+                else:
+                    print(f"      ⏭️ Different period: {parsed['period_str']} (looking for {target_period})")
+            else:
+                print(f"      ⚠️ Could not determine period")
+        
+        # Log new statements
+        if new_statements:
+            update_nhs_statements_log(spreadsheet, new_statements, period_str)
+    
+    except Exception as e:
+        print(f"   ⚠️ NHS statement processing error: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Summary
+    if nhs_data:
+        print("\n   📊 NHS Summary:")
+        for dentist, data in nhs_data.items():
+            print(f"      {dentist}: {data['udas']} UDAs × £{data['uda_rate']} = £{data['uda_income']:,.2f}")
+    else:
+        print("   ℹ️ No NHS data found for this period")
+    
+    return nhs_data
+
+
+def update_nhs_statements_log(spreadsheet, new_statements, period_str):
+    """Log processed NHS statements"""
+    print("   Updating NHS Statements Log...")
+    
+    try:
+        sh = spreadsheet.worksheet("NHS Statements Log")
+    except:
+        try:
+            sh = spreadsheet.add_worksheet(title="NHS Statements Log", rows=500, cols=10)
+            headers = [
+                ["", "NHS STATEMENTS LOG", "", "", "", "", "", "", "", ""],
+                ["", "Tracks processed NHS statements", "", "", "", "", "", "", "", ""],
+                ["", "", "", "", "", "", "", "", "", ""],
+                ["", "File ID", "Filename", "Period", "Peter UDAs", "Peter £", "Priyanka UDAs", "Priyanka £", "Moneeb UDAs", "Moneeb £"],
+            ]
+            sh.update(values=headers, range_name='A1')
+            time.sleep(1)
+        except Exception as e:
+            print(f"      ⚠️ Cannot create NHS Statements Log: {e}")
+            return
+    
+    # Get next row
+    existing = sh.get_all_values()
+    next_row = max(len(existing) + 1, 6)
+    
+    rows = []
+    for stmt in new_statements:
+        peter = stmt['dentists'].get('Peter Throw', {})
+        priyanka = stmt['dentists'].get('Priyanka Kapoor', {})
+        moneeb = stmt['dentists'].get('Moneeb Ahmad', {})
+        
+        rows.append([
+            "",
+            stmt['file_id'],
+            stmt['filename'][:50],
+            stmt['period'],
+            peter.get('udas', ''),
+            f"£{peter.get('uda_income', 0):,.2f}" if peter else '',
+            priyanka.get('udas', ''),
+            f"£{priyanka.get('uda_income', 0):,.2f}" if priyanka else '',
+            moneeb.get('udas', ''),
+            f"£{moneeb.get('uda_income', 0):,.2f}" if moneeb else '',
+        ])
+    
+    if rows:
+        sh.update(values=rows, range_name=f'A{next_row}')
+        print(f"   ✅ Logged {len(rows)} NHS statements")
+
+
 def normalize_dentist_name(name):
     """Normalize dentist name for matching"""
     if not name:
@@ -1198,6 +1497,201 @@ def check_for_duplicates(current_patients, historical_db, dentist_name, current_
                     })
     
     return duplicates
+
+
+def perform_4way_reconciliation(payslips, historical_db, xref_results, period_str):
+    """
+    Perform 4-way reconciliation for each patient:
+    1. Previous payslips - what was already paid historically
+    2. Current Dentally invoice - what's being claimed now
+    3. Private takings log - what dentist recorded
+    4. Total paid by patient - cumulative payments
+    
+    Returns:
+        Dict of reconciliation results per dentist with discrepancies flagged
+    """
+    print("\n🔄 PERFORMING 4-WAY RECONCILIATION...")
+    print("=" * 50)
+    
+    reconciliation = {}
+    
+    for dentist_name, payslip in payslips.items():
+        dentist_recon = {
+            'patients': [],
+            'total_previously_paid': 0,
+            'total_current_claim': 0,
+            'total_in_log': 0,
+            'discrepancies': []
+        }
+        
+        dentist_normalized = normalize_dentist_name(dentist_name)
+        historical = historical_db.get(dentist_normalized, [])
+        xref = xref_results.get(dentist_name, {}) if xref_results else {}
+        
+        # Build historical lookup by patient
+        hist_by_patient = defaultdict(lambda: {'total_paid': 0, 'payments': []})
+        for h in historical:
+            patient_norm = normalize_name(h['patient'])
+            hist_by_patient[patient_norm]['total_paid'] += h['amount']
+            hist_by_patient[patient_norm]['payments'].append({
+                'amount': h['amount'],
+                'period': h['period'],
+                'date': h['date']
+            })
+        
+        # Build log lookup by patient (from xref)
+        log_by_patient = {}
+        if xref and 'matched' in xref:
+            for m in xref.get('matched', []):
+                patient_norm = normalize_name(m.get('patient', ''))
+                log_by_patient[patient_norm] = m.get('log_amount', 0)
+        if xref and 'log_only' in xref:
+            for m in xref.get('log_only', []):
+                patient_norm = normalize_name(m.get('patient', ''))
+                log_by_patient[patient_norm] = m.get('amount', 0)
+        
+        # Reconcile each current patient
+        for patient in payslip.get('patients', []):
+            patient_name = patient.get('name', '')
+            patient_norm = normalize_name(patient_name)
+            current_amount = patient.get('paid_amount', patient.get('amount', 0))
+            
+            # Get historical total for this patient
+            hist_data = hist_by_patient.get(patient_norm, {'total_paid': 0, 'payments': []})
+            previously_paid = hist_data['total_paid']
+            
+            # Get log amount
+            log_amount = log_by_patient.get(patient_norm, 0)
+            
+            # Calculate cumulative
+            cumulative_with_current = previously_paid + current_amount
+            
+            # Check for discrepancies
+            discrepancy = None
+            status = '✅'
+            
+            if previously_paid > 0 and abs(current_amount - previously_paid) < 1:
+                # Exact same amount paid before - likely duplicate
+                discrepancy = f"⚠️ DUPLICATE? Same amount (£{previously_paid:,.2f}) paid in previous period"
+                status = '⚠️ DUPLICATE'
+            elif previously_paid > 0 and current_amount > 0:
+                # Patient has been paid before - verify this is additional work
+                discrepancy = f"🔍 Previously paid £{previously_paid:,.2f} - verify this is new work"
+                status = '🔍 CHECK'
+            elif log_amount > 0 and abs(log_amount - current_amount) > 10:
+                # Mismatch between log and claim
+                discrepancy = f"📊 Log shows £{log_amount:,.2f}, claiming £{current_amount:,.2f}"
+                status = '📊 MISMATCH'
+            
+            patient_recon = {
+                'patient': patient_name,
+                'current_claim': current_amount,
+                'previously_paid': previously_paid,
+                'log_amount': log_amount,
+                'cumulative_total': cumulative_with_current,
+                'status': status,
+                'discrepancy': discrepancy,
+                'previous_payments': hist_data['payments'][-3:] if hist_data['payments'] else []  # Last 3
+            }
+            
+            dentist_recon['patients'].append(patient_recon)
+            dentist_recon['total_current_claim'] += current_amount
+            dentist_recon['total_previously_paid'] += previously_paid
+            dentist_recon['total_in_log'] += log_amount
+            
+            if discrepancy:
+                dentist_recon['discrepancies'].append(patient_recon)
+        
+        reconciliation[dentist_name] = dentist_recon
+        
+        # Print summary
+        disc_count = len(dentist_recon['discrepancies'])
+        if disc_count > 0:
+            print(f"   ⚠️ {dentist_name}: {disc_count} items need review")
+        else:
+            print(f"   ✅ {dentist_name}: All reconciled")
+    
+    return reconciliation
+
+
+def update_reconciliation_tab(spreadsheet, reconciliation, period_str):
+    """Update a Reconciliation tab with 4-way comparison results"""
+    print("   Updating Reconciliation tab...")
+    
+    try:
+        sh = spreadsheet.worksheet("Reconciliation")
+        sh.clear()
+    except:
+        try:
+            sh = spreadsheet.add_worksheet(title="Reconciliation", rows=500, cols=12)
+        except Exception as e:
+            print(f"      ⚠️ Cannot create Reconciliation tab: {e}")
+            return
+    
+    rows = [
+        ["", "4-WAY RECONCILIATION REPORT", "", "", "", "", "", "", "", "", "", ""],
+        ["", f"Period: {period_str}", "", f"Generated: {datetime.now().strftime('%d/%m/%Y %H:%M')}", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", ""],
+        ["", "Compares: Previous Payslips | Current Claim | Private Log | Cumulative Total", "", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", ""],
+    ]
+    
+    for dentist_name, recon in reconciliation.items():
+        # Dentist header
+        rows.append(["", f"═══ {dentist_name.upper()} ═══", "", "", "", "", "", "", "", "", "", ""])
+        rows.append(["", f"Current Claim: £{recon['total_current_claim']:,.2f}", "", 
+                    f"Previously Paid: £{recon['total_previously_paid']:,.2f}", "",
+                    f"In Log: £{recon['total_in_log']:,.2f}", "", "", "", "", "", ""])
+        rows.append(["", "", "", "", "", "", "", "", "", "", "", ""])
+        
+        # Discrepancies first
+        if recon['discrepancies']:
+            rows.append(["", "⚠️ ITEMS NEEDING REVIEW", "", "", "", "", "", "", "", "", "", ""])
+            rows.append(["", "Patient", "Current £", "Previously Paid £", "Log £", "Cumulative £", "Status", "Issue", "", "", "", ""])
+            
+            for p in recon['discrepancies']:
+                rows.append([
+                    "",
+                    p['patient'],
+                    f"£{p['current_claim']:,.2f}",
+                    f"£{p['previously_paid']:,.2f}" if p['previously_paid'] > 0 else "-",
+                    f"£{p['log_amount']:,.2f}" if p['log_amount'] > 0 else "-",
+                    f"£{p['cumulative_total']:,.2f}",
+                    p['status'],
+                    p['discrepancy'] or "",
+                    "", "", "", ""
+                ])
+            rows.append(["", "", "", "", "", "", "", "", "", "", "", ""])
+        
+        # Summary of all patients
+        rows.append(["", "All Patients", "", "", "", "", "", "", "", "", "", ""])
+        rows.append(["", "Patient", "Current £", "Prev Paid £", "Log £", "Cumulative £", "Status", "", "", "", "", ""])
+        
+        for p in recon['patients'][:50]:  # Limit to 50
+            rows.append([
+                "",
+                p['patient'][:30],
+                f"£{p['current_claim']:,.2f}",
+                f"£{p['previously_paid']:,.2f}" if p['previously_paid'] > 0 else "-",
+                f"£{p['log_amount']:,.2f}" if p['log_amount'] > 0 else "-",
+                f"£{p['cumulative_total']:,.2f}",
+                p['status'],
+                "", "", "", "", ""
+            ])
+        
+        if len(recon['patients']) > 50:
+            rows.append(["", f"... and {len(recon['patients']) - 50} more patients", "", "", "", "", "", "", "", "", "", ""])
+        
+        rows.append(["", "", "", "", "", "", "", "", "", "", "", ""])
+        rows.append(["", "─" * 80, "", "", "", "", "", "", "", "", "", ""])
+    
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)
+    
+    # Formatting
+    sh.format('B1', {'textFormat': {'bold': True, 'fontSize': 16}})
+    
+    print(f"   ✅ Reconciliation tab updated")
 
 
 def update_duplicate_check_tab(spreadsheet, duplicates, period_str):
@@ -1501,6 +1995,18 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     rows.append(["", "", "", "", "", "", "", ""])  # Row 13 spacer
     
+    # NHS Section (only for NHS dentists: Peter, Priyanka, Moneeb)
+    nhs_income = payslip.get('nhs_income', 0)
+    nhs_udas = payslip.get('nhs_udas', 0)
+    nhs_uda_rate = payslip.get('nhs_uda_rate', 0)
+    
+    if nhs_income > 0 or dentist_name in NHS_DENTISTS:
+        rows.append(["", "Section 1b: NHS Income", "", "", "", "", "", ""])
+        rows.append(["", "", "", "", f"UDAs Achieved", "", nhs_udas if nhs_udas else "Enter manually", ""])
+        rows.append(["", "", "", "", f"UDA Rate", "", f"£{nhs_uda_rate}" if nhs_uda_rate else "£15/16", ""])
+        rows.append(["", "NHS Total", "", "", "", "", nhs_income if nhs_income else 0, ""])
+        rows.append(["", "", "", "", "", "", "", ""])  # spacer
+    
     # Row 14: Section 2 header
     rows.append(["", "Section 2: Deductions", "", "", "", "", "", ""])
     
@@ -1532,9 +2038,21 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     rows.append(["", "", "", "", "", "", "", ""])  # spacer
     
-    # Total Payment
+    # Total Payment (Private + NHS - Deductions)
+    nhs_income = payslip.get('nhs_income', 0)
+    private_net = payslip.get('net_private', 0)
+    deductions = payslip.get('total_deductions', 0)
+    total_payment = private_net + nhs_income - deductions
+    
     total_pay_row = len(rows) + 1
-    rows.append(["", "Total Payment", "", "", "", "", payslip.get('total_payment', 0), ""])
+    if nhs_income > 0:
+        rows.append(["", "Private Net", "", "", "", "", payslip.get('net_private', 0), ""])
+        rows.append(["", "NHS Income", "", "", "", "", nhs_income, ""])
+        rows.append(["", "Less Deductions", "", "", "", "", -deductions, ""])
+        total_pay_row = len(rows) + 1
+        rows.append(["", "TOTAL PAYMENT", "", "", "", "", total_payment, ""])
+    else:
+        rows.append(["", "Total Payment", "", "", "", "", payslip.get('total_payment', 0), ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     rows.append(["", "", "", "", "", "", "", ""])
@@ -1708,6 +2226,135 @@ def update_finance_flags(spreadsheet, finance_flags):
             ])
         sh.update(values=rows, range_name='A6')
         time.sleep(1)  # Rate limit protection
+
+
+def read_confirmed_adjustments(spreadsheet, dentist_name):
+    """
+    Read confirmed discrepancy adjustments from a dentist's payslip sheet.
+    Returns list of adjustments to apply.
+    
+    Looks for rows in the discrepancies section where:
+    - Action dropdown has a value
+    - Confirm checkbox is TRUE
+    
+    Returns: [
+        {'action': 'Add to Pay'|'Remove from Pay'|'Update Amount', 
+         'patient': str, 'amount': float, 'new_amount': float}
+    ]
+    """
+    first_name = dentist_name.split()[0]
+    tab_name = f"{first_name} Payslip"
+    
+    adjustments = []
+    
+    try:
+        sh = spreadsheet.worksheet(tab_name)
+        data = sh.get_all_values()
+        
+        in_discrepancies = False
+        
+        for row in data:
+            # Check if we're in discrepancies section
+            if len(row) > 1 and "DISCREPANCIES TO REVIEW" in str(row[1]):
+                in_discrepancies = True
+                continue
+            
+            if not in_discrepancies:
+                continue
+            
+            # Look for rows with confirmed adjustments
+            # Structure: ["", Patient, Date, Amount, New £, Action, Confirm, ...]
+            if len(row) >= 7:
+                patient = str(row[1]).strip()
+                action = str(row[5]).strip()
+                confirm = str(row[6]).strip().upper()
+                
+                # Check if confirmed (TRUE or checkbox checked)
+                if confirm in ['TRUE', 'YES', '✓', '☑']:
+                    if action in ['Add to Pay', 'Remove from Pay', 'Update Amount']:
+                        # Parse amounts
+                        amount = 0
+                        new_amount = 0
+                        
+                        try:
+                            amount_str = str(row[3]).replace('£', '').replace(',', '').strip()
+                            if amount_str and amount_str not in ['-', '']:
+                                amount = float(amount_str)
+                        except:
+                            pass
+                        
+                        try:
+                            new_amount_str = str(row[4]).replace('£', '').replace(',', '').strip()
+                            if new_amount_str and new_amount_str not in ['-', '']:
+                                new_amount = float(new_amount_str)
+                        except:
+                            pass
+                        
+                        if patient and (amount > 0 or new_amount > 0):
+                            adjustments.append({
+                                'action': action,
+                                'patient': patient,
+                                'amount': amount,
+                                'new_amount': new_amount
+                            })
+                            print(f"      Found adjustment: {action} - {patient}: £{amount} → £{new_amount}")
+    
+    except Exception as e:
+        print(f"   Note: Could not read adjustments for {dentist_name}: {e}")
+    
+    return adjustments
+
+
+def apply_adjustments_to_payslip(payslip, adjustments, dentist_name):
+    """
+    Apply confirmed discrepancy adjustments to a payslip.
+    
+    - Add to Pay: Add amount to gross total
+    - Remove from Pay: Subtract amount from gross total
+    - Update Amount: Replace old amount with new amount
+    """
+    if not adjustments:
+        return payslip
+    
+    config = DENTISTS.get(dentist_name, {})
+    split = config.get('split', 0.5)
+    
+    print(f"   Applying {len(adjustments)} adjustments to {dentist_name}...")
+    
+    for adj in adjustments:
+        action = adj['action']
+        amount = adj['amount']
+        new_amount = adj['new_amount']
+        
+        if action == 'Add to Pay':
+            # Add new amount to gross (use new_amount if provided, else amount)
+            add_amount = new_amount if new_amount > 0 else amount
+            payslip['gross_private_dentist'] += add_amount
+            print(f"      + Adding £{add_amount:,.2f} ({adj['patient']})")
+        
+        elif action == 'Remove from Pay':
+            # Subtract amount from gross
+            payslip['gross_private_dentist'] -= amount
+            print(f"      - Removing £{amount:,.2f} ({adj['patient']})")
+        
+        elif action == 'Update Amount':
+            # Replace: subtract old amount, add new amount
+            if amount > 0 and new_amount > 0:
+                diff = new_amount - amount
+                payslip['gross_private_dentist'] += diff
+                print(f"      ~ Updating £{amount:,.2f} → £{new_amount:,.2f} ({adj['patient']})")
+    
+    # Recalculate all downstream figures
+    payslip['gross_total'] = payslip['gross_private_dentist'] + payslip['gross_private_therapist']
+    payslip['net_private'] = payslip['gross_total'] * split
+    payslip['total_deductions'] = (
+        payslip['lab_bills_50'] +
+        payslip['finance_fees_50'] +
+        payslip['therapy_total']
+    )
+    payslip['total_payment'] = payslip['net_private'] - payslip['total_deductions']
+    
+    return payslip
 
 
 def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
@@ -2702,17 +3349,32 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
     for name, p in payslips.items():
         config = DENTISTS[name]
         
-        # Consolidate patient_totals into patients list (sorted by date chronologically)
-        p["patients"] = sorted([
-            {
+        # Consolidate patient_totals into patients list
+        patients_list = []
+        for pt in p["patient_totals"].values():
+            date_str = pt["last_date"] or ""
+            # Convert YYYY-MM-DD to DD/MM/YYYY for display
+            display_date = date_str
+            sort_date = date_str or "9999-99-99"
+            if date_str and len(date_str) == 10 and date_str[4] == '-':
+                try:
+                    # Parse YYYY-MM-DD and convert to DD/MM/YYYY
+                    parsed = datetime.strptime(date_str, "%Y-%m-%d")
+                    display_date = parsed.strftime("%d/%m/%Y")
+                except:
+                    pass
+            
+            patients_list.append({
                 "name": pt["name"], 
                 "amount": pt["total"],  # Total for cross-reference
                 "paid_amount": pt["paid_total"],  # Paid amount for payslip
-                "date": pt["last_date"],
+                "date": display_date,
+                "sort_date": sort_date,
                 "payment_flag": pt["payment_flag"]
-            }
-            for pt in p["patient_totals"].values()
-        ], key=lambda x: x["date"] or "9999-99-99")  # Sort by date, empty dates at end
+            })
+        
+        # Sort chronologically (earliest first)
+        p["patients"] = sorted(patients_list, key=lambda x: x["sort_date"])
         
         # Remove the working dict
         del p["patient_totals"]
@@ -3236,8 +3898,52 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
             import traceback
             traceback.print_exc()
     
+    # Process NHS statements (for Peter, Priyanka, Moneeb)
+    nhs_data = {}
+    if drive_service and NHS_STATEMENTS_FOLDER_ID:
+        try:
+            client = get_sheets_client()
+            if client:
+                spreadsheet = client.open_by_key(SPREADSHEET_ID)
+                
+                nhs_data = process_nhs_statements(
+                    drive_service, spreadsheet, period_str, month, year
+                )
+                
+                # Add NHS income to payslips
+                for dentist, data in nhs_data.items():
+                    if dentist in payslips:
+                        payslips[dentist]['nhs_udas'] = data['udas']
+                        payslips[dentist]['nhs_uda_rate'] = data['uda_rate']
+                        payslips[dentist]['nhs_income'] = data['uda_income']
+                        print(f"   ✅ Added NHS income to {dentist}: £{data['uda_income']:,.2f}")
+        except Exception as e:
+            print(f"   ⚠️ NHS statement processing error: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # Read and apply confirmed adjustments from previous run
+    if GOOGLE_SHEETS_CREDENTIALS:
+        print("\n📝 CHECKING FOR CONFIRMED ADJUSTMENTS...")
+        client = get_sheets_client()
+        if client:
+            try:
+                spreadsheet = client.open_by_key(SPREADSHEET_ID)
+                
+                for dentist_name in payslips.keys():
+                    adjustments = read_confirmed_adjustments(spreadsheet, dentist_name)
+                    if adjustments:
+                        payslips[dentist_name] = apply_adjustments_to_payslip(
+                            payslips[dentist_name], adjustments, dentist_name
+                        )
+                        print(f"   ✅ Applied {len(adjustments)} adjustments to {dentist_name}")
+                
+            except Exception as e:
+                print(f"   ⚠️ Adjustment processing error: {e}")
+    
     # Build historical database and check for duplicates
     all_duplicates = []
+    historical_db = {}  # Initialize here so it's available for reconciliation
     if drive_service:
         try:
             historical_db = build_historical_database(
@@ -3305,6 +4011,11 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                 # Update duplicate check tab
                 if all_duplicates:
                     update_duplicate_check_tab(spreadsheet, all_duplicates, period_str)
+                
+                # Perform 4-way reconciliation
+                if historical_db and xref_results:
+                    reconciliation = perform_4way_reconciliation(payslips, historical_db, xref_results, period_str)
+                    update_reconciliation_tab(spreadsheet, reconciliation, period_str)
                 
                 # DISABLED: Log paid invoices for future duplicate detection
                 # update_paid_invoices_log(spreadsheet, payslips, period_str)
