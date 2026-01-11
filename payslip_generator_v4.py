@@ -2076,18 +2076,27 @@ def filter_new_lab_bills(all_lab_bills, processed_file_ids):
 
 
 # =============================================================================
-# SHEET FORMATTING COLORS (v3.0 - Consistent styling)
+# SHEET FORMATTING COLORS (v4.0 - Aura Brand Guidelines)
 # =============================================================================
 
 SHEET_COLORS = {
-    'primary': {'red': 0.1, 'green': 0.1, 'blue': 0.1},
-    'white': {'red': 1.0, 'green': 1.0, 'blue': 1.0},
-    'off_white': {'red': 0.98, 'green': 0.98, 'blue': 0.98},
-    'light_gray': {'red': 0.95, 'green': 0.95, 'blue': 0.95},
+    # Aura Brand Colors
+    'aura_dark': {'red': 0.13, 'green': 0.13, 'blue': 0.13},        # #212121 - Main headings
+    'aura_gold': {'red': 0.76, 'green': 0.60, 'blue': 0.42},        # #C2996B - Accent/highlights
+    'aura_cream': {'red': 0.98, 'green': 0.97, 'blue': 0.95},       # #FAF8F2 - Alternating rows
+    'aura_light_gray': {'red': 0.96, 'green': 0.96, 'blue': 0.96},  # #F5F5F5 - Table headers
+    'white': {'red': 1.0, 'green': 1.0, 'blue': 1.0},               # #FFFFFF - Background
+    'success_green': {'red': 0.20, 'green': 0.66, 'blue': 0.33},    # #33A854 - Positive indicators
+    'label_gray': {'red': 0.50, 'green': 0.50, 'blue': 0.50},       # #808080 - Labels
+    
+    # Legacy colors (for compatibility)
+    'primary': {'red': 0.13, 'green': 0.13, 'blue': 0.13},
+    'off_white': {'red': 0.98, 'green': 0.97, 'blue': 0.95},
+    'light_gray': {'red': 0.96, 'green': 0.96, 'blue': 0.96},
     'medium_gray': {'red': 0.85, 'green': 0.85, 'blue': 0.85},
     'border_gray': {'red': 0.75, 'green': 0.75, 'blue': 0.75},
     'success': {'red': 0.85, 'green': 0.95, 'blue': 0.85},
-    'success_dark': {'red': 0.13, 'green': 0.55, 'blue': 0.13},
+    'success_dark': {'red': 0.20, 'green': 0.66, 'blue': 0.33},
     'warning_bg': {'red': 1.0, 'green': 0.95, 'blue': 0.8},
     'warning_text': {'red': 0.7, 'green': 0.5, 'blue': 0.0},
 }
@@ -2174,19 +2183,19 @@ def update_dashboard(spreadsheet, payslips, period_str):
 
 def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     """
-    Update individual dentist payslip tab - v3.0 matching Zee Payslip template
+    Update individual dentist payslip tab - v4.0 Aura Brand Design
     
-    Layout:
-    - Row 1: Logo (80x80 - 1:1 ratio)
-    - Rows 2-6: Info (Payslip Date, Private Period, Performer, Practice, Superannuation)
-    - Row 8: Section 1: Private Fees header
-    - Rows 9-12: Gross Private by Dentist/Therapist, Total, Subtotal
-    - Row 14: Section 2: Deductions header
-    - Rows 15-27: Labs breakdown, Finance, Therapy
-    - Row 28: Total Deductions (green)
-    - Row 30: Total Payment (green)
-    - Row 32+: Private Patient Breakdown
-    - Bottom: Discrepancies section
+    Layout (following Aura Style Guide):
+    - Row 1: Company name (gold) + Logo (right)
+    - Row 2: Large "PAYSLIP" title
+    - Row 3: Spacer
+    - Rows 4-8: Employee Info Card (2 columns)
+    - Row 9: Spacer
+    - Row 10: TOTAL EARNINGS banner (dark bg, gold amount)
+    - Row 11: Spacer
+    - Row 12+: Earnings Breakdown with gold underlines
+    - Section 2: Deductions
+    - Section 3: Private Patient Breakdown (alternating rows)
     """
     first_name = dentist_name.split()[0]
     tab_name = f"{first_name} Payslip"
@@ -2209,24 +2218,21 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             payment_date = datetime(period_date.year + 1, 1, 15)
         else:
             payment_date = datetime(period_date.year, period_date.month + 1, 15)
-        payment_str = payment_date.strftime("%dth %B %Y")
+        payment_str = payment_date.strftime("%d %B %Y")
     except:
         payment_str = "15th of following month"
     
+    generated_str = datetime.now().strftime("%d %B %Y")
     split_pct = int(config['split'] * 100)
     split_str = f"{split_pct}%"
     
-    # Get lab bills breakdown
-    lab_bills = payslip.get('lab_bills', {})
-    lab_halo = lab_bills.get('Halo', 0)
-    lab_straumann = lab_bills.get('Straumann', 0)
-    lab_invisalign = lab_bills.get('Invisalign', 0)
-    lab_priory = lab_bills.get('Priory', 0)
-    lab_scan = lab_bills.get('Scan Digital', 0)
-    lab_robinsons = lab_bills.get('Robinsons', 0)
-    
     patients = payslip.get('patients', [])
-    num_patients = len(patients)
+    
+    # Calculate totals
+    nhs_income = payslip.get('nhs_income', 0)
+    private_net = payslip.get('net_private', 0)
+    deductions = payslip.get('total_deductions', 0)
+    total_payment = private_net + nhs_income - deductions
     
     # ============================================
     # BUILD SHEET DATA
@@ -2234,118 +2240,120 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     rows = []
     
-    # Row 1: Logo (80x80 for 1:1 ratio)
-    rows.append(["", "", "", "", "", "", f'=IMAGE("{LOGO_URL}", 4, 80, 80)', ""])
+    # Row 1: Company name (gold text) + Logo
+    rows.append(["", "AURA DENTAL CLINIC", "", "", "", "", f'=IMAGE("{LOGO_URL}", 4, 80, 80)', ""])
     
-    # Rows 2-6: Info section
-    rows.append(["", "Payslip Date:", payment_str, "", "", "", "", ""])
-    rows.append(["", "Private Period:", period_str, "", "", "", "", ""])
+    # Row 2: Large PAYSLIP title
+    rows.append(["", "PAYSLIP", "", "", "", "", "", ""])
     
-    # Show NHS period for NHS dentists - RIGHT BELOW Private Period
+    # Row 3: Spacer
+    rows.append(["", "", "", "", "", "", "", ""])
+    
+    # Row 4-8: Employee Info Card (2 columns layout)
+    rows.append(["", "Performer", config['display_name'], "", "Period", period_str, "", ""])
+    rows.append(["", "Practice", PRACTICE_NAME, "", "Payment Date", payment_str, "", ""])
+    
+    # Show NHS period for NHS dentists
     nhs_period = payslip.get('nhs_period', '')
     if dentist_name in NHS_DENTISTS:
-        if nhs_period:
-            rows.append(["", "NHS Period:", nhs_period, "", "", "", "", ""])
-        else:
-            rows.append(["", "NHS Period:", "Not yet entered", "", "", "", "", ""])
+        nhs_period_display = nhs_period if nhs_period else "Not yet entered"
+        rows.append(["", "Role", "Associate Dentist (NHS)", "", "NHS Period", nhs_period_display, "", ""])
+    else:
+        rows.append(["", "Role", "Associate Dentist", "", "Generated", generated_str, "", ""])
     
-    rows.append(["", "Performer:", config['display_name'], "", "", "", "", ""])
-    rows.append(["", "Practice:", PRACTICE_NAME, "", "", "", "", ""])
+    rows.append(["", "Superannuation", "Opted Out", "", "", "", "", ""])
     
-    rows.append(["", "Superannuation Status:", "Opted Out", "", "", "", "", ""])
+    # Row 8: Spacer
+    rows.append(["", "", "", "", "", "", "", ""])
     
-    rows.append(["", "", "", "", "", "", "", ""])  # Row 7 spacer
+    # Row 9: TOTAL EARNINGS BANNER
+    total_earnings_row = len(rows) + 1
+    rows.append(["", "TOTAL EARNINGS", "", "", "", "", total_payment, ""])
     
-    # Row 8: Section 1 header
-    rows.append(["", "Section 1: Private Fees", "", "", "", "", "", ""])
+    # Row 10: Spacer
+    rows.append(["", "", "", "", "", "", "", ""])
     
-    # Rows 9-12: Private fees detail
-    rows.append(["", "", "", "", "Gross Private by Dentist", "", payslip.get('gross_private_dentist', 0), ""])
-    rows.append(["", "", "", "", "Gross Private by Therapist", "", payslip.get('gross_private_therapist', 0), ""])
-    rows.append(["", "", "", "", "Gross Total", "", payslip.get('gross_total', 0), ""])
-    rows.append(["", "Subtotal", "", "", split_str, "", payslip.get('net_private', 0), ""])  # Row 12
+    # ============================================
+    # SECTION 1: EARNINGS BREAKDOWN
+    # ============================================
+    section1_row = len(rows) + 1
+    rows.append(["", "EARNINGS BREAKDOWN", "", "", "", "", "", ""])
     
-    rows.append(["", "", "", "", "", "", "", ""])  # Row 13 spacer
+    rows.append(["", "", "", "", "", "", "", ""])
     
-    # NHS Section (only for NHS dentists: Peter, Priyanka, Moneeb)
-    nhs_income = payslip.get('nhs_income', 0)
+    # Private Income
+    rows.append(["", "Private Income", "", "", "", "", "", ""])
+    rows.append(["", "", "Gross Private by Dentist", "", "", "", payslip.get('gross_private_dentist', 0), ""])
+    rows.append(["", "", "Gross Private by Therapist", "", "", "", payslip.get('gross_private_therapist', 0), ""])
+    rows.append(["", "", "Gross Total", "", "", "", payslip.get('gross_total', 0), ""])
+    
+    subtotal_row = len(rows) + 1
+    rows.append(["", "", f"Net Private ({split_str})", "", "", "", payslip.get('net_private', 0), ""])
+    
+    rows.append(["", "", "", "", "", "", "", ""])
+    
+    # NHS Income (only for NHS dentists)
     nhs_udas = payslip.get('nhs_udas', 0)
     nhs_uda_rate = payslip.get('nhs_uda_rate', 0)
     
-    if nhs_income > 0 or dentist_name in NHS_DENTISTS:
-        rows.append(["", "Section 1b: NHS Income", "", "", "", "", "", ""])
-        rows.append(["", "", "", "", "UDAs Achieved", nhs_udas if nhs_udas else "Enter manually", "", ""])
-        rows.append(["", "", "", "", "UDA Rate (£ per UDA)", nhs_uda_rate if nhs_uda_rate else "15/16", "", ""])
-        rows.append(["", "NHS Total", "", "", "", "", nhs_income if nhs_income else 0, ""])
-        rows.append(["", "", "", "", "", "", "", ""])  # spacer
+    if dentist_name in NHS_DENTISTS:
+        rows.append(["", "NHS Income", "", "", "", "", "", ""])
+        rows.append(["", "", "UDAs Achieved", "", "", nhs_udas if nhs_udas else "Enter manually", "", ""])
+        rows.append(["", "", "UDA Rate (£ per UDA)", "", "", f"£{nhs_uda_rate}" if nhs_uda_rate else "£15/16", "", ""])
+        nhs_total_row = len(rows) + 1
+        rows.append(["", "", "NHS Total", "", "", "", nhs_income if nhs_income else 0, ""])
+        rows.append(["", "", "", "", "", "", "", ""])
     
-    # Row 14: Section 2 header
-    rows.append(["", "Section 2: Deductions", "", "", "", "", "", ""])
+    # ============================================
+    # SECTION 2: DEDUCTIONS
+    # ============================================
+    section2_row = len(rows) + 1
+    rows.append(["", "DEDUCTIONS", "", "", "", "", "", ""])
     
-    # Dynamic Labs breakdown - only show labs that have invoices
+    rows.append(["", "", "", "", "", "", "", ""])
+    
+    # Lab Bills - Dynamic (only show labs with values)
     lab_bills = payslip.get('lab_bills', {})
-    lab_bills_details = payslip.get('lab_bills_details', [])  # List of individual bills
-    
-    # Filter labs with actual values
     labs_with_values = {k: v for k, v in lab_bills.items() if v and v > 0}
     
+    rows.append(["", "Lab Bills", "", "", "", "", "", ""])
     if labs_with_values:
-        # First row with "Labs" label
-        first_lab = True
         for lab_name, lab_amount in sorted(labs_with_values.items()):
-            if first_lab:
-                rows.append(["", "", "", "Labs", "", lab_name, lab_amount, ""])
-                first_lab = False
-            else:
-                rows.append(["", "", "", "", "", lab_name, lab_amount, ""])
-        
-        # Lab totals
-        rows.append(["", "", "", "", "", "Lab Bills Total", payslip.get('lab_bills_total', 0), ""])
-        rows.append(["", "", "", "", "", "Lab Bills 50%", payslip.get('lab_bills_50', 0), ""])
+            rows.append(["", "", lab_name, "", "", "", lab_amount, ""])
+        rows.append(["", "", "Lab Bills Total", "", "", "", payslip.get('lab_bills_total', 0), ""])
+        lab_50_row = len(rows) + 1
+        rows.append(["", "", "Your Share (50%)", "", "", "", payslip.get('lab_bills_50', 0), ""])
     else:
-        # No lab bills - show placeholder
-        rows.append(["", "", "", "Labs", "", "None this period", 0, ""])
+        rows.append(["", "", "None this period", "", "", "", 0, ""])
     
-    rows.append(["", "", "", "", "", "", "", ""])  # spacer
+    rows.append(["", "", "", "", "", "", "", ""])
     
-    # Finance fees
-    rows.append(["", "", "", "Finance Fees", "", "", payslip.get('finance_fees_total', 0), ""])
-    rows.append(["", "", "", "50%", "", "", payslip.get('finance_fees_50', 0), ""])
+    # Finance Fees
+    rows.append(["", "Finance Fees", "", "", "", "", "", ""])
+    rows.append(["", "", "Total Finance Fees", "", "", "", payslip.get('finance_fees_total', 0), ""])
+    rows.append(["", "", "Your Share (50%)", "", "", "", payslip.get('finance_fees_50', 0), ""])
     
-    rows.append(["", "", "", "", "", "", "", ""])  # spacer
+    rows.append(["", "", "", "", "", "", "", ""])
     
     # Therapy
     therapy_mins = payslip.get('therapy_minutes', 0)
-    rows.append(["", "", "", "Therapy", f"Taryn ({therapy_mins} mins)", "", payslip.get('therapy_total', 0), ""])
+    rows.append(["", "Therapy", "", "", "", "", "", ""])
+    rows.append(["", "", f"Taryn ({therapy_mins} mins @ £0.58/min)", "", "", "", payslip.get('therapy_total', 0), ""])
+    
+    rows.append(["", "", "", "", "", "", "", ""])
     
     # Total Deductions
     total_ded_row = len(rows) + 1
-    rows.append(["", "Total Deductions", "", "", "", "", payslip.get('total_deductions', 0), ""])
-    
-    rows.append(["", "", "", "", "", "", "", ""])  # spacer
-    
-    # Total Payment (Private + NHS - Deductions)
-    nhs_income = payslip.get('nhs_income', 0)
-    private_net = payslip.get('net_private', 0)
-    deductions = payslip.get('total_deductions', 0)
-    total_payment = private_net + nhs_income - deductions
-    
-    total_pay_row = len(rows) + 1
-    if nhs_income > 0:
-        rows.append(["", "Private Net", "", "", "", "", payslip.get('net_private', 0), ""])
-        rows.append(["", "NHS Income", "", "", "", "", nhs_income, ""])
-        rows.append(["", "Less Deductions", "", "", "", "", -deductions, ""])
-        total_pay_row = len(rows) + 1
-        rows.append(["", "TOTAL PAYMENT", "", "", "", "", total_payment, ""])
-    else:
-        rows.append(["", "Total Payment", "", "", "", "", payslip.get('total_payment', 0), ""])
+    rows.append(["", "TOTAL DEDUCTIONS", "", "", "", "", payslip.get('total_deductions', 0), ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Private Patient Breakdown section
-    patient_header_row = len(rows) + 1
-    rows.append(["", "Private Patient Breakdown", "", "", "", "", "", ""])
+    # ============================================
+    # SECTION 3: PATIENT BREAKDOWN
+    # ============================================
+    section3_row = len(rows) + 1
+    rows.append(["", "PRIVATE PATIENT BREAKDOWN", "", "", "", "", "", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     
@@ -2356,7 +2364,7 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     # Patient data rows
     patient_start_row = len(rows) + 1
     for patient in patients:
-        status = "✅" if not patient.get('payment_flag') else "⚠️ Not matched"
+        status = "✓" if not patient.get('payment_flag') else "○"
         rows.append([
             "",
             patient.get('name', ''),
@@ -2369,116 +2377,176 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         ])
     patient_end_row = len(rows)
     
+    # Summary row
+    patient_summary_row = len(rows) + 1
+    rows.append(["", f"Total: {len(patients)} patients", "", "", sum(p.get('paid_amount', p.get('amount', 0)) for p in patients), "", "", ""])
+    
+    rows.append(["", "", "", "", "", "", "", ""])
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Write all data (discrepancies section added separately by update_payslip_discrepancies)
+    # Footer
+    footer_row = len(rows) + 1
+    rows.append(["", "Generated by Aura Payslip Generator v4.0", "", "", "", "", "", ""])
+    
+    # Write all data
     sh.update(values=rows, range_name='A1', value_input_option='USER_ENTERED')
     
-    # Track the row where discrepancies should start
-    discrep_header_row = len(rows) + 3  # Leave space for discrepancies to be added later
-    
     # ============================================
-    # APPLY FORMATTING
+    # APPLY AURA BRAND FORMATTING
     # ============================================
     
     sheet_id = sh.id
     
     format_requests = [
-        # Base font - 10pt Arial
+        # Hide gridlines
+        {
+            'updateSheetProperties': {
+                'properties': {'sheetId': sheet_id, 'gridProperties': {'hideGridlines': True}},
+                'fields': 'gridProperties.hideGridlines'
+            }
+        },
+        
+        # Base font - 10pt Arial, Aura Dark color
         {
             'repeatCell': {
                 'range': {'sheetId': sheet_id},
-                'cell': {'userEnteredFormat': {'textFormat': {'fontFamily': 'Arial', 'fontSize': 10}}},
+                'cell': {'userEnteredFormat': {
+                    'textFormat': {'fontFamily': 'Arial', 'fontSize': 10, 'foregroundColor': SHEET_COLORS['aura_dark']}
+                }},
                 'fields': 'userEnteredFormat.textFormat'
             }
         },
         
-        # Column widths
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 30}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 200}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 3, 'endIndex': 4}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5}, 'properties': {'pixelSize': 180}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 6, 'endIndex': 7}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},
+        # Column widths (matching style guide)
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 20}, 'fields': 'pixelSize'}},   # A: margin
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 200}, 'fields': 'pixelSize'}},  # B: names
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 180}, 'fields': 'pixelSize'}},  # C: details
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 3, 'endIndex': 4}, 'properties': {'pixelSize': 70}, 'fields': 'pixelSize'}},   # D: status
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},  # E: amounts
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},  # F: values
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 6, 'endIndex': 7}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},  # G: amounts
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 30}, 'fields': 'pixelSize'}},   # H: margin
         
-        # Row 1 height for logo (80px for 1:1 ratio)
+        # Row 1 height for logo (80px)
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 80}, 'fields': 'pixelSize'}},
         
-        # Info labels bold (B2-B6)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 6, 'startColumnIndex': 1, 'endColumnIndex': 2},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True}}}, 'fields': 'userEnteredFormat.textFormat'}},
+        # Row 1: Company name in Aura Gold
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 1, 'startColumnIndex': 1, 'endColumnIndex': 2},
+            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'foregroundColor': SHEET_COLORS['aura_gold']}}},
+            'fields': 'userEnteredFormat.textFormat'}},
         
-        # Section 1 header (row 8) - bold with border
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 7, 'endRowIndex': 8, 'startColumnIndex': 1, 'endColumnIndex': 7},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True}, 
-                'borders': {'bottom': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['border_gray']}}}},
-            'fields': 'userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+        # Row 2: Large PAYSLIP title (28pt bold)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 3},
+            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 28, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
+            'fields': 'userEnteredFormat.textFormat'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 45}, 'fields': 'pixelSize'}},
         
-        # Subtotal row (row 12) - green highlight
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 11, 'endRowIndex': 12, 'startColumnIndex': 1, 'endColumnIndex': 7},
+        # Employee Info Card - Labels (gray 9pt)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 1, 'endColumnIndex': 2},
+            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 9, 'foregroundColor': SHEET_COLORS['label_gray']}}},
+            'fields': 'userEnteredFormat.textFormat'}},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 4, 'endColumnIndex': 5},
+            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 9, 'foregroundColor': SHEET_COLORS['label_gray']}}},
+            'fields': 'userEnteredFormat.textFormat'}},
+        
+        # Employee Info Card - Values (bold 10pt)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 2, 'endColumnIndex': 3},
+            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
+            'fields': 'userEnteredFormat.textFormat'}},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 5, 'endColumnIndex': 6},
+            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
+            'fields': 'userEnteredFormat.textFormat'}},
+        
+        # TOTAL EARNINGS BANNER - Dark background, white text, gold amount
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': total_earnings_row - 1, 'endRowIndex': total_earnings_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
             'cell': {'userEnteredFormat': {
-                'backgroundColor': SHEET_COLORS['success'],
-                'textFormat': {'bold': True, 'foregroundColor': SHEET_COLORS['success_dark']},
-                'borders': {'top': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['success_dark']}, 
-                           'bottom': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['success_dark']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+                'backgroundColor': SHEET_COLORS['aura_dark'],
+                'textFormat': {'fontSize': 14, 'bold': True, 'foregroundColor': SHEET_COLORS['white']}}},
+            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': total_earnings_row - 1, 'endRowIndex': total_earnings_row, 'startColumnIndex': 6, 'endColumnIndex': 7},
+            'cell': {'userEnteredFormat': {
+                'backgroundColor': SHEET_COLORS['aura_dark'],
+                'textFormat': {'fontSize': 16, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_gold']},
+                'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'},
+                'horizontalAlignment': 'RIGHT'}},
+            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': total_earnings_row - 1, 'endIndex': total_earnings_row}, 'properties': {'pixelSize': 40}, 'fields': 'pixelSize'}},
         
-        # Section 2 header (row 14) - bold with border
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 13, 'endRowIndex': 14, 'startColumnIndex': 1, 'endColumnIndex': 7},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['border_gray']}}}},
+        # Section headers (EARNINGS BREAKDOWN, DEDUCTIONS, etc.) - 11pt bold with gold underline
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': section1_row - 1, 'endRowIndex': section1_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
+            'cell': {'userEnteredFormat': {
+                'textFormat': {'fontSize': 11, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']},
+                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': SHEET_COLORS['aura_gold']}}}},
             'fields': 'userEnteredFormat.textFormat,userEnteredFormat.borders'}},
         
-        # Total Deductions row - green highlight
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': section2_row - 1, 'endRowIndex': section2_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
+            'cell': {'userEnteredFormat': {
+                'textFormat': {'fontSize': 11, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']},
+                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': SHEET_COLORS['aura_gold']}}}},
+            'fields': 'userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+        
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': section3_row - 1, 'endRowIndex': section3_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
+            'cell': {'userEnteredFormat': {
+                'textFormat': {'fontSize': 11, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']},
+                'borders': {'bottom': {'style': 'SOLID', 'width': 2, 'color': SHEET_COLORS['aura_gold']}}}},
+            'fields': 'userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+        
+        # Sub-section headers (Private Income, Lab Bills, etc.) - 10pt bold
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': section1_row + 1, 'endRowIndex': section2_row - 1, 'startColumnIndex': 1, 'endColumnIndex': 2},
+            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'bold': True}}},
+            'fields': 'userEnteredFormat.textFormat'}},
+        
+        # Total Deductions row - Light gray background
         {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': total_ded_row - 1, 'endRowIndex': total_ded_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
             'cell': {'userEnteredFormat': {
-                'backgroundColor': SHEET_COLORS['success'],
-                'textFormat': {'bold': True, 'foregroundColor': SHEET_COLORS['success_dark']},
-                'borders': {'top': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['success_dark']}, 
-                           'bottom': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['success_dark']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+                'backgroundColor': SHEET_COLORS['aura_light_gray'],
+                'textFormat': {'fontSize': 10, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
+            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
         
-        # Total Payment row - green highlight, larger font
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': total_pay_row - 1, 'endRowIndex': total_pay_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
-            'cell': {'userEnteredFormat': {
-                'backgroundColor': SHEET_COLORS['success'],
-                'textFormat': {'bold': True, 'fontSize': 11, 'foregroundColor': SHEET_COLORS['success_dark']},
-                'borders': {'top': {'style': 'SOLID', 'width': 2, 'color': SHEET_COLORS['success_dark']}, 
-                           'bottom': {'style': 'SOLID', 'width': 2, 'color': SHEET_COLORS['success_dark']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
-        
-        # Private Patient Breakdown header
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_header_row - 1, 'endRowIndex': patient_header_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
-            'cell': {'userEnteredFormat': {'textFormat': {'bold': True},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['border_gray']}}}},
-            'fields': 'userEnteredFormat.textFormat,userEnteredFormat.borders'}},
-        
-        # Patient column headers - gray background
+        # Patient column headers - Light gray background, 9pt bold
         {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_col_row - 1, 'endRowIndex': patient_col_row, 'startColumnIndex': 1, 'endColumnIndex': 5},
             'cell': {'userEnteredFormat': {
-                'backgroundColor': SHEET_COLORS['light_gray'],
-                'textFormat': {'bold': True},
-                'borders': {'bottom': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['medium_gray']}}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.borders'}},
+                'backgroundColor': SHEET_COLORS['aura_light_gray'],
+                'textFormat': {'fontSize': 9, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
+            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
         
-        # Patient rows - light border between each
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 1, 'endRowIndex': patient_end_row, 'startColumnIndex': 1, 'endColumnIndex': 5},
+        # Patient summary row - Light gray background
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_summary_row - 1, 'endRowIndex': patient_summary_row, 'startColumnIndex': 1, 'endColumnIndex': 5},
             'cell': {'userEnteredFormat': {
-                'borders': {'bottom': {'style': 'SOLID', 'width': 1, 'color': SHEET_COLORS['light_gray']}}}},
-            'fields': 'userEnteredFormat.borders'}},
+                'backgroundColor': SHEET_COLORS['aura_light_gray'],
+                'textFormat': {'fontSize': 9, 'bold': True}}},
+            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
         
-        # Amount column G - currency format (for fees section)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 8, 'endRowIndex': patient_end_row + 10, 'startColumnIndex': 6, 'endColumnIndex': 7},
-            'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}}},
-            'fields': 'userEnteredFormat.numberFormat'}},
+        # Footer - 8pt gray
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': footer_row - 1, 'endRowIndex': footer_row, 'startColumnIndex': 1, 'endColumnIndex': 5},
+            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 8, 'foregroundColor': SHEET_COLORS['label_gray']}}},
+            'fields': 'userEnteredFormat.textFormat'}},
         
-        # Amount column E - currency format (for patient breakdown only, not the fees section)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 1, 'endRowIndex': patient_end_row, 'startColumnIndex': 4, 'endColumnIndex': 5},
-            'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}}},
-            'fields': 'userEnteredFormat.numberFormat'}},
+        # Currency format for amount columns (G and E in patient breakdown)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 8, 'endRowIndex': patient_end_row + 5, 'startColumnIndex': 6, 'endColumnIndex': 7},
+            'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}, 'horizontalAlignment': 'RIGHT'}},
+            'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}},
+        
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 1, 'endRowIndex': patient_summary_row, 'startColumnIndex': 4, 'endColumnIndex': 5},
+            'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}, 'horizontalAlignment': 'RIGHT'}},
+            'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}},
+        
+        # Status column - green checkmarks
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 1, 'endRowIndex': patient_end_row, 'startColumnIndex': 3, 'endColumnIndex': 4},
+            'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': SHEET_COLORS['success_green']}, 'horizontalAlignment': 'CENTER'}},
+            'fields': 'userEnteredFormat.textFormat,userEnteredFormat.horizontalAlignment'}},
     ]
+    
+    # Add alternating row colors for patient table (white/cream)
+    for i, row_idx in enumerate(range(patient_start_row - 1, patient_end_row)):
+        bg_color = SHEET_COLORS['white'] if i % 2 == 0 else SHEET_COLORS['aura_cream']
+        format_requests.append({
+            'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': row_idx, 'endRowIndex': row_idx + 1, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {'backgroundColor': bg_color}},
+                'fields': 'userEnteredFormat.backgroundColor'
+            }
+        })
     
     try:
         spreadsheet.batch_update({'requests': format_requests})
