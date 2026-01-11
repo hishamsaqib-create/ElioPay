@@ -901,10 +901,11 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     Process lab bills from Google Drive folder.
     
     1. List all PDFs in lab bills folder
-    2. Check which are already assigned (current month)
-    3. Check which were processed in previous months (duplicate detection)
-    4. Parse new PDFs to extract dentist and amount
-    5. Return dict of lab bills per dentist
+    2. Filter to only invoices from last 3 months
+    3. Check which are already assigned (current month)
+    4. Check which were processed in previous months (duplicate detection)
+    5. Parse new PDFs to extract dentist and amount
+    6. Return dict of lab bills per dentist
     
     Args:
         processed_lab_bills: Set of file IDs already processed in previous months
@@ -927,6 +928,11 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     unassigned_bills = []
     new_assignments = []
     duplicate_bills = []
+    skipped_old_bills = []
+    
+    # Calculate cutoff date (3 months ago)
+    cutoff_date = datetime.now() - timedelta(days=90)
+    print(f"   📅 Only processing invoices from last 3 months (since {cutoff_date.strftime('%d %B %Y')})")
     
     # Get already assigned bills (current month's spreadsheet)
     assigned = get_assigned_lab_bills(spreadsheet)
@@ -936,11 +942,24 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     # List all PDFs
     print("   Scanning lab bills folder...")
     pdfs = list_lab_bill_pdfs(drive_service, LAB_BILLS_FOLDER_ID)
-    print(f"   Found {len(pdfs)} PDF files")
+    print(f"   Found {len(pdfs)} PDF files total")
     
     # Process each PDF
     for pdf_info in pdfs:
         file_id = pdf_info['id']
+        
+        # Filter by date - only process invoices from last 3 months
+        modified_time_str = pdf_info.get('modified_time', '')
+        if modified_time_str:
+            try:
+                # Parse ISO format: 2025-01-15T10:30:00.000Z
+                modified_time = datetime.fromisoformat(modified_time_str.replace('Z', '+00:00'))
+                modified_time = modified_time.replace(tzinfo=None)  # Remove timezone for comparison
+                if modified_time < cutoff_date:
+                    skipped_old_bills.append(pdf_info)
+                    continue
+            except:
+                pass  # If can't parse date, process anyway
         
         # Check if processed in previous months (DUPLICATE)
         if file_id in processed_lab_bills:
@@ -1019,6 +1038,9 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
         total = sum(labs.values())
         lab_list = ", ".join(labs.keys())
         print(f"      {dentist}: £{total:,.2f} ({lab_list})")
+    
+    if skipped_old_bills:
+        print(f"\n   📅 {len(skipped_old_bills)} invoices SKIPPED (older than 3 months)")
     
     if duplicate_bills:
         print(f"\n   🔴 {len(duplicate_bills)} lab bills SKIPPED (already processed in previous months)")
@@ -1917,11 +1939,14 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
     """
     Get or create a monthly spreadsheet named "Aura Payslips - December 2025".
     
+    - If spreadsheet for this month exists in the folder, use it (overwrite)
+    - If not, create a new one and move it to the folder
+    
     Args:
         client: gspread client
         drive_service: Google Drive API service
         period_str: Period string like "December 2025"
-        folder_id: Folder ID to store the spreadsheet (optional)
+        folder_id: Folder ID to store the spreadsheet
     
     Returns:
         spreadsheet object, is_new (bool)
@@ -1930,13 +1955,40 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
     
     print(f"\n📊 Looking for spreadsheet: {sheet_name}")
     
-    # Try to find existing spreadsheet
+    # Search within the specific folder if provided
+    if folder_id and drive_service:
+        try:
+            # Search for existing spreadsheet in folder
+            query = f"name = '{sheet_name}' and '{folder_id}' in parents and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
+            
+            results = drive_service.files().list(
+                q=query,
+                fields="files(id, name)",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True
+            ).execute()
+            
+            files = results.get('files', [])
+            
+            if files:
+                # Found existing spreadsheet - use it
+                file_id = files[0]['id']
+                print(f"   ✅ Found existing spreadsheet in folder (ID: {file_id[:15]}...)")
+                spreadsheet = client.open_by_key(file_id)
+                return spreadsheet, False
+            else:
+                print(f"   📝 No existing spreadsheet found, creating new...")
+                
+        except Exception as e:
+            print(f"   ⚠️ Error searching folder: {e}")
+    
+    # Try to find by name (fallback - searches all accessible sheets)
     try:
         spreadsheet = client.open(sheet_name)
-        print(f"   ✅ Found existing spreadsheet")
+        print(f"   ✅ Found existing spreadsheet by name")
         return spreadsheet, False
     except gspread.SpreadsheetNotFound:
-        print(f"   📝 Creating new spreadsheet...")
+        pass
     
     # Create new spreadsheet
     try:
@@ -1964,16 +2016,60 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
                     fields='id, parents'
                 ).execute()
                 
-                print(f"   📁 Moved to payslips folder")
+                print(f"   📁 Moved to Payslip Spreadsheets folder")
             except Exception as e:
                 print(f"   ⚠️ Could not move to folder: {e}")
+        
+        # Set up the new spreadsheet with required tabs
+        setup_new_payslip_spreadsheet(spreadsheet, period_str)
         
         return spreadsheet, True
         
     except Exception as e:
         print(f"   ⚠️ Error creating spreadsheet: {e}")
         # Fall back to existing spreadsheet
-        return client.open_by_key(SPREADSHEET_ID), False
+        if SPREADSHEET_ID:
+            print(f"   ↩️ Falling back to template spreadsheet")
+            return client.open_by_key(SPREADSHEET_ID), False
+        raise
+
+
+def setup_new_payslip_spreadsheet(spreadsheet, period_str):
+    """
+    Set up a newly created payslip spreadsheet with required tabs.
+    """
+    print(f"   🔧 Setting up spreadsheet structure...")
+    
+    try:
+        # Rename default Sheet1 to Dashboard
+        try:
+            sheet1 = spreadsheet.sheet1
+            sheet1.update_title("Dashboard")
+        except:
+            pass
+        
+        # Create required tabs
+        tabs_to_create = [
+            "Cross-Reference",
+            "Lab Bills Log",
+            "Finance Flags"
+        ]
+        
+        # Add dentist payslip tabs
+        for dentist_name in DENTISTS.keys():
+            first_name = dentist_name.split()[0]
+            tabs_to_create.append(f"{first_name} Payslip")
+        
+        for tab_name in tabs_to_create:
+            try:
+                spreadsheet.add_worksheet(title=tab_name, rows=500, cols=12)
+            except:
+                pass  # Tab might already exist
+        
+        print(f"   ✅ Created {len(tabs_to_create)} tabs")
+        
+    except Exception as e:
+        print(f"   ⚠️ Error setting up tabs: {e}")
 
 
 def get_previous_month_spreadsheets(client, drive_service, current_period_str, months_back=6):
@@ -2271,36 +2367,33 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     rows = []
     
-    # Row 1: Logo aligned left
-    rows.append(["", f'=IMAGE("{LOGO_URL}", 4, 70, 70)', "", "", "", "", "", ""])
+    # Row 1: Company name (left) + Logo (right in column G)
+    rows.append(["", "AURA DENTAL CLINIC", "", "", "", "", f'=IMAGE("{LOGO_URL}", 4, 70, 70)', ""])
     
-    # Row 2: Company name + PAYSLIP title on same conceptual line
-    rows.append(["", "AURA DENTAL CLINIC", "", "", "", "", "", ""])
-    
-    # Row 3: Large PAYSLIP title
+    # Row 2: Large PAYSLIP title (logo continues from row 1)
     rows.append(["", "PAYSLIP", "", "", "", "", "", ""])
     
-    # Row 4: Spacer
+    # Row 3: Spacer
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Row 5-8: Employee Info Card (2 columns layout) - NO generated date
+    # Row 4-7: Employee Info Card (2 columns layout)
     rows.append(["", "Performer", config['display_name'], "", "Period", period_str, "", ""])
     rows.append(["", "Practice", PRACTICE_NAME, "", "Payment Date", payment_str, "", ""])
     
-    # Show NHS period for NHS dentists, Role for others
+    # Show NHS period for NHS dentists, Role text updated
     nhs_period = payslip.get('nhs_period', '')
     if dentist_name in NHS_DENTISTS:
         nhs_period_display = nhs_period if nhs_period else "Not yet entered"
-        rows.append(["", "Role", "Associate Dentist (NHS)", "", "NHS Period", nhs_period_display, "", ""])
+        rows.append(["", "Role", "Associate Dentist (Mixed)", "", "NHS Period", nhs_period_display, "", ""])
     else:
-        rows.append(["", "Role", "Associate Dentist", "", "", "", "", ""])
+        rows.append(["", "Role", "Associate Dentist (Private)", "", "", "", "", ""])
     
     rows.append(["", "Superannuation", "Opted Out", "", "", "", "", ""])
     
-    # Row 9: Spacer
+    # Row 8: Spacer
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Row 10: TOTAL EARNINGS BANNER
+    # Row 9: TOTAL EARNINGS BANNER
     total_earnings_row = len(rows) + 1
     rows.append(["", "TOTAL EARNINGS", "", "", "", "", total_payment, ""])
     
@@ -2426,6 +2519,11 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     rows.append(["", "", "", "", "", "", "", ""])
     
+    # Debug: Print lab_bills_details
+    print(f"      Lab bills details for {dentist_name}: {len(lab_bills_details)} invoices")
+    for detail in lab_bills_details:
+        print(f"         - {detail.get('lab_name')}: £{detail.get('amount', 0):.2f}, file_id: {detail.get('file_id', 'NONE')[:20]}...")
+    
     # Lab invoice column headers
     lab_col_row = len(rows) + 1
     rows.append(["", "Lab Name", "Amount", "Invoice Link", "", "", "", ""])
@@ -2437,13 +2535,18 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             file_id = lab_detail.get('file_id', '')
             lab_name = lab_detail.get('lab_name', 'Unknown')
             amount = lab_detail.get('amount', 0)
-            filename = lab_detail.get('filename', '')[:30]
+            # Clean filename - remove quotes and special chars that break HYPERLINK
+            filename = lab_detail.get('filename', '')[:30] if lab_detail.get('filename') else ''
+            filename_clean = filename.replace('"', '').replace("'", '').replace('\\', '') if filename else ''
+            
+            # Use lab_name as link text if no filename
+            link_text = filename_clean if filename_clean else f"View {lab_name} invoice"
             
             # Create clickable link
             if file_id:
-                link = f'=HYPERLINK("https://drive.google.com/file/d/{file_id}/view", "{filename}")'
+                link = f'=HYPERLINK("https://drive.google.com/file/d/{file_id}/view", "{link_text}")'
             else:
-                link = filename
+                link = "No link available"
             
             rows.append(["", lab_name, amount, link, "", "", "", ""])
     else:
@@ -2487,59 +2590,59 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             }
         },
         
-        # Column widths - WIDENED F and H
+        # Column widths - H widened for discrepancy notes
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 20}, 'fields': 'pixelSize'}},   # A: margin
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 200}, 'fields': 'pixelSize'}},  # B: names
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 200}, 'fields': 'pixelSize'}},  # C: details
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 3, 'endIndex': 4}, 'properties': {'pixelSize': 180}, 'fields': 'pixelSize'}},  # D: links/status
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 3, 'endIndex': 4}, 'properties': {'pixelSize': 100}, 'fields': 'pixelSize'}},  # D: status
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5}, 'properties': {'pixelSize': 150}, 'fields': 'pixelSize'}},  # E: labels
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 180}, 'fields': 'pixelSize'}},  # F: values - WIDENED
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 5, 'endIndex': 6}, 'properties': {'pixelSize': 180}, 'fields': 'pixelSize'}},  # F: values
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 6, 'endIndex': 7}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},  # G: amounts
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 80}, 'fields': 'pixelSize'}},   # H: margin - WIDENED
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 7, 'endIndex': 8}, 'properties': {'pixelSize': 150}, 'fields': 'pixelSize'}},  # H: notes - WIDENED for discrepancies
         
-        # Row 1 height for logo (70px)
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 70}, 'fields': 'pixelSize'}},
-        
-        # Row 2: Company name in Aura Gold (10pt)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 3},
+        # Row 1: Company name in Aura Gold + taller for logo
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 35}, 'fields': 'pixelSize'}},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 1, 'startColumnIndex': 1, 'endColumnIndex': 3},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'foregroundColor': SHEET_COLORS['aura_gold']}}},
             'fields': 'userEnteredFormat.textFormat'}},
         
-        # Row 3: Large PAYSLIP title (28pt bold)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 2, 'endRowIndex': 3, 'startColumnIndex': 1, 'endColumnIndex': 4},
+        # Row 2: Large PAYSLIP title (28pt bold)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 1, 'endColumnIndex': 4},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 28, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
             'fields': 'userEnteredFormat.textFormat'}},
-        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 45}, 'fields': 'pixelSize'}},
+        {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 45}, 'fields': 'pixelSize'}},
         
-        # Employee Info Card - Labels (gray 9pt)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 8, 'startColumnIndex': 1, 'endColumnIndex': 2},
+        # Employee Info Card - Labels (gray 9pt) - rows 4-7 (indices 3-6)
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 1, 'endColumnIndex': 2},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 9, 'foregroundColor': SHEET_COLORS['label_gray']}}},
             'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 8, 'startColumnIndex': 4, 'endColumnIndex': 5},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 4, 'endColumnIndex': 5},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 9, 'foregroundColor': SHEET_COLORS['label_gray']}}},
             'fields': 'userEnteredFormat.textFormat'}},
         
         # Employee Info Card - Values (bold 10pt)
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 8, 'startColumnIndex': 2, 'endColumnIndex': 3},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 2, 'endColumnIndex': 3},
             'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
             'fields': 'userEnteredFormat.textFormat'}},
-        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 4, 'endRowIndex': 8, 'startColumnIndex': 5, 'endColumnIndex': 6},
-            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}}},
-            'fields': 'userEnteredFormat.textFormat'}},
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 3, 'endRowIndex': 7, 'startColumnIndex': 5, 'endColumnIndex': 6},
+            'cell': {'userEnteredFormat': {'textFormat': {'fontSize': 10, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_dark']}, 'horizontalAlignment': 'RIGHT'}},
+            'fields': 'userEnteredFormat.textFormat,userEnteredFormat.horizontalAlignment'}},
         
-        # TOTAL EARNINGS BANNER - Dark background, white text, gold amount
+        # TOTAL EARNINGS BANNER - Dark background, white text, VERTICALLY CENTERED, gold amount
         {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': total_earnings_row - 1, 'endRowIndex': total_earnings_row, 'startColumnIndex': 1, 'endColumnIndex': 7},
             'cell': {'userEnteredFormat': {
                 'backgroundColor': SHEET_COLORS['aura_dark'],
-                'textFormat': {'fontSize': 14, 'bold': True, 'foregroundColor': SHEET_COLORS['white']}}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}},
+                'textFormat': {'fontSize': 14, 'bold': True, 'foregroundColor': SHEET_COLORS['white']},
+                'verticalAlignment': 'MIDDLE'}},
+            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.verticalAlignment'}},
         {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': total_earnings_row - 1, 'endRowIndex': total_earnings_row, 'startColumnIndex': 6, 'endColumnIndex': 7},
             'cell': {'userEnteredFormat': {
                 'backgroundColor': SHEET_COLORS['aura_dark'],
                 'textFormat': {'fontSize': 16, 'bold': True, 'foregroundColor': SHEET_COLORS['aura_gold']},
                 'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'},
-                'horizontalAlignment': 'RIGHT'}},
-            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}},
+                'horizontalAlignment': 'RIGHT',
+                'verticalAlignment': 'MIDDLE'}},
+            'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment'}},
         {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': total_earnings_row - 1, 'endIndex': total_earnings_row}, 'properties': {'pixelSize': 40}, 'fields': 'pixelSize'}},
         
         # Section headers (EARNINGS BREAKDOWN, DEDUCTIONS, etc.) - 11pt bold with gold underline
@@ -2996,7 +3099,7 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
                         }
                     })
                 
-                # Currency format for Amount columns (D and E)
+                # Accounting format for Amount columns (D and E) - LEFT ALIGNED
                 for row_num in action_dropdown_rows:
                     requests.append({
                         'repeatCell': {
@@ -3009,10 +3112,11 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
                             },
                             'cell': {
                                 'userEnteredFormat': {
-                                    'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}
+                                    'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'},
+                                    'horizontalAlignment': 'LEFT'
                                 }
                             },
-                            'fields': 'userEnteredFormat.numberFormat'
+                            'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'
                         }
                     })
                 
