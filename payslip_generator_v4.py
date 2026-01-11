@@ -2235,13 +2235,17 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     # Rows 2-6: Info section
     rows.append(["", "Payslip Date:", payment_str, "", "", "", "", ""])
     rows.append(["", "Private Period:", period_str, "", "", "", "", ""])
+    
+    # Show NHS period for NHS dentists - RIGHT BELOW Private Period
+    nhs_period = payslip.get('nhs_period', '')
+    if dentist_name in NHS_DENTISTS:
+        if nhs_period:
+            rows.append(["", "NHS Period:", nhs_period, "", "", "", "", ""])
+        else:
+            rows.append(["", "NHS Period:", "Not yet entered", "", "", "", "", ""])
+    
     rows.append(["", "Performer:", config['display_name'], "", "", "", "", ""])
     rows.append(["", "Practice:", PRACTICE_NAME, "", "", "", "", ""])
-    
-    # Show NHS period for NHS dentists
-    nhs_period = payslip.get('nhs_period', '')
-    if dentist_name in NHS_DENTISTS and nhs_period:
-        rows.append(["", "NHS Period:", nhs_period, "", "", "", "", ""])
     
     rows.append(["", "Superannuation Status:", "Opted Out", "", "", "", "", ""])
     
