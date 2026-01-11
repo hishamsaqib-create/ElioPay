@@ -75,7 +75,7 @@ jobs:
           # Determine which mode to run
           if [ "${{ github.event.inputs.setup_sheets }}" == "true" ]; then
             echo "🎨 Running professional sheet setup..."
-            python setup_sheets_v3.py
+            python setup_sheets_v4.py
           
           elif [ "${{ github.event.inputs.sheets_only }}" == "true" ]; then
             echo "📊 Sheets-only mode - skipping Dentally API"
