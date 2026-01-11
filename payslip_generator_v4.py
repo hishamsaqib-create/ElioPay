@@ -2023,8 +2023,8 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     if nhs_income > 0 or dentist_name in NHS_DENTISTS:
         rows.append(["", "Section 1b: NHS Income", "", "", "", "", "", ""])
-        rows.append(["", "", "", "", f"UDAs Achieved", "", nhs_udas if nhs_udas else "Enter manually", ""])
-        rows.append(["", "", "", "", f"UDA Rate", "", f"£{nhs_uda_rate}" if nhs_uda_rate else "£15/16", ""])
+        rows.append(["", "", "", "", "UDAs Achieved", nhs_udas if nhs_udas else "Enter manually", "", ""])
+        rows.append(["", "", "", "", "UDA Rate (£ per UDA)", nhs_uda_rate if nhs_uda_rate else "15/16", "", ""])
         rows.append(["", "NHS Total", "", "", "", "", nhs_income if nhs_income else 0, ""])
         rows.append(["", "", "", "", "", "", "", ""])  # spacer
     
