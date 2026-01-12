@@ -145,7 +145,7 @@ DENTISTS = {
 }
 
 # Therapist (for tracking therapy work)
-THERAPIST_ID = 288298  # Taryn Dawson
+THERAPIST_ID = 189343  # Taryn Dawson
 
 # Reverse lookup: practitioner_id -> dentist_name
 PRACTITIONER_TO_DENTIST = {
@@ -458,8 +458,8 @@ def get_appointments_for_period(start_date, end_date, practitioner_id=None):
     
     while True:
         params = {
-            "start_time_from": start_date.strftime("%Y-%m-%d"),
-            "start_time_to": end_date.strftime("%Y-%m-%d"),
+            "after": start_date.strftime("%Y-%m-%d"),
+            "before": (end_date + timedelta(days=1)).strftime("%Y-%m-%d"),  # Include end date
             "site_id": DENTALLY_SITE_ID,
             "page": page,
             "per_page": 100
@@ -515,7 +515,7 @@ def get_patient_appointments(patient_id, before_date=None):
         }
         
         if before_date:
-            params["start_time_to"] = before_date.strftime("%Y-%m-%d")
+            params["before"] = before_date.strftime("%Y-%m-%d")
         
         data = dentally_request("appointments", params)
         if not data:
@@ -620,15 +620,15 @@ def calculate_therapy_minutes(start_date, end_date):
     taryn_appointments = get_appointments_for_period(start_date, end_date, practitioner_id=THERAPIST_ID)
     
     # Filter to completed appointments only
-    # Dentally states: booked, confirmed, arrived, seated, completed, cancelled, no_show
+    # Dentally states: Pending, Confirmed, Arrived, In surgery, Completed, Cancelled, Did not attend
+    # Include "Arrived" and "In surgery" as these indicate the appointment happened
     completed_appointments = [
         appt for appt in taryn_appointments 
-        if appt.get("state") in ["completed", "arrived", "seated", "checked_in"]
-        or appt.get("finished", False)
-        or appt.get("completed", False)
+        if appt.get("state") in ["Completed", "In surgery", "Arrived"]
+        or appt.get("completed_at") is not None
     ]
     
-    print(f"   Found {len(taryn_appointments)} total appointments, {len(completed_appointments)} completed")
+    print(f"   Found {len(taryn_appointments)} total appointments, {len(completed_appointments)} completed/attended")
     
     # Debug: show appointment states found
     if taryn_appointments:
@@ -2587,6 +2587,7 @@ def update_dashboard(spreadsheet, payslips, period_str):
     - All data: 10pt
     - Title: 16pt
     - Section headers: 12pt
+    - PDF download links for each dentist
     """
     print("   Updating Dashboard...")
     
@@ -2602,6 +2603,9 @@ def update_dashboard(spreadsheet, payslips, period_str):
     except Exception as e:
         print(f"      ❌ Error accessing Dashboard: {e}")
         return
+    
+    # Get spreadsheet ID for PDF links
+    spreadsheet_id = spreadsheet.id
     
     # Build complete dashboard structure
     rows = []
@@ -2678,9 +2682,59 @@ def update_dashboard(spreadsheet, payslips, period_str):
         ""
     ])
     
+    # Add PDF Download section
+    rows.append([])
+    rows.append([])
+    rows.append(["", "📄 DOWNLOAD PDF PAYSLIPS", "", "", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "Click any link below to download that dentist's payslip as PDF", "", "", "", "", "", "", "", "", "", "", "", ""])
+    rows.append([])
+    
+    # We'll add the PDF links after we write the data and can get sheet IDs
+    pdf_links_start_row = len(rows) + 1
+    
+    # Placeholder rows for PDF links (will be updated with hyperlinks)
+    for name in DENTISTS.keys():
+        first_name = name.split()[0]
+        rows.append(["", f"   📥 {first_name}", "", "", "", "", "", "", "", "", "", "", "", ""])
+    
+    rows.append([])
+    rows.append(["", "💡 Tip: Right-click → 'Save link as' to download directly", "", "", "", "", "", "", "", "", "", "", "", ""])
+    
     # Clear and write all data
     sh.clear()
     sh.update(values=rows, range_name='A1')
+    time.sleep(1)
+    
+    # Now add PDF hyperlinks - need to get sheet IDs for each dentist tab
+    pdf_link_requests = []
+    row_idx = pdf_links_start_row
+    
+    for name in DENTISTS.keys():
+        first_name = name.split()[0]
+        tab_name = f"{first_name} Payslip"
+        
+        try:
+            dentist_sheet = spreadsheet.worksheet(tab_name)
+            sheet_gid = dentist_sheet.id
+            
+            # Build PDF export URL
+            pdf_url = (
+                f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?"
+                f"format=pdf&gid={sheet_gid}&portrait=true&size=A4&fitw=true&"
+                f"gridlines=false&printtitle=false&sheetnames=false&pagenum=false&fzr=false&"
+                f"top_margin=0.5&bottom_margin=0.5&left_margin=0.5&right_margin=0.5"
+            )
+            
+            # Update cell with hyperlink
+            cell_address = f"B{row_idx}"
+            link_text = f"📥 {first_name} Payslip"
+            sh.update(cell_address, f'=HYPERLINK("{pdf_url}", "{link_text}")', value_input_option='USER_ENTERED')
+            
+        except Exception as e:
+            print(f"      Note: Could not create PDF link for {first_name}: {e}")
+        
+        row_idx += 1
+    
     time.sleep(1)
 
 
@@ -3165,6 +3219,19 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         spreadsheet.batch_update({'requests': format_requests})
     except Exception as e:
         print(f"      Note: Formatting error: {e}")
+    
+    # Add PDF download link in cell H1
+    try:
+        spreadsheet_id = spreadsheet.id
+        pdf_url = (
+            f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?"
+            f"format=pdf&gid={sheet_id}&portrait=true&size=A4&fitw=true&"
+            f"gridlines=false&printtitle=false&sheetnames=false&pagenum=false&fzr=false&"
+            f"top_margin=0.5&bottom_margin=0.5&left_margin=0.5&right_margin=0.5"
+        )
+        sh.update('H2', f'=HYPERLINK("{pdf_url}", "📥 Download PDF")', value_input_option='USER_ENTERED')
+    except Exception as e:
+        print(f"      Note: Could not add PDF link: {e}")
 
 
 def update_finance_flags(spreadsheet, finance_flags):
@@ -3416,10 +3483,10 @@ def update_payslip_checklist(spreadsheet, period_str, payslips, finance_flags, t
         ["", "☐", "   Check patient lists look correct", "", "", "", ""],
         ["", "☐", "   Verify any flagged items (○ status)", "", "", "", ""],
         ["", "", "", "", "", "", ""],
-        ["", "✅", "STEP 8: GENERATE PDFs", "", "", "", ""],
-        ["", "☐", "   Use Extensions > Apps Script > generateAllPDFs()", "", "", "", ""],
-        ["", "☐", "   Or generate individually per dentist", "", "", "", ""],
-        ["", "☐", "   PDFs saved to Payslips folder in Drive", "", "", "", ""],
+        ["", "✅", "STEP 8: DOWNLOAD PDFs", "", "", "", ""],
+        ["", "☐", "   Go to Dashboard tab - PDF links at bottom", "", "", "", ""],
+        ["", "☐", "   Click each '📥 Download PDF' link", "", "", "", ""],
+        ["", "☐", "   Or: Each payslip tab has download link in top-right", "", "", "", ""],
         ["", "", "", "", "", "", ""],
         ["", "✅", "STEP 9: DISTRIBUTE", "", "", "", ""],
         ["", "☐", "   Email/send PDF to each dentist", "", "", "", ""],
@@ -3437,6 +3504,9 @@ def update_payslip_checklist(spreadsheet, period_str, payslips, finance_flags, t
     
     sh.update(values=rows, range_name='A1')
     time.sleep(1)
+
+
+def read_confirmed_adjustments(spreadsheet, dentist_name):
     """
     Read confirmed discrepancy adjustments from a dentist's payslip sheet.
     Returns list of adjustments to apply.
