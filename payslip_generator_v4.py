@@ -2497,24 +2497,13 @@ def setup_new_payslip_spreadsheet(spreadsheet, period_str):
         except Exception as e:
             print(f"      ⚠️ Could not rename Sheet1: {e}")
         
-        # Create required tabs in the right order
-        # Order: Dashboard (already exists), Dentist Payslips, then admin tabs
-        
-        # First create dentist payslip tabs (these should be right after Dashboard)
+        # Create dentist payslip tabs only (no admin tabs)
         dentist_tabs = []
         for dentist_name in DENTISTS.keys():
             first_name = dentist_name.split()[0]
             dentist_tabs.append(f"{first_name} Payslip")
         
-        # Then admin tabs at the end
-        admin_tabs = [
-            "Checklist",
-            "Lab Bills Log",
-            "Finance Flags",
-            "Therapy Minutes"
-        ]
-        
-        # Create dentist tabs first
+        # Create dentist tabs
         created_count = 0
         for tab_name in dentist_tabs:
             try:
@@ -2524,19 +2513,9 @@ def setup_new_payslip_spreadsheet(spreadsheet, period_str):
             except Exception as e:
                 print(f"      ⚠️ Could not create {tab_name}: {e}")
         
-        # Then create admin tabs
-        for tab_name in admin_tabs:
-            try:
-                spreadsheet.add_worksheet(title=tab_name, rows=500, cols=12)
-                created_count += 1
-                print(f"      Created tab: {tab_name}")
-            except Exception as e:
-                print(f"      ⚠️ Could not create {tab_name}: {e}")
+        print(f"   ✅ Created {created_count}/{len(dentist_tabs)} tabs")
         
-        total_tabs = len(dentist_tabs) + len(admin_tabs)
-        print(f"   ✅ Created {created_count}/{total_tabs} tabs")
-        
-        # Reorder tabs: Dashboard first, then dentist payslips, then admin
+        # Reorder tabs: Dashboard first, then dentist payslips
         try:
             worksheets = spreadsheet.worksheets()
             reorder_requests = []
@@ -2568,12 +2547,10 @@ def setup_new_payslip_spreadsheet(spreadsheet, period_str):
             
             if reorder_requests:
                 spreadsheet.batch_update({'requests': reorder_requests})
-                print(f"   ✅ Tabs reordered: Dashboard → Payslips → Admin")
+                print(f"   ✅ Tabs reordered: Dashboard → Payslips")
                 
         except Exception as e:
             print(f"   ⚠️ Could not reorder tabs: {e}")
-        
-        print(f"   ✅ Created {created_count}/{len(tabs_to_create)} tabs")
         
         # Small delay for API rate limiting
         time.sleep(2)
@@ -2851,9 +2828,8 @@ def update_dashboard(spreadsheet, payslips, period_str):
     # Quick actions
     rows.append(["", "QUICK ACTIONS", "", "", "", "", "", "", ""])
     rows.append(["", "───────────────────────────────────", "", "", "", "", "", "", ""])
-    rows.append(["", "📋 See 'Checklist' tab for step-by-step workflow", "", "", "", "", "", "", ""])
-    rows.append(["", "💳 See 'Finance Flags' tab to enter finance terms", "", "", "", "", "", "", ""])
-    rows.append(["", "🦷 See 'Therapy Minutes' tab for therapy breakdown", "", "", "", "", "", "", ""])
+    rows.append(["", "💡 Use menu: Aura Tools → Download Payslips", "", "", "", "", "", "", ""])
+    rows.append(["", "💡 Use menu: Aura Tools → Update Discrepancies", "", "", "", "", "", "", ""])
     rows.append(["", "", "", "", "", "", "", "", ""])
     rows.append(["", "💡 Click the 📥 links above to download PDF payslips", "", "", "", "", "", "", ""])
     
@@ -5643,20 +5619,20 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                 print(f"   ✅ {name.split()[0]} Payslip")
                 time.sleep(2)  # Rate limit protection
             
-            # Update finance flags
-            if finance_flags:
-                update_finance_flags(spreadsheet, finance_flags)
-                print(f"   ⚠️ {len(finance_flags)} finance payments need term length")
+            # DISABLED: Finance flags tab removed
+            # if finance_flags:
+            #     update_finance_flags(spreadsheet, finance_flags)
+            #     print(f"   ⚠️ {len(finance_flags)} finance payments need term length")
             
-            # Update therapy minutes tab
-            if therapy_details or unassigned_therapy:
-                update_therapy_tab(spreadsheet, therapy_details, unassigned_therapy, period_str)
-                total_therapy_mins = sum(d.get("total_minutes", 0) for d in therapy_details.values())
-                print(f"   ✅ Therapy Minutes: {total_therapy_mins} min total")
+            # DISABLED: Therapy minutes tab removed (breakdown in individual payslips)
+            # if therapy_details or unassigned_therapy:
+            #     update_therapy_tab(spreadsheet, therapy_details, unassigned_therapy, period_str)
+            #     total_therapy_mins = sum(d.get("total_minutes", 0) for d in therapy_details.values())
+            #     print(f"   ✅ Therapy Minutes: {total_therapy_mins} min total")
             
-            # Update checklist tab
-            update_payslip_checklist(spreadsheet, period_str, payslips, finance_flags, therapy_details, unassigned_therapy)
-            print(f"   ✅ Checklist created")
+            # DISABLED: Checklist tab removed
+            # update_payslip_checklist(spreadsheet, period_str, payslips, finance_flags, therapy_details, unassigned_therapy)
+            # print(f"   ✅ Checklist created")
             
             # Perform cross-reference with dentist logs (results go to individual payslips)
             client = get_sheets_client()
@@ -5678,9 +5654,9 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                     update_payslip_therapy_breakdown(spreadsheet, dentist_name, data)
             print("   ✅ Therapy breakdowns added")
             
-            # Update duplicate check tab
-            if all_duplicates:
-                update_duplicate_check_tab(spreadsheet, all_duplicates, period_str)
+            # DISABLED: Duplicate check tab removed
+            # if all_duplicates:
+            #     update_duplicate_check_tab(spreadsheet, all_duplicates, period_str)
             
             # Perform 4-way reconciliation
             if historical_db and xref_results:
