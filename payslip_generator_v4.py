@@ -446,21 +446,54 @@ def get_payments_for_period(start_date, end_date):
 def build_invoice_payment_map(payments):
     """Build map of invoice_id -> payment_method from payments"""
     invoice_payment_map = {}
+    finance_invoice_ids = []
     
     for payment in payments:
         method = payment.get("method", "Unknown")
+        patient_id = payment.get("patient_id")
+        
         # Get invoice IDs from explanations
         explanations = payment.get("explanations", [])
         for explanation in explanations:
             invoice_id = explanation.get("invoice_id")
             if invoice_id:
                 invoice_payment_map[invoice_id] = method
+                if method.lower() == "finance":
+                    finance_invoice_ids.append(invoice_id)
     
-    # Debug: show how many have explanations
+    # Debug: show stats
     payments_with_explanations = sum(1 for p in payments if p.get("explanations"))
+    finance_payment_count = sum(1 for p in payments if p.get("method", "").lower() == "finance")
     print(f"   Payments with explanations: {payments_with_explanations}/{len(payments)}")
+    print(f"   Finance payments found: {finance_payment_count}")
+    print(f"   Invoice IDs mapped to Finance: {len(finance_invoice_ids)}")
+    
+    # Debug: show sample finance invoice IDs
+    if finance_invoice_ids:
+        print(f"   Sample Finance invoice IDs: {finance_invoice_ids[:5]}")
     
     return invoice_payment_map
+
+
+def build_patient_finance_map(payments):
+    """Build map of patient_id -> True if they have any Finance payments"""
+    patient_finance_map = {}
+    
+    for payment in payments:
+        method = payment.get("method", "Unknown")
+        patient_id = payment.get("patient_id")
+        
+        if patient_id and method.lower() == "finance":
+            patient_finance_map[patient_id] = True
+    
+    print(f"   Patients with Finance payments: {len(patient_finance_map)}")
+    
+    # Debug: show which patients
+    if patient_finance_map:
+        sample_patients = list(patient_finance_map.keys())[:5]
+        print(f"   Sample patient IDs with Finance: {sample_patients}")
+    
+    return patient_finance_map
 
 
 # =============================================================================
@@ -2885,9 +2918,9 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     # Row 8: Spacer
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Row 9: TOTAL EARNINGS BANNER
+    # Row 9: TOTAL EARNINGS BANNER (formula updated after all rows built)
     total_earnings_row = len(rows) + 1
-    rows.append(["", "TOTAL EARNINGS", "", "", "", "", total_payment, ""])
+    rows.append(["", "TOTAL EARNINGS", "", "", "", "", "CALCULATING...", ""])
     
     # Row 11: Spacer
     rows.append(["", "", "", "", "", "", "", ""])
@@ -2900,27 +2933,39 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Private Income
+    # Private Income - Track row numbers for formulas
     rows.append(["", "Private Income", "", "", "", "", "", ""])
-    rows.append(["", "", "Gross Private by Dentist", "", "", "", payslip.get('gross_private_dentist', 0), ""])
-    rows.append(["", "", "Gross Private by Therapist", "", "", "", payslip.get('gross_private_therapist', 0), ""])
-    rows.append(["", "", "Gross Total", "", "", "", payslip.get('gross_total', 0), ""])
     
-    subtotal_row = len(rows) + 1
-    rows.append(["", "", f"Net Private ({split_str})", "", "", "", payslip.get('net_private', 0), ""])
+    gross_dentist_row = len(rows) + 1
+    rows.append(["", "", "Gross Private by Dentist", "", "", "", payslip.get('gross_private_dentist', 0), ""])
+    
+    gross_therapist_row = len(rows) + 1
+    rows.append(["", "", "Gross Private by Therapist", "", "", "", payslip.get('gross_private_therapist', 0), ""])
+    
+    gross_total_row = len(rows) + 1
+    rows.append(["", "", "Gross Total", "", "", "", f"=G{gross_dentist_row}+G{gross_therapist_row}", ""])
+    
+    net_private_row = len(rows) + 1
+    rows.append(["", "", f"Net Private ({split_str})", "", "", "", f"=G{gross_total_row}*{config['split']}", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     
     # NHS Income (only for NHS dentists)
     nhs_udas = payslip.get('nhs_udas', 0)
     nhs_uda_rate = payslip.get('nhs_uda_rate', 0)
+    nhs_total_row = 0
     
     if dentist_name in NHS_DENTISTS:
         rows.append(["", "NHS Income", "", "", "", "", "", ""])
-        rows.append(["", "", "UDAs Achieved", "", "", nhs_udas if nhs_udas else "Enter manually", "", ""])
-        rows.append(["", "", "UDA Rate (£ per UDA)", "", "", f"£{nhs_uda_rate}" if nhs_uda_rate else "£15/16", "", ""])
+        
+        nhs_udas_row = len(rows) + 1
+        rows.append(["", "", "UDAs Achieved", "", "", nhs_udas if nhs_udas else 0, "", ""])
+        
+        nhs_rate_row = len(rows) + 1
+        rows.append(["", "", "UDA Rate (£ per UDA)", "", "", nhs_uda_rate if nhs_uda_rate else 15, "", ""])
+        
         nhs_total_row = len(rows) + 1
-        rows.append(["", "", "NHS Total", "", "", "", nhs_income if nhs_income else 0, ""])
+        rows.append(["", "", "NHS Total", "", "", "", f"=F{nhs_udas_row}*F{nhs_rate_row}", ""])
         rows.append(["", "", "", "", "", "", "", ""])
     
     # ============================================
@@ -2936,48 +2981,73 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     labs_with_values = {k: v for k, v in lab_bills.items() if v and v > 0}
     
     rows.append(["", "Lab Bills", "", "", "", "", "", ""])
+    lab_50_row = 0
     if labs_with_values:
+        lab_item_rows = []
         for lab_name, lab_amount in sorted(labs_with_values.items()):
+            lab_item_rows.append(len(rows) + 1)
             rows.append(["", "", lab_name, "", "", "", lab_amount, ""])
-        rows.append(["", "", "Lab Bills Total", "", "", "", payslip.get('lab_bills_total', 0), ""])
+        
+        lab_total_row = len(rows) + 1
+        if len(lab_item_rows) > 1:
+            rows.append(["", "", "Lab Bills Total", "", "", "", f"=SUM(G{lab_item_rows[0]}:G{lab_item_rows[-1]})", ""])
+        else:
+            rows.append(["", "", "Lab Bills Total", "", "", "", f"=G{lab_item_rows[0]}", ""])
+        
         lab_50_row = len(rows) + 1
-        rows.append(["", "", "Your Share (50%)", "", "", "", payslip.get('lab_bills_50', 0), ""])
+        rows.append(["", "", "Your Share (50%)", "", "", "", f"=G{lab_total_row}*0.5", ""])
     else:
         rows.append(["", "", "None this period", "", "", "", 0, ""])
+        lab_50_row = len(rows)  # Points to the 0 row
     
     rows.append(["", "", "", "", "", "", "", ""])
     
     # Finance Fees
     rows.append(["", "Finance Fees", "", "", "", "", "", ""])
+    
+    finance_total_row = len(rows) + 1
     rows.append(["", "", "Total Finance Fees", "", "", "", payslip.get('finance_fees_total', 0), ""])
-    rows.append(["", "", "Your Share (50%)", "", "", "", payslip.get('finance_fees_50', 0), ""])
+    
+    finance_50_row = len(rows) + 1
+    rows.append(["", "", "Your Share (50%)", "", "", "", f"=G{finance_total_row}*0.5", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Therapy
+    # Therapy - show minutes as numbers (not £)
     therapy_mins = payslip.get('therapy_minutes', 0)
-    therapy_appointments = payslip.get('therapy_appointments', [])
     rows.append(["", "Therapy (Taryn Dawson)", "", "", "", "", "", ""])
     
-    if therapy_appointments:
-        # Show breakdown of therapy appointments
-        for appt in therapy_appointments:
-            patient = appt.get('patient', 'Unknown')
-            mins = appt.get('minutes', 0)
-            date = appt.get('date', '')
-            rows.append(["", "", f"{patient} ({date})", "", "", "", mins, "min"])
-        rows.append(["", "", f"Total: {therapy_mins} mins @ £0.58/min", "", "", "", payslip.get('therapy_total', 0), ""])
-    else:
-        rows.append(["", "", f"Taryn ({therapy_mins} mins @ £0.58/min)", "", "", "", payslip.get('therapy_total', 0), ""])
+    therapy_mins_row = len(rows) + 1
+    rows.append(["", "", "Minutes Referred", "", "", "", therapy_mins, ""])
+    
+    therapy_total_row = len(rows) + 1
+    rows.append(["", "", "Deduction (@ £0.58/min)", "", "", "", f"=G{therapy_mins_row}*0.583333", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     
-    # Total Deductions
+    # Total Deductions - Formula
     total_ded_row = len(rows) + 1
-    rows.append(["", "TOTAL DEDUCTIONS", "", "", "", "", payslip.get('total_deductions', 0), ""])
+    # Build formula based on which rows exist
+    ded_formula_parts = []
+    if lab_50_row:
+        ded_formula_parts.append(f"G{lab_50_row}")
+    if finance_50_row:
+        ded_formula_parts.append(f"G{finance_50_row}")
+    ded_formula_parts.append(f"G{therapy_total_row}")
+    
+    total_ded_formula = "=" + "+".join(ded_formula_parts) if ded_formula_parts else "=0"
+    rows.append(["", "TOTAL DEDUCTIONS", "", "", "", "", total_ded_formula, ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     rows.append(["", "", "", "", "", "", "", ""])
+    
+    # Update TOTAL EARNINGS formula (row 10, index 9 in rows array)
+    # Total = Net Private + NHS - Total Deductions
+    if nhs_total_row:
+        total_formula = f"=G{net_private_row}+G{nhs_total_row}-G{total_ded_row}"
+    else:
+        total_formula = f"=G{net_private_row}-G{total_ded_row}"
+    rows[total_earnings_row - 1][6] = total_formula
     
     # ============================================
     # SECTION 3: PATIENT BREAKDOWN
@@ -3012,10 +3082,11 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         ])
     patient_end_row = len(rows)
     
-    # Summary row
+    # Summary row with SUM formula
     patient_summary_row = len(rows) + 1
     finance_note = f" ({finance_patient_count} via Finance 💳)" if finance_patient_count > 0 else ""
-    rows.append(["", f"Total: {len(patients)} patients{finance_note}", "", "", sum(p.get('paid_amount', p.get('amount', 0)) for p in patients), "", "", ""])
+    patient_sum_formula = f"=SUM(E{patient_start_row}:E{patient_end_row})" if patients else "0"
+    rows.append(["", f"Total: {len(patients)} patients{finance_note}", "", "", patient_sum_formula, "", "", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     rows.append(["", "", "", "", "", "", "", ""])
@@ -3081,6 +3152,9 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
         rows.append(["", "No lab invoices this period", "", "", "", "", "", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
+    
+    # NOTE: Therapy referrals breakdown is added AFTER discrepancies section
+    # via update_payslip_therapy_breakdown() function
     
     # Write all data
     sh.update(values=rows, range_name='A1', value_input_option='USER_ENTERED')
@@ -3935,6 +4009,97 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
         time.sleep(1)  # Rate limit protection
 
 
+def update_payslip_therapy_breakdown(spreadsheet, dentist_name, payslip):
+    """
+    Add therapy referrals breakdown to the END of a dentist's payslip.
+    Called AFTER discrepancies are added.
+    
+    Shows minutes as plain numbers (not currency).
+    """
+    therapy_appointments = payslip.get('therapy_appointments', [])
+    if not therapy_appointments:
+        return
+    
+    first_name = dentist_name.split()[0]
+    tab_name = f"{first_name} Payslip"
+    
+    try:
+        sh = spreadsheet.worksheet(tab_name)
+    except:
+        print(f"   ⚠️ Tab not found: {tab_name}")
+        return
+    
+    # Get current data to find where to append
+    existing = sh.get_all_values()
+    next_row = len(existing) + 3  # Leave 2 blank rows
+    
+    therapy_rows = []
+    
+    # Header
+    therapy_rows.extend([
+        ["", "", "", "", "", "", "", ""],
+        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
+        ["", "🦷 THERAPY REFERRALS (Taryn Dawson)", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "Patient Name", "Date", "Minutes", "", "", "", ""],  # Minutes as header, not Amount
+    ])
+    
+    # Appointment rows - minutes as plain numbers
+    therapy_start_row = next_row + len(therapy_rows)
+    for appt in therapy_appointments:
+        patient = appt.get('patient', 'Unknown')
+        date = appt.get('date', '')
+        mins = appt.get('minutes', 0)  # Plain number, no formatting
+        therapy_rows.append(["", patient, date, mins, "", "", "", ""])
+    therapy_end_row = next_row + len(therapy_rows) - 1
+    
+    # Total row with formula
+    therapy_rows.append(["", "", "", "", "", "", "", ""])
+    total_row = next_row + len(therapy_rows)
+    therapy_rows.append([
+        "", 
+        "Total:", 
+        "", 
+        f"=SUM(D{therapy_start_row}:D{therapy_end_row})",  # Sum minutes
+        "mins",
+        f"=D{total_row}*0.583333",  # Calculate £ value
+        "",
+        ""
+    ])
+    therapy_rows.append(["", "", "", "", "@ £0.58/min", "", "", ""])
+    
+    # Write data
+    sh.update(
+        values=therapy_rows, 
+        range_name=f'A{next_row}',
+        value_input_option='USER_ENTERED'
+    )
+    
+    # Apply minimal formatting - keep minutes as plain numbers
+    sheet_id = sh.id
+    
+    try:
+        format_requests = [
+            # Header formatting
+            {'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': next_row + 1, 'endRowIndex': next_row + 2, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'cell': {'userEnteredFormat': {'textFormat': {'bold': True}}},
+                'fields': 'userEnteredFormat.textFormat'
+            }},
+            # Currency format ONLY for the £ calculation column (F)
+            {'repeatCell': {
+                'range': {'sheetId': sheet_id, 'startRowIndex': total_row - 1, 'endRowIndex': total_row, 'startColumnIndex': 5, 'endColumnIndex': 6},
+                'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}}},
+                'fields': 'userEnteredFormat.numberFormat'
+            }},
+        ]
+        spreadsheet.batch_update({'requests': format_requests})
+    except Exception as e:
+        print(f"      Note: Could not format therapy breakdown: {e}")
+    
+    time.sleep(0.5)
+
+
 def update_cross_reference(spreadsheet, xref_results, period_str):
     """Update Cross-Reference tab with comparison results"""
     print("   Updating Cross-Reference tab...")
@@ -4576,10 +4741,12 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
     payment_end = end_date + timedelta(days=30)
     payments = get_payments_for_period(payment_start, payment_end)
     invoice_payment_map = build_invoice_payment_map(payments)
+    patient_finance_map = build_patient_finance_map(payments)  # Backup: check patient directly
     
     # Count finance payments
     finance_count = sum(1 for m in invoice_payment_map.values() if m.lower() == "finance")
     print(f"   Mapped {len(invoice_payment_map)} invoice payment methods ({finance_count} Finance)")
+    print(f"   Patient-level finance detection: {len(patient_finance_map)} patients")
     
     # Patient name cache
     patient_cache = {}
@@ -4618,8 +4785,21 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
             debug_logged = True
         
         # Check if this invoice was paid via Finance (Tabeo)
+        # Method 1: Check invoice -> payment explanation link
         payment_method = invoice_payment_map.get(invoice_id, "Unknown")
         is_finance_payment = payment_method.lower() == "finance"
+        
+        # Method 2: Backup - check if patient has any Finance payments in period
+        if not is_finance_payment and patient_id in patient_finance_map:
+            is_finance_payment = True
+            
+        # Debug: Log when finance is detected
+        if is_finance_payment and not debug_logged:
+            print(f"\n   💳 DEBUG: Finance payment detected!")
+            print(f"      Invoice ID: {invoice_id}")
+            print(f"      Patient ID: {patient_id}")
+            print(f"      Method 1 (invoice map): {payment_method}")
+            print(f"      Method 2 (patient map): {patient_id in patient_finance_map}")
         
         # Process line items - group by practitioner
         for item in line_items:
@@ -5445,6 +5625,13 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                         update_payslip_discrepancies(spreadsheet, dentist_name, xref)
                         time.sleep(1)  # Rate limit protection
                 print("   ✅ Discrepancies added to payslips")
+            
+            # Add therapy breakdown AFTER discrepancies
+            print("   Adding therapy breakdowns to payslips...")
+            for dentist_name, data in payslips.items():
+                if data.get('therapy_appointments'):
+                    update_payslip_therapy_breakdown(spreadsheet, dentist_name, data)
+            print("   ✅ Therapy breakdowns added")
             
             # Update duplicate check tab
             if all_duplicates:
