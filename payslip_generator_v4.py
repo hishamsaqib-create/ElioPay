@@ -433,13 +433,21 @@ def get_payments_for_period(start_date, end_date):
             break
         page += 1
     
-    # Count methods
+    # Count methods - show ALL types
     method_counts = {}
     for p in all_payments:
         m = p.get("method", "Unknown")
         method_counts[m] = method_counts.get(m, 0) + 1
     
-    print(f"   Found {len(all_payments)} payments: {method_counts}")
+    print(f"   Found {len(all_payments)} payments")
+    print(f"   Payment methods breakdown: {method_counts}")
+    
+    # Check for any finance-like methods
+    finance_keywords = ['finance', 'tabeo', 'payment plan', 'credit']
+    for method in method_counts.keys():
+        if any(kw in method.lower() for kw in finance_keywords):
+            print(f"   💳 Found potential finance method: '{method}' ({method_counts[method]} payments)")
+    
     return all_payments
 
 
@@ -2489,27 +2497,81 @@ def setup_new_payslip_spreadsheet(spreadsheet, period_str):
         except Exception as e:
             print(f"      ⚠️ Could not rename Sheet1: {e}")
         
-        # Create required tabs
-        tabs_to_create = [
+        # Create required tabs in the right order
+        # Order: Dashboard (already exists), Dentist Payslips, then admin tabs
+        
+        # First create dentist payslip tabs (these should be right after Dashboard)
+        dentist_tabs = []
+        for dentist_name in DENTISTS.keys():
+            first_name = dentist_name.split()[0]
+            dentist_tabs.append(f"{first_name} Payslip")
+        
+        # Then admin tabs at the end
+        admin_tabs = [
             "Checklist",
             "Lab Bills Log",
             "Finance Flags",
             "Therapy Minutes"
         ]
         
-        # Add dentist payslip tabs
-        for dentist_name in DENTISTS.keys():
-            first_name = dentist_name.split()[0]
-            tabs_to_create.append(f"{first_name} Payslip")
-        
+        # Create dentist tabs first
         created_count = 0
-        for tab_name in tabs_to_create:
+        for tab_name in dentist_tabs:
             try:
                 spreadsheet.add_worksheet(title=tab_name, rows=500, cols=12)
                 created_count += 1
                 print(f"      Created tab: {tab_name}")
             except Exception as e:
                 print(f"      ⚠️ Could not create {tab_name}: {e}")
+        
+        # Then create admin tabs
+        for tab_name in admin_tabs:
+            try:
+                spreadsheet.add_worksheet(title=tab_name, rows=500, cols=12)
+                created_count += 1
+                print(f"      Created tab: {tab_name}")
+            except Exception as e:
+                print(f"      ⚠️ Could not create {tab_name}: {e}")
+        
+        total_tabs = len(dentist_tabs) + len(admin_tabs)
+        print(f"   ✅ Created {created_count}/{total_tabs} tabs")
+        
+        # Reorder tabs: Dashboard first, then dentist payslips, then admin
+        try:
+            worksheets = spreadsheet.worksheets()
+            reorder_requests = []
+            
+            # Find Dashboard and move to position 0
+            for ws in worksheets:
+                if ws.title == "Dashboard":
+                    reorder_requests.append({
+                        'updateSheetProperties': {
+                            'properties': {'sheetId': ws.id, 'index': 0},
+                            'fields': 'index'
+                        }
+                    })
+                    break
+            
+            # Move dentist payslips to positions 1-N
+            position = 1
+            for tab_name in dentist_tabs:
+                for ws in worksheets:
+                    if ws.title == tab_name:
+                        reorder_requests.append({
+                            'updateSheetProperties': {
+                                'properties': {'sheetId': ws.id, 'index': position},
+                                'fields': 'index'
+                            }
+                        })
+                        position += 1
+                        break
+            
+            if reorder_requests:
+                spreadsheet.batch_update({'requests': reorder_requests})
+                print(f"   ✅ Tabs reordered: Dashboard → Payslips → Admin")
+                
+        except Exception as e:
+            print(f"   ⚠️ Could not reorder tabs: {e}")
         
         print(f"   ✅ Created {created_count}/{len(tabs_to_create)} tabs")
         
@@ -2937,13 +2999,17 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     rows.append(["", "Private Income", "", "", "", "", "", ""])
     
     gross_dentist_row = len(rows) + 1
-    rows.append(["", "", "Gross Private by Dentist", "", "", "", payslip.get('gross_private_dentist', 0), ""])
+    rows.append(["", "", "Gross Private (Dentally)", "", "", "", payslip.get('gross_private_dentist', 0), ""])
     
     gross_therapist_row = len(rows) + 1
     rows.append(["", "", "Gross Private by Therapist", "", "", "", payslip.get('gross_private_therapist', 0), ""])
     
+    # Manual adjustment row - user can update after reviewing discrepancies
+    adj_row = len(rows) + 1
+    rows.append(["", "", "Adjustments (+/-)", "", "", "", 0, "← Enter adjustments here"])
+    
     gross_total_row = len(rows) + 1
-    rows.append(["", "", "Gross Total", "", "", "", f"=G{gross_dentist_row}+G{gross_therapist_row}", ""])
+    rows.append(["", "", "Gross Total", "", "", "", f"=G{gross_dentist_row}+G{gross_therapist_row}+G{adj_row}", ""])
     
     net_private_row = len(rows) + 1
     rows.append(["", "", f"Net Private ({split_str})", "", "", "", f"=G{gross_total_row}*{config['split']}", ""])
@@ -3774,10 +3840,12 @@ def apply_adjustments_to_payslip(payslip, adjustments, dentist_name):
 def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
     """
     Add discrepancies section to individual dentist payslip.
-    New format with action dropdown and confirm button.
+    Includes adjustment summary that feeds back to gross calculation.
     
-    Columns: Patient Name | Date | Amount | New £ | Action | Confirm
-    Actions: Add to Pay, Remove from Pay, Update Amount
+    When checkbox is ticked:
+    - "Add to Pay" → adds New £ to gross
+    - "Remove from Pay" → subtracts Amount from gross  
+    - "Update Amount" → adds difference (New £ - Amount)
     """
     first_name = dentist_name.split()[0]
     tab_name = f"{first_name} Payslip"
@@ -3793,128 +3861,161 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
     next_row = len(existing) + 3  # Leave 2 blank rows
     
     discrepancy_rows = []
-    action_dropdown_rows = []  # Track rows that need action dropdowns
-    confirm_checkbox_rows = []  # Track rows that need confirm checkboxes
-    amount_mismatch_rows = []  # Track amount mismatch rows for column C formatting
+    data_rows = []  # Track which rows have data for formulas
     
     # Header section
     discrepancy_rows.extend([
         ["", "", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
+        ["", "─────────────────────────────────────────────────────────────", "", "", "", "", "", ""],
         ["", "⚠️ DISCREPANCIES TO REVIEW", "", "", "", "", "", ""],
-        ["", "Select action, enter amount if needed, tick Confirm to apply", "", "", "", "", "", ""],
+        ["", "1. Select action  2. Enter New £ if needed  3. Tick ✓ to apply", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
     ])
     
     has_discrepancies = False
     
-    # 1. Items in dentist log but NOT in Dentally (PM needs to check - may need to ADD)
+    # Column headers explanation for different sections
+    # For "IN LOG BUT NOT IN DENTALLY": Date | Amount | New £ | Action | ✓
+    # For "AMOUNT MISMATCH": Dentally £ | Log £ | New £ | Action | ✓
+    # For "IN DENTALLY NOT LOG": Date | Amount | New £ | Action | ✓
+    # For "UNPAID FLAGS": Date | Amount | New £ | Action | ✓
+    
+    # 1. Items in dentist log but NOT in Dentally
     log_only = xref.get("log_only", [])
     if log_only:
         has_discrepancies = True
-        discrepancy_rows.append(["", "🔴 IN LOG BUT NOT IN DENTALLY (Check if missed)", "", "", "", "", "", ""])
-        discrepancy_rows.append(["", "Patient Name", "Date", "Amount", "New £", "Action", "Confirm", ""])
+        discrepancy_rows.append(["", "🔴 IN LOG BUT NOT DENTALLY (may need to ADD)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "Patient", "Date", "Amount", "New £", "Action", "✓", ""])
         for item in log_only:
-            row_idx = len(discrepancy_rows)
+            data_rows.append(next_row + len(discrepancy_rows))
             discrepancy_rows.append([
                 "",
                 item.get("patient", ""),
                 item.get("date", ""),
                 item.get('amount', 0),
-                "",  # New £ - editable
-                "",  # Action dropdown
-                False,  # Confirm checkbox
+                "",  # New £
+                "",  # Action
+                False,  # Checkbox
                 ""
             ])
-            action_dropdown_rows.append(next_row + row_idx)
-            confirm_checkbox_rows.append(next_row + row_idx)
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
-    # 2. Amount mismatches (may need to UPDATE amount)
+    # 2. Amount mismatches
     amount_mismatch = xref.get("amount_mismatch", [])
-    amount_mismatch_rows = []  # Track these separately for column C formatting
     if amount_mismatch:
         has_discrepancies = True
-        discrepancy_rows.append(["", "🟡 AMOUNT MISMATCHES (Verify correct amount)", "", "", "", "", "", ""])
-        discrepancy_rows.append(["", "Patient Name", "Dentally £", "Log £", "New £", "Action", "Confirm", ""])
+        discrepancy_rows.append(["", "🟡 AMOUNT MISMATCH (verify correct amount)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "Patient", "Dentally £", "Log £", "New £", "Action", "✓", ""])
         for item in amount_mismatch:
-            row_idx = len(discrepancy_rows)
+            data_rows.append(next_row + len(discrepancy_rows))
             discrepancy_rows.append([
                 "",
                 item.get("patient", ""),
                 item.get('dentally_amount', 0),
                 item.get('log_amount', 0),
-                "",  # New £ - editable
-                "",  # Action dropdown
-                False,  # Confirm checkbox
+                "",  # New £
+                "",  # Action
+                False,  # Checkbox
                 ""
             ])
-            action_dropdown_rows.append(next_row + row_idx)
-            confirm_checkbox_rows.append(next_row + row_idx)
-            amount_mismatch_rows.append(next_row + row_idx)  # Track for column C formatting
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
-    # 3. Items in Dentally but NOT in log (may need to REMOVE from pay)
+    # 3. Items in Dentally but NOT in log
     dentally_only = xref.get("dentally_only", [])
     if dentally_only:
         has_discrepancies = True
-        discrepancy_rows.append(["", "🔵 IN DENTALLY BUT NOT IN LOG (Already in pay - verify)", "", "", "", "", "", ""])
-        discrepancy_rows.append(["", "Patient Name", "Date", "Amount", "New £", "Action", "Confirm", ""])
+        discrepancy_rows.append(["", "🔵 IN DENTALLY NOT LOG (already in pay - verify)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "Patient", "Date", "Amount", "New £", "Action", "✓", ""])
         for item in dentally_only:
-            row_idx = len(discrepancy_rows)
+            data_rows.append(next_row + len(discrepancy_rows))
             discrepancy_rows.append([
                 "",
                 item.get("patient", ""),
                 item.get("date", ""),
                 item.get('amount', 0),
-                "",  # New £ - editable
-                "",  # Action dropdown
-                False,  # Confirm checkbox
+                "",  # New £
+                "",  # Action
+                False,  # Checkbox
                 ""
             ])
-            action_dropdown_rows.append(next_row + row_idx)
-            confirm_checkbox_rows.append(next_row + row_idx)
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
     # 4. Unpaid/Balance flags
     unpaid_flags = xref.get("unpaid_flags", [])
     if unpaid_flags:
         has_discrepancies = True
-        discrepancy_rows.append(["", "🟠 UNPAID / BALANCE FLAGS (Not in pay - chase payment)", "", "", "", "", "", ""])
-        discrepancy_rows.append(["", "Patient Name", "Date", "Amount", "New £", "Action", "Confirm", ""])
+        discrepancy_rows.append(["", "🟠 UNPAID/BALANCE (not in pay - chase)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "Patient", "Date", "Amount", "New £", "Action", "✓", ""])
         for item in unpaid_flags:
-            row_idx = len(discrepancy_rows)
+            data_rows.append(next_row + len(discrepancy_rows))
             discrepancy_rows.append([
                 "",
                 item.get("patient", ""),
                 "",
                 item.get('amount', 0),
-                "",  # New £ - editable
-                "",  # Action dropdown
-                False,  # Confirm checkbox
+                "",  # New £
+                "",  # Action
+                False,  # Checkbox
                 item.get("flag", "")
             ])
-            action_dropdown_rows.append(next_row + row_idx)
-            confirm_checkbox_rows.append(next_row + row_idx)
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
     if not has_discrepancies:
-        discrepancy_rows.append(["", "✅ No discrepancies found - all items match!", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "✅ No discrepancies - all items match!", "", "", "", "", "", ""])
+    else:
+        # Add ADJUSTMENT SUMMARY section
+        discrepancy_rows.append(["", "", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "─────────────────────────────────────────────────────────────", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "📊 ADJUSTMENT SUMMARY (auto-calculated from ticked items)", "", "", "", "", "", ""])
+        discrepancy_rows.append(["", "", "", "", "", "", "", ""])
+        
+        # Build SUMIF formulas for adjustments
+        if data_rows:
+            first_data = data_rows[0]
+            last_data = data_rows[-1]
+            
+            adj_start = next_row + len(discrepancy_rows)
+            
+            # Row for "Add to Pay" total
+            add_formula = f'=SUMIF(F{first_data}:F{last_data},"Add to Pay",E{first_data}:E{last_data})'
+            discrepancy_rows.append(["", "Additions (Add to Pay)", "", "", add_formula, "", "", ""])
+            add_row = adj_start
+            
+            # Row for "Remove from Pay" total
+            remove_formula = f'=SUMIF(F{first_data}:F{last_data},"Remove from Pay",D{first_data}:D{last_data})'
+            discrepancy_rows.append(["", "Removals (Remove from Pay)", "", "", remove_formula, "", "", ""])
+            remove_row = adj_start + 1
+            
+            # Row for "Update Amount" differences (New £ - original)
+            # This is trickier - need array formula
+            update_formula = f'=SUMPRODUCT((F{first_data}:F{last_data}="Update Amount")*(E{first_data}:E{last_data}-D{first_data}:D{last_data}))'
+            discrepancy_rows.append(["", "Updates (difference)", "", "", update_formula, "", "", ""])
+            update_row = adj_start + 2
+            
+            discrepancy_rows.append(["", "", "", "", "", "", "", ""])
+            
+            # NET ADJUSTMENT - this is what changes the gross
+            net_adj_row = next_row + len(discrepancy_rows)
+            net_formula = f'=E{add_row}-E{remove_row}+E{update_row}'
+            discrepancy_rows.append(["", "NET ADJUSTMENT TO GROSS", "", "", net_formula, "", "", ""])
+            
+            discrepancy_rows.append(["", "", "", "", "", "", "", ""])
+            discrepancy_rows.append(["", "💡 Enter 'New £', select Action, tick ✓ → adjustment auto-calculates", "", "", "", "", "", ""])
     
-    # Update the sheet
+    # Write data
     if discrepancy_rows:
-        sh.update(values=discrepancy_rows, range_name=f'A{next_row}')
+        sh.update(values=discrepancy_rows, range_name=f'A{next_row}', value_input_option='USER_ENTERED')
         time.sleep(1)
         
-        # Add dropdowns and checkboxes using batch_update
-        if action_dropdown_rows or confirm_checkbox_rows or amount_mismatch_rows:
+        # Add dropdowns and checkboxes
+        if data_rows:
             try:
                 requests = []
                 sheet_id = sh.id
                 
-                # Add action dropdowns (column F = index 5)
-                for row_num in action_dropdown_rows:
+                for row_num in data_rows:
+                    # Action dropdown (column F = index 5)
                     requests.append({
                         'setDataValidation': {
                             'range': {
@@ -3938,9 +4039,8 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
                             }
                         }
                     })
-                
-                # Add confirm checkboxes (column G = index 6)
-                for row_num in confirm_checkbox_rows:
+                    
+                    # Confirm checkbox (column G = index 6)
                     requests.append({
                         'setDataValidation': {
                             'range': {
@@ -3951,16 +4051,13 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
                                 'endColumnIndex': 7
                             },
                             'rule': {
-                                'condition': {
-                                    'type': 'BOOLEAN'
-                                },
+                                'condition': {'type': 'BOOLEAN'},
                                 'showCustomUi': True
                             }
                         }
                     })
-                
-                # Accounting format for Amount columns (D and E) - LEFT ALIGNED
-                for row_num in action_dropdown_rows:
+                    
+                    # Currency format for Amount and New £ (columns D, E)
                     requests.append({
                         'repeatCell': {
                             'range': {
@@ -3980,33 +4077,12 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
                         }
                     })
                 
-                # Also format column C (Dentally £) for amount mismatch rows - LEFT ALIGNED
-                for row_num in amount_mismatch_rows:
-                    requests.append({
-                        'repeatCell': {
-                            'range': {
-                                'sheetId': sheet_id,
-                                'startRowIndex': row_num - 1,
-                                'endRowIndex': row_num,
-                                'startColumnIndex': 2,
-                                'endColumnIndex': 3
-                            },
-                            'cell': {
-                                'userEnteredFormat': {
-                                    'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'},
-                                    'horizontalAlignment': 'LEFT'
-                                }
-                            },
-                            'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'
-                        }
-                    })
-                
                 if requests:
                     spreadsheet.batch_update({'requests': requests})
             except Exception as e:
                 print(f"      Note: Could not add dropdowns/checkboxes: {e}")
         
-        time.sleep(1)  # Rate limit protection
+        time.sleep(1)
 
 
 def update_payslip_therapy_breakdown(spreadsheet, dentist_name, payslip):
@@ -4017,6 +4093,8 @@ def update_payslip_therapy_breakdown(spreadsheet, dentist_name, payslip):
     Shows minutes as plain numbers (not currency).
     """
     therapy_appointments = payslip.get('therapy_appointments', [])
+    print(f"      {dentist_name}: {len(therapy_appointments)} therapy appointments to add")
+    
     if not therapy_appointments:
         return
     
@@ -4033,15 +4111,18 @@ def update_payslip_therapy_breakdown(spreadsheet, dentist_name, payslip):
     existing = sh.get_all_values()
     next_row = len(existing) + 3  # Leave 2 blank rows
     
+    print(f"      Adding therapy breakdown at row {next_row}")
+    
     therapy_rows = []
     
     # Header
     therapy_rows.extend([
         ["", "", "", "", "", "", "", ""],
-        ["", "─────────────────────────────────────", "", "", "", "", "", ""],
+        ["", "─────────────────────────────────────────────────────────────", "", "", "", "", "", ""],
         ["", "🦷 THERAPY REFERRALS (Taryn Dawson)", "", "", "", "", "", ""],
+        ["", "Patients you referred this period", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
-        ["", "Patient Name", "Date", "Minutes", "", "", "", ""],  # Minutes as header, not Amount
+        ["", "Patient Name", "Date", "Minutes", "", "", "", ""],
     ])
     
     # Appointment rows - minutes as plain numbers
@@ -4049,7 +4130,7 @@ def update_payslip_therapy_breakdown(spreadsheet, dentist_name, payslip):
     for appt in therapy_appointments:
         patient = appt.get('patient', 'Unknown')
         date = appt.get('date', '')
-        mins = appt.get('minutes', 0)  # Plain number, no formatting
+        mins = appt.get('minutes', 0)
         therapy_rows.append(["", patient, date, mins, "", "", "", ""])
     therapy_end_row = next_row + len(therapy_rows) - 1
     
@@ -4060,33 +4141,38 @@ def update_payslip_therapy_breakdown(spreadsheet, dentist_name, payslip):
         "", 
         "Total:", 
         "", 
-        f"=SUM(D{therapy_start_row}:D{therapy_end_row})",  # Sum minutes
+        f"=SUM(D{therapy_start_row}:D{therapy_end_row})",
         "mins",
-        f"=D{total_row}*0.583333",  # Calculate £ value
+        f"=D{total_row}*0.583333",
         "",
         ""
     ])
     therapy_rows.append(["", "", "", "", "@ £0.58/min", "", "", ""])
     
     # Write data
-    sh.update(
-        values=therapy_rows, 
-        range_name=f'A{next_row}',
-        value_input_option='USER_ENTERED'
-    )
+    try:
+        sh.update(
+            values=therapy_rows, 
+            range_name=f'A{next_row}',
+            value_input_option='USER_ENTERED'
+        )
+        print(f"      ✅ Wrote {len(therapy_rows)} therapy rows")
+    except Exception as e:
+        print(f"      ❌ Failed to write therapy rows: {e}")
+        return
     
-    # Apply minimal formatting - keep minutes as plain numbers
+    # Apply minimal formatting
     sheet_id = sh.id
     
     try:
         format_requests = [
             # Header formatting
             {'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': next_row + 1, 'endRowIndex': next_row + 2, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'range': {'sheetId': sheet_id, 'startRowIndex': next_row + 1, 'endRowIndex': next_row + 3, 'startColumnIndex': 1, 'endColumnIndex': 5},
                 'cell': {'userEnteredFormat': {'textFormat': {'bold': True}}},
                 'fields': 'userEnteredFormat.textFormat'
             }},
-            # Currency format ONLY for the £ calculation column (F)
+            # Currency format for the £ calculation column (F)
             {'repeatCell': {
                 'range': {'sheetId': sheet_id, 'startRowIndex': total_row - 1, 'endRowIndex': total_row, 'startColumnIndex': 5, 'endColumnIndex': 6},
                 'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}}},
