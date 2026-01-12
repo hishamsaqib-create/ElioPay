@@ -68,6 +68,9 @@ SPREADSHEET_ID = os.environ.get("PAYSLIP_SPREADSHEET_ID", "1BANM1mdxxtjLAHHc8jSk
 # Monthly Payslips Folder (stores "Aura Payslips - Month Year" spreadsheets)
 PAYSLIPS_FOLDER_ID = os.environ.get("PAYSLIPS_FOLDER_ID", "")  # Folder in Shared Drive for monthly sheets
 
+# Template Spreadsheet (copy this to create new months - includes Apps Script!)
+PAYSLIP_TEMPLATE_ID = os.environ.get("PAYSLIP_TEMPLATE_ID", "120XZsyTRQ-zthGgicHEsHrsjrOI6u-O-bNUM9LhPUME")
+
 # Historical Payslips Folder (for duplicate detection)
 HISTORICAL_PAYSLIPS_FOLDER_ID = "1rcE4JFqnNj8jXHUCmQyoPn5DYDKSjNpJ"
 
@@ -2399,7 +2402,7 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
     
     - ONLY searches within the specified folder
     - If spreadsheet for this month exists, use it (overwrite)
-    - If not, create a new one DIRECTLY in the folder (avoids quota issues)
+    - If not, COPY from template (preserves Apps Script!)
     
     Args:
         client: gspread client
@@ -2448,13 +2451,50 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
         import traceback
         traceback.print_exc()
     
-    # Create new spreadsheet DIRECTLY in the folder (bypasses service account quota)
+    # Try to copy from template first (preserves Apps Script!)
+    if PAYSLIP_TEMPLATE_ID:
+        try:
+            print(f"   📋 Copying from template: {PAYSLIP_TEMPLATE_ID[:20]}...")
+            
+            # Copy the template using Drive API
+            copy_body = {
+                'name': sheet_name,
+                'parents': [folder_id]
+            }
+            
+            copied_file = drive_service.files().copy(
+                fileId=PAYSLIP_TEMPLATE_ID,
+                body=copy_body,
+                fields='id, name',
+                supportsAllDrives=True
+            ).execute()
+            
+            spreadsheet_id = copied_file.get('id')
+            print(f"   ✅ Created from template: {sheet_name}")
+            print(f"   📋 Spreadsheet ID: {spreadsheet_id}")
+            print(f"   ✅ Apps Script automatically included!")
+            
+            # Open with gspread
+            spreadsheet = client.open_by_key(spreadsheet_id)
+            
+            # Set up tabs (but Apps Script is already there!)
+            setup_new_payslip_spreadsheet(spreadsheet, period_str)
+            
+            return spreadsheet, True
+            
+        except Exception as e:
+            print(f"   ⚠️ Template copy failed: {e}")
+            print(f"   Falling back to blank spreadsheet...")
+    else:
+        print(f"   ℹ️ No PAYSLIP_TEMPLATE_ID set - creating blank spreadsheet")
+        print(f"   💡 Tip: Create a template with Apps Script for automatic inclusion")
+    
+    # Fallback: Create new spreadsheet DIRECTLY in the folder
     try:
-        # Use Drive API to create spreadsheet directly in folder
         file_metadata = {
             'name': sheet_name,
             'mimeType': 'application/vnd.google-apps.spreadsheet',
-            'parents': [folder_id]  # Create directly in folder!
+            'parents': [folder_id]
         }
         
         file = drive_service.files().create(
@@ -2466,6 +2506,7 @@ def get_or_create_monthly_spreadsheet(client, drive_service, period_str, folder_
         spreadsheet_id = file.get('id')
         print(f"   ✅ Created spreadsheet directly in folder: {sheet_name}")
         print(f"   📋 Spreadsheet ID: {spreadsheet_id}")
+        print(f"   ⚠️ Note: Apps Script not included - add manually via Extensions > Apps Script")
         
         # Open with gspread
         spreadsheet = client.open_by_key(spreadsheet_id)
