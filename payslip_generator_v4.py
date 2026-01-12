@@ -145,7 +145,21 @@ DENTISTS = {
 }
 
 # Therapist (for tracking therapy work)
-THERAPIST_ID = 189343  # Taryn Dawson
+# Taryn has two practitioner IDs in the system
+THERAPIST_ID = 189343  # Taryn Dawson (original)
+THERAPIST_ID_ALT = 288298  # Taryn Dawson (alternate)
+THERAPIST_IDS = [189343, 288298]  # Both Taryn accounts
+
+# All therapist/hygienist IDs to skip when finding referring dentist
+ALL_THERAPIST_IDS = [
+    189342,  # Colin Pritchard (Therapist)
+    189343,  # Taryn Dawson (Therapist)
+    189349,  # Karen Wraight (Hygienist)
+    189358,  # Student Student (Therapist)
+    191534,  # Kim Harrison (Therapist)
+    209545,  # Uche Okeke (Therapist)
+    288298,  # Taryn Dawson (Therapist - alternate)
+]
 
 # Reverse lookup: practitioner_id -> dentist_name
 PRACTITIONER_TO_DENTIST = {
@@ -397,6 +411,7 @@ def get_payments_for_period(start_date, end_date):
         params = {
             "dated_after": start_date.strftime("%Y-%m-%d"),
             "dated_before": end_date.strftime("%Y-%m-%d"),
+            "site_id": DENTALLY_SITE_ID,
             "page": page,
             "per_page": 100
         }
@@ -418,7 +433,13 @@ def get_payments_for_period(start_date, end_date):
             break
         page += 1
     
-    print(f"   Found {len(all_payments)} payments")
+    # Count methods
+    method_counts = {}
+    for p in all_payments:
+        m = p.get("method", "Unknown")
+        method_counts[m] = method_counts.get(m, 0) + 1
+    
+    print(f"   Found {len(all_payments)} payments: {method_counts}")
     return all_payments
 
 
@@ -429,10 +450,15 @@ def build_invoice_payment_map(payments):
     for payment in payments:
         method = payment.get("method", "Unknown")
         # Get invoice IDs from explanations
-        for explanation in payment.get("explanations", []):
+        explanations = payment.get("explanations", [])
+        for explanation in explanations:
             invoice_id = explanation.get("invoice_id")
             if invoice_id:
                 invoice_payment_map[invoice_id] = method
+    
+    # Debug: show how many have explanations
+    payments_with_explanations = sum(1 for p in payments if p.get("explanations"))
+    print(f"   Payments with explanations: {payments_with_explanations}/{len(payments)}")
     
     return invoice_payment_map
 
@@ -551,13 +577,13 @@ def find_referring_dentist(patient_id, therapy_date):
         therapy_date: Date of therapy appointment
     
     Returns:
-        Dentist name or None if not found
+        tuple: (dentist_name, practitioner_id) or (None, practitioner_id_found)
     """
     # Get patient's appointments before the therapy date
     appointments = get_patient_appointments(patient_id, before_date=therapy_date)
     
     if not appointments:
-        return None
+        return None, None
     
     # Look for the most recent dentist appointment (exam/check-up)
     # Work backwards from most recent
@@ -566,25 +592,19 @@ def find_referring_dentist(patient_id, therapy_date):
     for appt in reversed(appointments):
         practitioner_id = appt.get("practitioner_id")
         
-        # Skip if it's the therapist
-        if practitioner_id == THERAPIST_ID:
+        # Skip if it's any therapist/hygienist (not a referring dentist)
+        if practitioner_id in ALL_THERAPIST_IDS:
             continue
         
         # Check if this is one of our dentists
         dentist_name = PRACTITIONER_TO_DENTIST.get(practitioner_id)
         if dentist_name:
-            # Found a dentist appointment - this is likely the referrer
-            # Check if it looks like an exam (optional, but helpful)
-            reason = str(appt.get("reason", "")).lower()
-            treatment_description = str(appt.get("treatment_description", "")).lower()
-            
-            # If it's clearly an exam, that's definitely the referrer
-            is_exam = any(kw in reason or kw in treatment_description for kw in exam_keywords)
-            
-            # Return this dentist - either it's an exam or the most recent dentist visit
-            return dentist_name
+            return dentist_name, practitioner_id
+        else:
+            # Found a practitioner but not in our mapping - return the ID so we can debug
+            return None, practitioner_id
     
-    return None
+    return None, None
 
 
 def calculate_therapy_minutes(start_date, end_date):
@@ -611,24 +631,48 @@ def calculate_therapy_minutes(start_date, end_date):
         }
     """
     print(f"\n🦷 CALCULATING THERAPY MINUTES...")
-    print("=" * 50)
-    print(f"   Therapist: Taryn Dawson (ID: {THERAPIST_ID})")
+    print("=" * 60)
+    print(f"   Therapist: Taryn Dawson (IDs: {THERAPIST_IDS})")
     print(f"   Rate: £{THERAPY_RATE_PER_MINUTE * 60:.2f}/hour (£{THERAPY_RATE_PER_MINUTE:.4f}/min)")
+    print(f"   Period: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}")
     
-    # Get all of Taryn's appointments
-    print(f"\n   Fetching Taryn's appointments...")
-    taryn_appointments = get_appointments_for_period(start_date, end_date, practitioner_id=THERAPIST_ID)
+    # Show our practitioner mapping for debugging
+    print(f"\n   📋 Known Dentist IDs:")
+    for name, config in DENTISTS.items():
+        print(f"      {config['practitioner_id']}: {name}")
+    
+    # Get appointments for ALL Taryn IDs
+    print(f"\n   Fetching Taryn's appointments (checking both IDs)...")
+    taryn_appointments = []
+    
+    for taryn_id in THERAPIST_IDS:
+        appts = get_appointments_for_period(start_date, end_date, practitioner_id=taryn_id)
+        print(f"      ID {taryn_id}: {len(appts)} appointments")
+        taryn_appointments.extend(appts)
+    
+    print(f"   Total: {len(taryn_appointments)} appointments for Taryn")
+    
+    # Debug: Show first few raw appointments
+    if taryn_appointments:
+        print(f"\n   📋 Sample appointment data (first 3):")
+        for appt in taryn_appointments[:3]:
+            print(f"      ID: {appt.get('id')}")
+            print(f"      Patient: {appt.get('patient_name')} (ID: {appt.get('patient_id')})")
+            print(f"      Date: {appt.get('start_time')}")
+            print(f"      Duration: {appt.get('duration')} mins")
+            print(f"      State: {appt.get('state')}")
+            print(f"      Reason: {appt.get('reason')}")
+            print(f"      ---")
     
     # Filter to completed appointments only
     # Dentally states: Pending, Confirmed, Arrived, In surgery, Completed, Cancelled, Did not attend
-    # Include "Arrived" and "In surgery" as these indicate the appointment happened
     completed_appointments = [
         appt for appt in taryn_appointments 
         if appt.get("state") in ["Completed", "In surgery", "Arrived"]
         or appt.get("completed_at") is not None
     ]
     
-    print(f"   Found {len(taryn_appointments)} total appointments, {len(completed_appointments)} completed/attended")
+    print(f"\n   ✅ {len(completed_appointments)} completed/attended appointments")
     
     # Debug: show appointment states found
     if taryn_appointments:
@@ -636,20 +680,25 @@ def calculate_therapy_minutes(start_date, end_date):
         for appt in taryn_appointments:
             state = appt.get("state", "unknown")
             states[state] = states.get(state, 0) + 1
-        print(f"   Appointment states: {states}")
+        print(f"   Appointment states breakdown: {states}")
     
     if not completed_appointments:
-        print("   ℹ️ No therapy appointments found for this period")
+        print("   ℹ️ No completed therapy appointments found for this period")
         return {}, {}, []
     
     # Track minutes per dentist
     therapy_by_dentist = defaultdict(lambda: {"total_minutes": 0, "appointments": []})
     unassigned_appointments = []
     patient_name_cache = {}
+    unknown_practitioner_ids = {}  # Track unknown IDs
+    
+    print(f"\n   🔍 Processing each appointment...")
+    print(f"   " + "-" * 50)
     
     # Process each therapy appointment
     for appt in completed_appointments:
         patient_id = appt.get("patient_id")
+        patient_name = appt.get("patient_name", "Unknown")
         
         # Get appointment duration in minutes
         duration = appt.get("duration", 0)  # Duration in minutes
@@ -666,6 +715,7 @@ def calculate_therapy_minutes(start_date, end_date):
                     duration = 0
         
         if duration <= 0:
+            print(f"      ⚠️ {patient_name}: Skipping - no duration")
             continue
         
         # Get appointment date
@@ -675,13 +725,11 @@ def calculate_therapy_minutes(start_date, end_date):
         except:
             appt_date = end_date
         
-        # Get patient name (with caching)
-        if patient_id not in patient_name_cache:
-            patient_name_cache[patient_id] = get_patient_name(patient_id)
-        patient_name = patient_name_cache[patient_id]
+        # Cache patient name
+        patient_name_cache[patient_id] = patient_name
         
         # Find referring dentist
-        referring_dentist = find_referring_dentist(patient_id, appt_date)
+        referring_dentist, found_practitioner_id = find_referring_dentist(patient_id, appt_date)
         
         # Get treatment description
         treatment = appt.get("reason", "") or appt.get("treatment_description", "") or "Therapy"
@@ -691,7 +739,8 @@ def calculate_therapy_minutes(start_date, end_date):
             "patient_id": patient_id,
             "date": appt_date.strftime("%d/%m/%Y"),
             "minutes": duration,
-            "treatment": treatment[:50]  # Truncate long descriptions
+            "treatment": treatment[:50],
+            "referring_practitioner_id": found_practitioner_id
         }
         
         if referring_dentist:
@@ -700,24 +749,38 @@ def calculate_therapy_minutes(start_date, end_date):
             print(f"      ✅ {patient_name}: {duration} min → {referring_dentist}")
         else:
             unassigned_appointments.append(appointment_info)
-            print(f"      ⚠️ {patient_name}: {duration} min → No referring dentist found")
+            if found_practitioner_id:
+                unknown_practitioner_ids[found_practitioner_id] = unknown_practitioner_ids.get(found_practitioner_id, 0) + 1
+                print(f"      ⚠️ {patient_name}: {duration} min → Unknown practitioner ID: {found_practitioner_id}")
+            else:
+                print(f"      ⚠️ {patient_name}: {duration} min → No prior dentist appointment found")
     
     # Summary
-    print(f"\n   📊 Therapy Minutes Summary:")
+    print(f"\n   📊 THERAPY MINUTES SUMMARY")
+    print(f"   " + "=" * 50)
     total_minutes = 0
+    total_value = 0
     for dentist, data in therapy_by_dentist.items():
         mins = data["total_minutes"]
         cost = mins * THERAPY_RATE_PER_MINUTE
         print(f"      {dentist}: {mins} min (£{cost:.2f})")
         total_minutes += mins
+        total_value += cost
     
     if unassigned_appointments:
         unassigned_mins = sum(a["minutes"] for a in unassigned_appointments)
         print(f"\n   ⚠️ {len(unassigned_appointments)} appointments ({unassigned_mins} min) could not be assigned")
         print(f"      These need manual assignment in the spreadsheet")
+        
+        if unknown_practitioner_ids:
+            print(f"\n   🔧 UNKNOWN PRACTITIONER IDs FOUND:")
+            print(f"      You need to add these to the DENTISTS config:")
+            for pid, count in sorted(unknown_practitioner_ids.items(), key=lambda x: -x[1]):
+                print(f"         ID {pid}: referred {count} appointment(s)")
+            print(f"\n      Run the list_practitioners.py script to see names")
     
     total_cost = total_minutes * THERAPY_RATE_PER_MINUTE
-    print(f"\n   💰 Total: {total_minutes} min = £{total_cost:.2f}")
+    print(f"\n   💰 ASSIGNED Total: {total_minutes} min = £{total_cost:.2f}")
     
     # Convert to simple dict for payslips
     result = {}
@@ -1810,9 +1873,9 @@ def process_nhs_statements(drive_service, spreadsheet, period_str, target_month,
             else:
                 print(f"      ⚠️ Could not determine period from PDF")
         
-        # Log new statements (for audit trail)
-        if new_statements:
-            update_nhs_statements_log(spreadsheet, new_statements, period_str)
+        # REMOVED: NHS Statements Log tab (info is in Dashboard)
+        # if new_statements:
+        #     update_nhs_statements_log(spreadsheet, new_statements, period_str)
     
     except Exception as e:
         print(f"   ⚠️ NHS statement processing error: {e}")
@@ -2396,7 +2459,6 @@ def setup_new_payslip_spreadsheet(spreadsheet, period_str):
         # Create required tabs
         tabs_to_create = [
             "Checklist",
-            "Cross-Reference",
             "Lab Bills Log",
             "Finance Flags",
             "Therapy Minutes"
@@ -2583,11 +2645,7 @@ SHEET_COLORS = {
 
 def update_dashboard(spreadsheet, payslips, period_str):
     """
-    Update the Dashboard tab with CONSISTENT font sizing (v3.0)
-    - All data: 10pt
-    - Title: 16pt
-    - Section headers: 12pt
-    - PDF download links for each dentist
+    Update the Dashboard tab with clean, scannable layout
     """
     print("   Updating Dashboard...")
     
@@ -2596,7 +2654,7 @@ def update_dashboard(spreadsheet, payslips, period_str):
     except gspread.WorksheetNotFound:
         print("      Dashboard tab not found, creating...")
         try:
-            sh = spreadsheet.add_worksheet(title="Dashboard", rows=100, cols=15)
+            sh = spreadsheet.add_worksheet(title="Dashboard", rows=100, cols=10)
         except Exception as e:
             print(f"      ❌ Could not create Dashboard: {e}")
             return
@@ -2604,136 +2662,133 @@ def update_dashboard(spreadsheet, payslips, period_str):
         print(f"      ❌ Error accessing Dashboard: {e}")
         return
     
-    # Get spreadsheet ID for PDF links
     spreadsheet_id = spreadsheet.id
     
-    # Build complete dashboard structure
-    rows = []
-    
-    # Header section (rows 1-9)
-    rows.append(["", "AURA DENTAL CLINIC", "", "", "", "", "", "", "", "", "", "", "", ""])
-    rows.append(["", "PAYSLIP SUMMARY", "", "", "", "", "", "", "", "", "", "", "", ""])
-    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
-    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
-    rows.append(["", "", "", f"Period: {period_str}", "", "", "", "", "", f"Generated: {datetime.now().strftime('%d/%m/%Y')}", "", "", "", ""])
-    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
-    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
-    rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", ""])
-    
-    # Column headers (row 9)
-    rows.append([
-        "", "Dentist", "UDAs", "UDA Rate", "NHS Income", 
-        "Gross Private", "Split", "Net Private", 
-        "Lab 50%", "Finance 50%", "Therapy", "Total Ded.", "Net Pay", "Status"
-    ])
-    
-    # Collect all dentist data
+    # Calculate totals first
     total_nhs = 0
     total_private_gross = 0
     total_private_net = 0
     total_deductions = 0
     total_net_pay = 0
+    total_lab = 0
+    total_finance = 0
+    total_therapy = 0
     
     for name in DENTISTS.keys():
         if name in payslips:
             p = payslips[name]
-            nhs_udas = str(p.get('nhs_udas', 0)) if DENTISTS[name]['has_nhs'] else "-"
-            uda_rate = f"£{DENTISTS[name]['uda_rate']}" if DENTISTS[name]['uda_rate'] else "-"
-            nhs_income = f"£{p.get('nhs_income', 0):,.2f}" if DENTISTS[name]['has_nhs'] else "-"
-            
-            row_data = [
-                "",
-                name,
-                nhs_udas,
-                uda_rate,
-                nhs_income,
-                f"£{p['gross_total']:,.2f}",
-                f"{int(DENTISTS[name]['split']*100)}%",
-                f"£{p['net_private']:,.2f}",
-                f"£{p['lab_bills_50']:,.2f}",
-                f"£{p['finance_fees_50']:,.2f}",
-                f"£{p['therapy_total']:,.2f}",
-                f"£{p['total_deductions']:,.2f}",
-                f"£{p['total_payment']:,.2f}",
-                "✅" if p['total_payment'] > 0 else "⏳"
-            ]
-            rows.append(row_data)
-            
             if DENTISTS[name]['has_nhs']:
                 total_nhs += p.get('nhs_income', 0)
             total_private_gross += p['gross_total']
             total_private_net += p['net_private']
             total_deductions += p['total_deductions']
             total_net_pay += p['total_payment']
-        else:
-            rows.append([""] * 14)
+            total_lab += p.get('lab_bills_50', 0)
+            total_finance += p.get('finance_fees_50', 0)
+            total_therapy += p.get('therapy_total', 0)
     
-    # Add totals row
-    rows.append([])
-    rows.append([
-        "", "TOTAL", "", "",
-        f"£{total_nhs:,.2f}",
-        f"£{total_private_gross:,.2f}",
-        "",
-        f"£{total_private_net:,.2f}",
-        "", "", "",
-        f"£{total_deductions:,.2f}",
-        f"£{total_net_pay:,.2f}",
-        ""
-    ])
+    rows = []
     
-    # Add PDF Download section
-    rows.append([])
-    rows.append([])
-    rows.append(["", "📄 DOWNLOAD PDF PAYSLIPS", "", "", "", "", "", "", "", "", "", "", "", ""])
-    rows.append(["", "Click any link below to download that dentist's payslip as PDF", "", "", "", "", "", "", "", "", "", "", "", ""])
-    rows.append([])
+    # Header
+    rows.append(["", "", "", "", "", "", "", "", ""])
+    rows.append(["", "AURA DENTAL CLINIC", "", "", "", "", "", "", ""])
+    rows.append(["", f"Payslip Summary - {period_str}", "", "", "", "", "", "", ""])
+    rows.append(["", f"Generated: {datetime.now().strftime('%d %B %Y')}", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
     
-    # We'll add the PDF links after we write the data and can get sheet IDs
-    pdf_links_start_row = len(rows) + 1
+    # Big Total Box
+    rows.append(["", "═══════════════════════════════════════════════════════════════", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
+    rows.append(["", "💰 TOTAL PAYOUT THIS MONTH", "", "", "", f"£{total_net_pay:,.2f}", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
+    rows.append(["", "═══════════════════════════════════════════════════════════════", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
     
-    # Placeholder rows for PDF links (will be updated with hyperlinks)
+    # Summary breakdown
+    rows.append(["", "BREAKDOWN", "", "", "", "", "", "", ""])
+    rows.append(["", "───────────────────────────────────", "", "", "", "", "", "", ""])
+    rows.append(["", "Private Income (Gross)", "", "", "", f"£{total_private_gross:,.2f}", "", "", ""])
+    rows.append(["", "Private Income (Net after split)", "", "", "", f"£{total_private_net:,.2f}", "", "", ""])
+    rows.append(["", "NHS Income", "", "", "", f"£{total_nhs:,.2f}", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
+    rows.append(["", "Less Deductions:", "", "", "", "", "", "", ""])
+    rows.append(["", "   Lab Bills (50%)", "", "", "", f"-£{total_lab:,.2f}", "", "", ""])
+    rows.append(["", "   Finance Fees (50%)", "", "", "", f"-£{total_finance:,.2f}", "", "", ""])
+    rows.append(["", "   Therapy Time", "", "", "", f"-£{total_therapy:,.2f}", "", "", ""])
+    rows.append(["", "───────────────────────────────────", "", "", "", "", "", "", ""])
+    rows.append(["", "TOTAL DEDUCTIONS", "", "", "", f"-£{total_deductions:,.2f}", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
+    
+    # Individual dentists - simplified table
+    rows.append(["", "INDIVIDUAL PAYOUTS", "", "", "", "", "", "", ""])
+    rows.append(["", "═══════════════════════════════════════════════════════════════", "", "", "", "", "", "", ""])
+    rows.append(["", "Dentist", "Gross Private", "Net Private", "NHS", "Deductions", "Net Pay", "📥", ""])
+    rows.append(["", "───────────────────────────────────────────────────────────────", "", "", "", "", "", "", ""])
+    
+    dentist_rows_start = len(rows) + 1
+    
     for name in DENTISTS.keys():
-        first_name = name.split()[0]
-        rows.append(["", f"   📥 {first_name}", "", "", "", "", "", "", "", "", "", "", "", ""])
+        if name in payslips:
+            p = payslips[name]
+            first_name = name.split()[0]
+            nhs = f"£{p.get('nhs_income', 0):,.2f}" if DENTISTS[name]['has_nhs'] else "-"
+            
+            rows.append([
+                "",
+                first_name,
+                f"£{p['gross_total']:,.2f}",
+                f"£{p['net_private']:,.2f}",
+                nhs,
+                f"-£{p['total_deductions']:,.2f}",
+                f"£{p['total_payment']:,.2f}",
+                "",  # PDF link placeholder
+                ""
+            ])
     
-    rows.append([])
-    rows.append(["", "💡 Tip: Right-click → 'Save link as' to download directly", "", "", "", "", "", "", "", "", "", "", "", ""])
+    dentist_rows_end = len(rows)
     
-    # Clear and write all data
+    rows.append(["", "───────────────────────────────────────────────────────────────", "", "", "", "", "", "", ""])
+    rows.append(["", "TOTAL", "", "", "", "", f"£{total_net_pay:,.2f}", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
+    
+    # Quick actions
+    rows.append(["", "QUICK ACTIONS", "", "", "", "", "", "", ""])
+    rows.append(["", "───────────────────────────────────", "", "", "", "", "", "", ""])
+    rows.append(["", "📋 See 'Checklist' tab for step-by-step workflow", "", "", "", "", "", "", ""])
+    rows.append(["", "💳 See 'Finance Flags' tab to enter finance terms", "", "", "", "", "", "", ""])
+    rows.append(["", "🦷 See 'Therapy Minutes' tab for therapy breakdown", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", ""])
+    rows.append(["", "💡 Click the 📥 links above to download PDF payslips", "", "", "", "", "", "", ""])
+    
+    # Clear and write
     sh.clear()
     sh.update(values=rows, range_name='A1')
     time.sleep(1)
     
-    # Now add PDF hyperlinks - need to get sheet IDs for each dentist tab
-    pdf_link_requests = []
-    row_idx = pdf_links_start_row
-    
-    for name in DENTISTS.keys():
-        first_name = name.split()[0]
-        tab_name = f"{first_name} Payslip"
-        
-        try:
-            dentist_sheet = spreadsheet.worksheet(tab_name)
-            sheet_gid = dentist_sheet.id
+    # Add PDF hyperlinks in the table
+    for i, name in enumerate(DENTISTS.keys()):
+        if name in payslips:
+            first_name = name.split()[0]
+            tab_name = f"{first_name} Payslip"
+            row_idx = dentist_rows_start + i
             
-            # Build PDF export URL
-            pdf_url = (
-                f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?"
-                f"format=pdf&gid={sheet_gid}&portrait=true&size=A4&fitw=true&"
-                f"gridlines=false&printtitle=false&sheetnames=false&pagenum=false&fzr=false&"
-                f"top_margin=0.5&bottom_margin=0.5&left_margin=0.5&right_margin=0.5"
-            )
-            
-            # Update cell with hyperlink
-            cell_address = f"B{row_idx}"
-            link_text = f"📥 {first_name} Payslip"
-            sh.update(cell_address, f'=HYPERLINK("{pdf_url}", "{link_text}")', value_input_option='USER_ENTERED')
-            
-        except Exception as e:
-            print(f"      Note: Could not create PDF link for {first_name}: {e}")
-        
-        row_idx += 1
+            try:
+                dentist_sheet = spreadsheet.worksheet(tab_name)
+                sheet_gid = dentist_sheet.id
+                
+                pdf_url = (
+                    f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?"
+                    f"format=pdf&gid={sheet_gid}&portrait=true&size=A4&fitw=true&"
+                    f"gridlines=false&printtitle=false&sheetnames=false&pagenum=false&fzr=false&"
+                    f"top_margin=0.5&bottom_margin=0.5&left_margin=0.5&right_margin=0.5"
+                )
+                
+                sh.update(f"H{row_idx}", f'=HYPERLINK("{pdf_url}", "📥 PDF")', value_input_option='USER_ENTERED')
+                
+            except Exception as e:
+                print(f"      Note: Could not create PDF link for {first_name}: {e}")
     
     time.sleep(1)
 
@@ -3174,7 +3229,7 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}},
         
         {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': lab_start_row - 1, 'endRowIndex': lab_end_row, 'startColumnIndex': 2, 'endColumnIndex': 3},
-            'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}, 'horizontalAlignment': 'RIGHT'}},
+            'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}, 'horizontalAlignment': 'LEFT'}},
             'fields': 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}},
         
         # Status column - green checkmarks
@@ -3469,9 +3524,9 @@ def update_payslip_checklist(spreadsheet, period_str, payslips, finance_flags, t
         ])
     
     rows.extend([
-        ["", "✅", "STEP 5: CROSS-REFERENCE", "", "", "", ""],
-        ["", "☐", "   Review 'Cross-Reference' tab", "", "", "", ""],
-        ["", "☐", "   Check discrepancies with dentist logs", "", "", "", ""],
+        ["", "✅", "STEP 5: CHECK DISCREPANCIES", "", "", "", ""],
+        ["", "☐", "   Each payslip has discrepancies section at bottom", "", "", "", ""],
+        ["", "☐", "   Review differences vs dentist takings logs", "", "", "", ""],
         ["", "☐", "   Resolve any significant differences", "", "", "", ""],
         ["", "", "", "", "", "", ""],
         ["", "✅", "STEP 6: LAB BILLS", "", "", "", ""],
@@ -5378,15 +5433,12 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
             update_payslip_checklist(spreadsheet, period_str, payslips, finance_flags, therapy_details, unassigned_therapy)
             print(f"   ✅ Checklist created")
             
-            # Perform cross-reference with dentist logs
+            # Perform cross-reference with dentist logs (results go to individual payslips)
             client = get_sheets_client()
             xref_results = perform_cross_reference(client, payslips, month, year)
             
-            # Update cross-reference tab
+            # Add discrepancies to each dentist's individual payslip (no separate tab)
             if xref_results:
-                update_cross_reference(spreadsheet, xref_results, period_str)
-                
-                # Add discrepancies to each dentist's individual payslip
                 print("   Adding discrepancies to individual payslips...")
                 for dentist_name, xref in xref_results.items():
                     if "error" not in xref:
