@@ -470,10 +470,13 @@ def get_appointments_for_period(start_date, end_date, practitioner_id=None):
         
         data = dentally_request("appointments", params)
         if not data:
+            print(f"      ⚠️ No data returned from appointments API (page {page})")
             break
         
         appointments = data.get("appointments", [])
         if not appointments:
+            if page == 1:
+                print(f"      ℹ️ No appointments found for practitioner {practitioner_id}")
             break
         
         all_appointments.extend(appointments)
@@ -617,17 +620,27 @@ def calculate_therapy_minutes(start_date, end_date):
     taryn_appointments = get_appointments_for_period(start_date, end_date, practitioner_id=THERAPIST_ID)
     
     # Filter to completed appointments only
+    # Dentally states: booked, confirmed, arrived, seated, completed, cancelled, no_show
     completed_appointments = [
         appt for appt in taryn_appointments 
-        if appt.get("state") in ["completed", "arrived", "checked_in"]
+        if appt.get("state") in ["completed", "arrived", "seated", "checked_in"]
         or appt.get("finished", False)
+        or appt.get("completed", False)
     ]
     
     print(f"   Found {len(taryn_appointments)} total appointments, {len(completed_appointments)} completed")
     
+    # Debug: show appointment states found
+    if taryn_appointments:
+        states = {}
+        for appt in taryn_appointments:
+            state = appt.get("state", "unknown")
+            states[state] = states.get(state, 0) + 1
+        print(f"   Appointment states: {states}")
+    
     if not completed_appointments:
         print("   ℹ️ No therapy appointments found for this period")
-        return {}
+        return {}, {}, []
     
     # Track minutes per dentist
     therapy_by_dentist = defaultdict(lambda: {"total_minutes": 0, "appointments": []})
@@ -2382,6 +2395,7 @@ def setup_new_payslip_spreadsheet(spreadsheet, period_str):
         
         # Create required tabs
         tabs_to_create = [
+            "Checklist",
             "Cross-Reference",
             "Lab Bills Log",
             "Finance Flags",
@@ -2866,19 +2880,24 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     # Patient column headers
     patient_col_row = len(rows) + 1
-    rows.append(["", "Patient Name", "Date", "Status", "Amount", "", "", ""])
+    rows.append(["", "Patient Name", "Date", "Status", "Amount", "Finance", "", ""])
     
     # Patient data rows
     patient_start_row = len(rows) + 1
+    finance_patient_count = 0
     for patient in patients:
         status = "✓" if not patient.get('payment_flag') else "○"
+        is_finance = patient.get('is_finance', False)
+        finance_marker = "💳" if is_finance else ""
+        if is_finance:
+            finance_patient_count += 1
         rows.append([
             "",
             patient.get('name', ''),
             patient.get('date', ''),
             status,
             patient.get('paid_amount', patient.get('amount', 0)),
-            "",
+            finance_marker,
             "",
             ""
         ])
@@ -2886,7 +2905,8 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     # Summary row
     patient_summary_row = len(rows) + 1
-    rows.append(["", f"Total: {len(patients)} patients", "", "", sum(p.get('paid_amount', p.get('amount', 0)) for p in patients), "", "", ""])
+    finance_note = f" ({finance_patient_count} via Finance 💳)" if finance_patient_count > 0 else ""
+    rows.append(["", f"Total: {len(patients)} patients{finance_note}", "", "", sum(p.get('paid_amount', p.get('amount', 0)) for p in patients), "", "", ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     rows.append(["", "", "", "", "", "", "", ""])
@@ -3108,18 +3128,23 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
             'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': SHEET_COLORS['success_green']}, 'horizontalAlignment': 'CENTER'}},
             'fields': 'userEnteredFormat.textFormat,userEnteredFormat.horizontalAlignment'}},
         
+        # Date column - right aligned
+        {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': patient_start_row - 1, 'endRowIndex': patient_end_row, 'startColumnIndex': 2, 'endColumnIndex': 3},
+            'cell': {'userEnteredFormat': {'horizontalAlignment': 'RIGHT'}},
+            'fields': 'userEnteredFormat.horizontalAlignment'}},
+        
         # Lab invoice links - blue color for hyperlinks
         {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': lab_start_row - 1, 'endRowIndex': lab_end_row, 'startColumnIndex': 3, 'endColumnIndex': 4},
             'cell': {'userEnteredFormat': {'textFormat': {'foregroundColor': {'red': 0.0, 'green': 0.4, 'blue': 0.8}}}},
             'fields': 'userEnteredFormat.textFormat'}},
     ]
     
-    # Add alternating row colors for patient table (white/cream)
+    # Add alternating row colors for patient table (white/cream) - extend to column F for Finance
     for i, row_idx in enumerate(range(patient_start_row - 1, patient_end_row)):
         bg_color = SHEET_COLORS['white'] if i % 2 == 0 else SHEET_COLORS['aura_cream']
         format_requests.append({
             'repeatCell': {
-                'range': {'sheetId': sheet_id, 'startRowIndex': row_idx, 'endRowIndex': row_idx + 1, 'startColumnIndex': 1, 'endColumnIndex': 5},
+                'range': {'sheetId': sheet_id, 'startRowIndex': row_idx, 'endRowIndex': row_idx + 1, 'startColumnIndex': 1, 'endColumnIndex': 6},
                 'cell': {'userEnteredFormat': {'backgroundColor': bg_color}},
                 'fields': 'userEnteredFormat.backgroundColor'
             }
@@ -3143,7 +3168,7 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
 
 
 def update_finance_flags(spreadsheet, finance_flags):
-    """Update Finance Flags tab with items needing term length"""
+    """Update Finance Flags tab with items needing term length and subsidy check"""
     print("   Updating Finance Flags...")
     
     try:
@@ -3151,36 +3176,67 @@ def update_finance_flags(spreadsheet, finance_flags):
         sh.clear()
     except:
         try:
-            sh = spreadsheet.add_worksheet(title="Finance Flags", rows=200, cols=10)
+            sh = spreadsheet.add_worksheet(title="Finance Flags", rows=200, cols=12)
         except Exception as e:
             print(f"      ⚠️ Cannot create Finance Flags tab: {e}")
             return
     
-    # Build full structure with headers
+    # Build full structure with headers and instructions
     rows = [
-        ["", "FINANCE PAYMENTS - TERM LENGTH REQUIRED", "", "", "", "", "", "", ""],
-        ["", "Enter the term length for each finance payment below", "", "", "", "", "", "", ""],
-        ["", "", "", "", "", "", "", "", ""],
-        ["", "Patient", "Dentist", "Amount", "Date", "Term (months)", "Subsidy %", "Fee", "Status"],
+        ["", "💳 FINANCE PAYMENTS - ACTION REQUIRED", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", ""],
+        ["", "⚠️ JENNIE: For each finance payment below:", "", "", "", "", "", "", "", "", ""],
+        ["", "   1. Check Tabeo/finance provider for the term length (3, 6, 10, or 12 months)", "", "", "", "", "", "", "", "", ""],
+        ["", "   2. Enter the term in column F", "", "", "", "", "", "", "", "", ""],
+        ["", "   3. Check if patient has a SUBSIDY (discount) - enter % in column G", "", "", "", "", "", "", "", "", ""],
+        ["", "   4. The fee will auto-calculate based on term: 3m=4.5%, 6m=6%, 10m=7%, 12m=8%", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", ""],
+        ["", "Patient", "Dentist", "Amount", "Date", "Term (months)", "Subsidy %", "Has Subsidy?", "Finance Fee", "Status", ""],
     ]
     
+    data_start_row = len(rows) + 1
+    
     if finance_flags:
-        for flag in finance_flags:
+        for i, flag in enumerate(finance_flags):
+            row_num = data_start_row + i
             rows.append([
                 "",
                 flag['patient'],
                 flag['dentist'],
-                f"£{flag['amount']:,.2f}",
+                flag['amount'],  # Keep as number for calculations
                 flag['date'],
-                "",  # Term to be entered
-                "",  # Subsidy %
-                "",  # Fee
-                "⚠️ Enter term"
+                "",  # Term to be entered (F)
+                "",  # Subsidy % (G)
+                "",  # Has subsidy checkbox (H)
+                f"=IF(F{row_num}=\"\",\"\",D{row_num}*VLOOKUP(F{row_num},{{3,0.045;6,0.06;10,0.07;12,0.08}},2,FALSE))",  # Fee formula (I)
+                "⚠️ Enter term"  # Status (J)
             ])
     else:
-        rows.append(["", "No finance payments requiring term length", "", "", "", "", "", "", ""])
+        rows.append(["", "✅ No finance payments this period", "", "", "", "", "", "", "", "", ""])
+    
+    # Add summary section
+    rows.append(["", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", "SUMMARY", "", "", "", "", "", "", "", "", ""])
+    rows.append(["", f"Total finance payments: {len(finance_flags)}", "", "", "", "", "", "", "", "", ""])
     
     sh.update(values=rows, range_name='A1')
+    
+    # Format currency column
+    try:
+        sheet_id = sh.id
+        format_requests = [
+            {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': data_start_row - 1, 'endRowIndex': data_start_row + len(finance_flags), 'startColumnIndex': 3, 'endColumnIndex': 4},
+                'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}}},
+                'fields': 'userEnteredFormat.numberFormat'}},
+            {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': data_start_row - 1, 'endRowIndex': data_start_row + len(finance_flags), 'startColumnIndex': 8, 'endColumnIndex': 9},
+                'cell': {'userEnteredFormat': {'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'}}},
+                'fields': 'userEnteredFormat.numberFormat'}},
+        ]
+        spreadsheet.batch_update({'requests': format_requests})
+    except Exception as e:
+        print(f"      Note: Finance formatting error: {e}")
+    
     time.sleep(1)  # Rate limit protection
 
 
@@ -3284,7 +3340,103 @@ def update_therapy_tab(spreadsheet, therapy_details, unassigned_therapy, period_
     time.sleep(1)  # Rate limit protection
 
 
-def read_confirmed_adjustments(spreadsheet, dentist_name):
+def update_payslip_checklist(spreadsheet, period_str, payslips, finance_flags, therapy_details, unassigned_therapy):
+    """
+    Create a checklist tab for Jennie with all steps to complete payslips.
+    """
+    print("   Creating Payslip Checklist...")
+    
+    try:
+        sh = spreadsheet.worksheet("Checklist")
+        sh.clear()
+    except:
+        try:
+            sh = spreadsheet.add_worksheet(title="Checklist", rows=100, cols=8)
+        except Exception as e:
+            print(f"      ⚠️ Cannot create Checklist tab: {e}")
+            return
+    
+    # Count issues that need attention
+    finance_count = len(finance_flags) if finance_flags else 0
+    unassigned_therapy_count = len(unassigned_therapy) if unassigned_therapy else 0
+    total_patients = sum(len(p.get('patients', [])) for p in payslips.values())
+    finance_patients = sum(
+        sum(1 for pt in p.get('patients', []) if pt.get('is_finance', False))
+        for p in payslips.values()
+    )
+    
+    rows = [
+        ["", f"📋 PAYSLIP CHECKLIST - {period_str}", "", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "Complete each step below before finalising payslips", "", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "─────────────────────────────────────────────────", "", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "✅", "STEP 1: REVIEW DASHBOARD", "", "", "", ""],
+        ["", "☐", "   Check total payout amount is reasonable", "", "", "", ""],
+        ["", "☐", "   Verify each dentist's gross/net figures", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "✅", "STEP 2: FINANCE PAYMENTS", "", f"({finance_count} items)", "", ""],
+        ["", "☐", "   Go to 'Finance Flags' tab", "", "", "", ""],
+        ["", "☐", "   For each payment, check Tabeo for term length", "", "", "", ""],
+        ["", "☐", "   Enter term (3, 6, 10, or 12 months)", "", "", "", ""],
+        ["", "☐", "   Check if patient has subsidy - enter % if yes", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "✅", "STEP 3: CHECK FINANCE PATIENTS", "", f"({finance_patients} patients)", "", ""],
+        ["", "☐", "   Look for 💳 symbol in patient breakdowns", "", "", "", ""],
+        ["", "☐", "   Verify subsidy fees have been applied in Dentally", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+    ]
+    
+    if unassigned_therapy_count > 0:
+        rows.extend([
+            ["", "✅", "STEP 4: THERAPY MINUTES", "", f"({unassigned_therapy_count} unassigned)", "", ""],
+            ["", "☐", "   Go to 'Therapy Minutes' tab", "", "", "", ""],
+            ["", "☐", "   Assign unassigned appointments to correct dentist", "", "", "", ""],
+            ["", "", "", "", "", "", ""],
+        ])
+    else:
+        rows.extend([
+            ["", "✅", "STEP 4: THERAPY MINUTES", "", "(All assigned ✓)", "", ""],
+            ["", "", "", "", "", "", ""],
+        ])
+    
+    rows.extend([
+        ["", "✅", "STEP 5: CROSS-REFERENCE", "", "", "", ""],
+        ["", "☐", "   Review 'Cross-Reference' tab", "", "", "", ""],
+        ["", "☐", "   Check discrepancies with dentist logs", "", "", "", ""],
+        ["", "☐", "   Resolve any significant differences", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "✅", "STEP 6: LAB BILLS", "", "", "", ""],
+        ["", "☐", "   Verify lab invoices in each payslip", "", "", "", ""],
+        ["", "☐", "   Check invoice links work", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "✅", "STEP 7: INDIVIDUAL REVIEW", "", "", "", ""],
+        ["", "☐", "   Review each dentist's payslip tab", "", "", "", ""],
+        ["", "☐", "   Check patient lists look correct", "", "", "", ""],
+        ["", "☐", "   Verify any flagged items (○ status)", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "✅", "STEP 8: GENERATE PDFs", "", "", "", ""],
+        ["", "☐", "   Use Extensions > Apps Script > generateAllPDFs()", "", "", "", ""],
+        ["", "☐", "   Or generate individually per dentist", "", "", "", ""],
+        ["", "☐", "   PDFs saved to Payslips folder in Drive", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "✅", "STEP 9: DISTRIBUTE", "", "", "", ""],
+        ["", "☐", "   Email/send PDF to each dentist", "", "", "", ""],
+        ["", "☐", "   Process payments via bank transfer", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "─────────────────────────────────────────────────", "", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+        ["", "📊 SUMMARY", "", "", "", "", ""],
+        ["", f"   Total Dentists: {len(payslips)}", "", "", "", "", ""],
+        ["", f"   Total Patients: {total_patients}", "", "", "", "", ""],
+        ["", f"   Finance Payments: {finance_count}", "", "", "", "", ""],
+        ["", f"   Finance Patients: {finance_patients} (check for subsidy)", "", "", "", "", ""],
+        ["", f"   Total Payout: £{sum(p.get('total_payment', 0) for p in payslips.values()):,.2f}", "", "", "", "", ""],
+    ])
+    
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)
     """
     Read confirmed discrepancy adjustments from a dentist's payslip sheet.
     Returns list of adjustments to apply.
@@ -4411,11 +4563,16 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
                     "total": 0,
                     "paid_total": 0,  # Only fully paid amounts
                     "last_date": invoice_date,
-                    "payment_flag": None
+                    "payment_flag": None,
+                    "is_finance": False  # Track if paid via finance
                 }
             
             payslips[dentist_name]["patient_totals"][patient_id]["total"] += item_amount
             payslips[dentist_name]["patient_totals"][patient_id]["last_date"] = invoice_date
+            
+            # Track finance payment
+            if is_finance_payment:
+                payslips[dentist_name]["patient_totals"][patient_id]["is_finance"] = True
             
             if is_paid and balance <= 0:
                 payslips[dentist_name]["patient_totals"][patient_id]["paid_total"] += item_amount
@@ -4458,7 +4615,8 @@ def calculate_payslips(start_date, end_date, lab_bills=None, therapy_minutes=Non
                 "paid_amount": pt["paid_total"],  # Paid amount for payslip
                 "date": display_date,
                 "sort_date": sort_date,
-                "payment_flag": pt["payment_flag"]
+                "payment_flag": pt["payment_flag"],
+                "is_finance": pt.get("is_finance", False)  # Finance payment flag
             })
         
         # Sort chronologically (earliest first)
@@ -5145,6 +5303,10 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                 update_therapy_tab(spreadsheet, therapy_details, unassigned_therapy, period_str)
                 total_therapy_mins = sum(d.get("total_minutes", 0) for d in therapy_details.values())
                 print(f"   ✅ Therapy Minutes: {total_therapy_mins} min total")
+            
+            # Update checklist tab
+            update_payslip_checklist(spreadsheet, period_str, payslips, finance_flags, therapy_details, unassigned_therapy)
+            print(f"   ✅ Checklist created")
             
             # Perform cross-reference with dentist logs
             client = get_sheets_client()
