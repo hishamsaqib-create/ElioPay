@@ -699,8 +699,10 @@ def normalize_lab_name(name):
 
 def list_lab_bill_pdfs(service, folder_id):
     """
-    List all PDF files in the lab bills folder and subfolders.
-    Returns list of {id, name, lab_name (from folder), modified_time}
+    List all PDF files in the lab bills folder with 3-level structure:
+    Lab Bills → Dentist Name → Lab Name → Invoice PDFs
+    
+    Returns list of {id, name, dentist_name, lab_name, modified_time}
     """
     all_pdfs = []
     
@@ -715,16 +717,15 @@ def list_lab_bill_pdfs(service, folder_id):
         ).execute()
         print(f"   ✅ Folder accessible: '{folder_meta.get('name')}'")
         if folder_meta.get('driveId'):
-            print(f"   📂 This is in a Shared Drive (driveId: {folder_meta.get('driveId')})")
+            print(f"   📂 This is in a Shared Drive")
     except Exception as e:
         print(f"   ❌ Cannot access folder: {e}")
         return all_pdfs
     
-    def search_folder(fid, lab_name=None, depth=0):
-        indent = "   " + "  " * depth
+    def list_folder_contents(fid):
+        """List all items in a folder"""
         query = f"'{fid}' in parents and trashed = false"
         try:
-            # Try with shared drive support
             results = service.files().list(
                 q=query,
                 fields="files(id, name, mimeType, modifiedTime)",
@@ -732,42 +733,68 @@ def list_lab_bill_pdfs(service, folder_id):
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True
             ).execute()
+            return results.get('files', [])
         except Exception as e:
-            print(f"{indent}⚠️ Error with shared drive query, trying standard: {e}")
-            try:
-                results = service.files().list(
-                    q=query,
-                    fields="files(id, name, mimeType, modifiedTime)",
-                    pageSize=200
-                ).execute()
-            except Exception as e2:
-                print(f"{indent}⚠️ Error listing folder {fid}: {e2}")
-                return
-        
-        files = results.get('files', [])
-        print(f"{indent}Found {len(files)} items in {'root' if not lab_name else lab_name}")
-        
-        # Debug: list what we found
-        for f in files[:5]:  # Show first 5
-            print(f"{indent}  - {f['name']} ({f['mimeType']})")
-        if len(files) > 5:
-            print(f"{indent}  ... and {len(files) - 5} more")
-        
-        for f in files:
-            if f['mimeType'] == 'application/vnd.google-apps.folder':
-                # It's a subfolder - use folder name as lab name
-                print(f"{indent}📁 Subfolder: {f['name']}")
-                search_folder(f['id'], f['name'], depth + 1)
-            elif f['mimeType'] == 'application/pdf':
-                all_pdfs.append({
-                    'id': f['id'],
-                    'name': f['name'],
-                    'lab_name': normalize_lab_name(lab_name) if lab_name else "Unknown",
-                    'modified_time': f.get('modifiedTime', '')
-                })
-                print(f"{indent}📄 PDF: {f['name'][:40]}... (Lab: {lab_name or 'Unknown'})")
+            print(f"      ⚠️ Error listing folder: {e}")
+            return []
     
-    search_folder(folder_id)
+    # Level 1: Get dentist folders
+    dentist_folders = list_folder_contents(folder_id)
+    print(f"   Found {len(dentist_folders)} dentist folders")
+    
+    for dentist_folder in dentist_folders:
+        if dentist_folder['mimeType'] != 'application/vnd.google-apps.folder':
+            continue
+        
+        dentist_name = dentist_folder['name']
+        
+        # Normalize dentist name to match our DENTISTS config
+        normalized_dentist = normalize_dentist_name(dentist_name)
+        if not normalized_dentist or normalized_dentist == dentist_name:
+            # Try exact match with known dentists
+            for known_dentist in DENTISTS.keys():
+                if known_dentist.lower() in dentist_name.lower() or dentist_name.lower() in known_dentist.lower():
+                    normalized_dentist = known_dentist
+                    break
+        
+        print(f"   👤 {dentist_name} → {normalized_dentist}")
+        
+        # Level 2: Get lab folders within dentist folder
+        lab_folders = list_folder_contents(dentist_folder['id'])
+        
+        for lab_folder in lab_folders:
+            if lab_folder['mimeType'] != 'application/vnd.google-apps.folder':
+                # Could be a PDF directly in dentist folder (no lab subfolder)
+                if lab_folder['mimeType'] == 'application/pdf':
+                    all_pdfs.append({
+                        'id': lab_folder['id'],
+                        'name': lab_folder['name'],
+                        'dentist_name': normalized_dentist,
+                        'lab_name': 'Unknown',
+                        'modified_time': lab_folder.get('modifiedTime', '')
+                    })
+                    print(f"      📄 {lab_folder['name'][:40]}... (no lab folder)")
+                continue
+            
+            lab_name = normalize_lab_name(lab_folder['name'])
+            
+            # Level 3: Get PDFs within lab folder
+            pdf_files = list_folder_contents(lab_folder['id'])
+            
+            pdf_count = 0
+            for pdf_file in pdf_files:
+                if pdf_file['mimeType'] == 'application/pdf':
+                    all_pdfs.append({
+                        'id': pdf_file['id'],
+                        'name': pdf_file['name'],
+                        'dentist_name': normalized_dentist,
+                        'lab_name': lab_name,
+                        'modified_time': pdf_file.get('modifiedTime', '')
+                    })
+                    pdf_count += 1
+            
+            if pdf_count > 0:
+                print(f"      📁 {lab_name}: {pdf_count} invoices")
     return all_pdfs
 
 
@@ -922,11 +949,13 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     """
     Process lab bills from Google Drive folder.
     
-    1. List all PDFs in lab bills folder
+    Folder structure: Lab Bills → Dentist Name → Lab Name → Invoice PDFs
+    
+    1. List all PDFs in lab bills folder (gets dentist & lab from folder structure)
     2. Filter to only invoices from last 3 months
     3. Check which are already assigned (current month)
     4. Check which were processed in previous months (duplicate detection)
-    5. Parse new PDFs to extract dentist and amount
+    5. Parse new PDFs to extract amount only (dentist from folder)
     6. Return dict of lab bills per dentist
     
     Args:
@@ -942,6 +971,7 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     """
     print("\n📂 PROCESSING LAB BILLS...")
     print("=" * 50)
+    print("   📁 Folder structure: Lab Bills → Dentist → Lab → Invoices")
     
     if processed_lab_bills is None:
         processed_lab_bills = set()
@@ -961,14 +991,16 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
     print(f"   Found {len(assigned)} previously assigned lab bills (this month)")
     print(f"   Found {len(processed_lab_bills)} lab bills from previous months")
     
-    # List all PDFs
-    print("   Scanning lab bills folder...")
+    # List all PDFs (now includes dentist_name from folder structure)
+    print("\n   Scanning lab bills folder...")
     pdfs = list_lab_bill_pdfs(drive_service, LAB_BILLS_FOLDER_ID)
-    print(f"   Found {len(pdfs)} PDF files total")
+    print(f"\n   Found {len(pdfs)} PDF files total")
     
     # Process each PDF
     for pdf_info in pdfs:
         file_id = pdf_info['id']
+        dentist_from_folder = pdf_info.get('dentist_name', '')
+        lab_from_folder = pdf_info.get('lab_name', 'Unknown')
         
         # Filter by date - only process invoices from last 3 months
         modified_time_str = pdf_info.get('modified_time', '')
@@ -986,7 +1018,6 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
         # Check if processed in previous months (DUPLICATE)
         if file_id in processed_lab_bills:
             duplicate_bills.append(pdf_info)
-            print(f"   ⚠️ SKIP (previous month): {pdf_info['name'][:40]}...")
             continue
         
         # Check if already assigned (current month)
@@ -996,25 +1027,53 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
             if prev.get('dentist') and prev.get('amount'):
                 try:
                     amount = float(prev['amount'].replace('£', '').replace(',', ''))
-                    lab_name = prev.get('lab_name', pdf_info['lab_name'])
+                    lab_name = prev.get('lab_name', lab_from_folder)
                     lab_bills_by_dentist[prev['dentist']][lab_name] += amount
                 except:
                     pass
             continue
         
-        # New bill - parse it
+        # Validate dentist from folder
+        if not dentist_from_folder or dentist_from_folder not in DENTISTS:
+            # Try to match folder name to known dentists
+            matched = False
+            for known_dentist in DENTISTS.keys():
+                if known_dentist.lower() in dentist_from_folder.lower() or dentist_from_folder.lower() in known_dentist.lower():
+                    dentist_from_folder = known_dentist
+                    matched = True
+                    break
+            
+            if not matched:
+                # Can't determine dentist - flag for manual assignment
+                print(f"   ⚠️ Unknown dentist folder: {dentist_from_folder}")
+                # Still try to get amount from PDF
+                content = download_pdf_content(drive_service, file_id)
+                if content:
+                    parsed = parse_lab_bill_pdf(content, pdf_info['name'], lab_from_folder)
+                    if parsed['total_amount'] > 0:
+                        unassigned_bills.append({
+                            'file_id': file_id,
+                            'filename': pdf_info['name'],
+                            'lab_name': lab_from_folder,
+                            'amount': parsed['total_amount'],
+                            'folder_dentist': dentist_from_folder,
+                            'statement_date': parsed.get('statement_date', ''),
+                        })
+                continue
+        
+        # New bill with known dentist - parse to get amount
         print(f"   Parsing: {pdf_info['name'][:40]}...")
         
         content = download_pdf_content(drive_service, file_id)
         if not content:
             continue
         
-        parsed = parse_lab_bill_pdf(content, pdf_info['name'], pdf_info['lab_name'])
+        parsed = parse_lab_bill_pdf(content, pdf_info['name'], lab_from_folder)
         
-        if parsed['dentist'] and parsed['total_amount'] > 0:
-            # Successfully identified - add to dentist's bills
-            dentist = parsed['dentist']
-            lab_name = parsed['lab_name']
+        if parsed['total_amount'] > 0:
+            # Use dentist from folder structure (more reliable than PDF parsing)
+            dentist = dentist_from_folder
+            lab_name = lab_from_folder
             amount = parsed['total_amount']
             
             lab_bills_by_dentist[dentist][lab_name] += amount
@@ -1031,20 +1090,8 @@ def process_lab_bills(drive_service, spreadsheet, period_str, target_month, targ
             })
             
             print(f"      ✅ {dentist}: {lab_name} £{amount:,.2f}")
-        
-        elif parsed['total_amount'] > 0:
-            # Amount found but no dentist - flag for manual assignment
-            unassigned_bills.append({
-                'file_id': file_id,
-                'filename': pdf_info['name'],
-                'lab_name': parsed['lab_name'],
-                'amount': parsed['total_amount'],
-                'statement_date': parsed.get('statement_date', ''),
-                'raw_text_snippet': parsed.get('raw_text', '')[:500]
-            })
-            print(f"      ⚠️ Need dentist assignment: {parsed['lab_name']} £{parsed['total_amount']:,.2f}")
         else:
-            print(f"      ⚠️ Could not parse: {pdf_info['name'][:30]}")
+            print(f"      ⚠️ Could not parse amount: {pdf_info['name'][:30]}")
     
     # Update Lab Bills Log with new assignments
     if new_assignments:
