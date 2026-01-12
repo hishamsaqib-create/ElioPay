@@ -438,8 +438,280 @@ def build_invoice_payment_map(payments):
 
 
 # =============================================================================
-# GOOGLE DRIVE & HISTORICAL PAYSLIP PARSING
+# THERAPY MINUTES CALCULATION
 # =============================================================================
+
+def get_appointments_for_period(start_date, end_date, practitioner_id=None):
+    """
+    Get all appointments for a period, optionally filtered by practitioner.
+    
+    Args:
+        start_date: Start of period
+        end_date: End of period
+        practitioner_id: Optional - filter to specific practitioner
+    
+    Returns:
+        List of appointment objects
+    """
+    all_appointments = []
+    page = 1
+    
+    while True:
+        params = {
+            "start_time_from": start_date.strftime("%Y-%m-%d"),
+            "start_time_to": end_date.strftime("%Y-%m-%d"),
+            "site_id": DENTALLY_SITE_ID,
+            "page": page,
+            "per_page": 100
+        }
+        
+        if practitioner_id:
+            params["practitioner_id"] = practitioner_id
+        
+        data = dentally_request("appointments", params)
+        if not data:
+            break
+        
+        appointments = data.get("appointments", [])
+        if not appointments:
+            break
+        
+        all_appointments.extend(appointments)
+        
+        # Check pagination
+        meta = data.get("meta", {})
+        total_pages = meta.get("total_pages", 1)
+        if page >= total_pages:
+            break
+        page += 1
+    
+    return all_appointments
+
+
+def get_patient_appointments(patient_id, before_date=None):
+    """
+    Get all appointments for a specific patient, optionally before a certain date.
+    Used to find the referring dentist (who did the exam first).
+    
+    Args:
+        patient_id: Patient ID
+        before_date: Only get appointments before this date
+    
+    Returns:
+        List of appointment objects sorted by date (earliest first)
+    """
+    all_appointments = []
+    page = 1
+    
+    while True:
+        params = {
+            "patient_id": patient_id,
+            "site_id": DENTALLY_SITE_ID,
+            "page": page,
+            "per_page": 100
+        }
+        
+        if before_date:
+            params["start_time_to"] = before_date.strftime("%Y-%m-%d")
+        
+        data = dentally_request("appointments", params)
+        if not data:
+            break
+        
+        appointments = data.get("appointments", [])
+        if not appointments:
+            break
+        
+        all_appointments.extend(appointments)
+        
+        meta = data.get("meta", {})
+        total_pages = meta.get("total_pages", 1)
+        if page >= total_pages:
+            break
+        page += 1
+    
+    # Sort by start_time (earliest first)
+    all_appointments.sort(key=lambda x: x.get("start_time", ""))
+    
+    return all_appointments
+
+
+def find_referring_dentist(patient_id, therapy_date):
+    """
+    Find which dentist referred a patient to the therapist.
+    
+    Logic: Find the most recent exam/check-up appointment with a dentist
+    before the therapy appointment.
+    
+    Args:
+        patient_id: Patient ID
+        therapy_date: Date of therapy appointment
+    
+    Returns:
+        Dentist name or None if not found
+    """
+    # Get patient's appointments before the therapy date
+    appointments = get_patient_appointments(patient_id, before_date=therapy_date)
+    
+    if not appointments:
+        return None
+    
+    # Look for the most recent dentist appointment (exam/check-up)
+    # Work backwards from most recent
+    exam_keywords = ["exam", "check", "consultation", "new patient", "recall"]
+    
+    for appt in reversed(appointments):
+        practitioner_id = appt.get("practitioner_id")
+        
+        # Skip if it's the therapist
+        if practitioner_id == THERAPIST_ID:
+            continue
+        
+        # Check if this is one of our dentists
+        dentist_name = PRACTITIONER_TO_DENTIST.get(practitioner_id)
+        if dentist_name:
+            # Found a dentist appointment - this is likely the referrer
+            # Check if it looks like an exam (optional, but helpful)
+            reason = str(appt.get("reason", "")).lower()
+            treatment_description = str(appt.get("treatment_description", "")).lower()
+            
+            # If it's clearly an exam, that's definitely the referrer
+            is_exam = any(kw in reason or kw in treatment_description for kw in exam_keywords)
+            
+            # Return this dentist - either it's an exam or the most recent dentist visit
+            return dentist_name
+    
+    return None
+
+
+def calculate_therapy_minutes(start_date, end_date):
+    """
+    Calculate therapy minutes per dentist for the period.
+    
+    Process:
+    1. Get all of Taryn's (therapist) appointments in the period
+    2. For each appointment, find the referring dentist
+    3. Sum up minutes per dentist
+    
+    Args:
+        start_date: First day of period
+        end_date: Last day of period
+    
+    Returns:
+        {
+            'dentist_name': {
+                'total_minutes': int,
+                'appointments': [
+                    {'patient': str, 'date': str, 'minutes': int, 'treatment': str}
+                ]
+            }
+        }
+    """
+    print(f"\n🦷 CALCULATING THERAPY MINUTES...")
+    print("=" * 50)
+    print(f"   Therapist: Taryn Dawson (ID: {THERAPIST_ID})")
+    print(f"   Rate: £{THERAPY_RATE_PER_MINUTE * 60:.2f}/hour (£{THERAPY_RATE_PER_MINUTE:.4f}/min)")
+    
+    # Get all of Taryn's appointments
+    print(f"\n   Fetching Taryn's appointments...")
+    taryn_appointments = get_appointments_for_period(start_date, end_date, practitioner_id=THERAPIST_ID)
+    
+    # Filter to completed appointments only
+    completed_appointments = [
+        appt for appt in taryn_appointments 
+        if appt.get("state") in ["completed", "arrived", "checked_in"]
+        or appt.get("finished", False)
+    ]
+    
+    print(f"   Found {len(taryn_appointments)} total appointments, {len(completed_appointments)} completed")
+    
+    if not completed_appointments:
+        print("   ℹ️ No therapy appointments found for this period")
+        return {}
+    
+    # Track minutes per dentist
+    therapy_by_dentist = defaultdict(lambda: {"total_minutes": 0, "appointments": []})
+    unassigned_appointments = []
+    patient_name_cache = {}
+    
+    # Process each therapy appointment
+    for appt in completed_appointments:
+        patient_id = appt.get("patient_id")
+        
+        # Get appointment duration in minutes
+        duration = appt.get("duration", 0)  # Duration in minutes
+        if not duration:
+            # Try to calculate from start/finish times
+            start_time = appt.get("start_time", "")
+            finish_time = appt.get("finish_time", "")
+            if start_time and finish_time:
+                try:
+                    start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                    finish_dt = datetime.fromisoformat(finish_time.replace('Z', '+00:00'))
+                    duration = int((finish_dt - start_dt).total_seconds() / 60)
+                except:
+                    duration = 0
+        
+        if duration <= 0:
+            continue
+        
+        # Get appointment date
+        appt_date_str = appt.get("start_time", "")[:10]  # YYYY-MM-DD
+        try:
+            appt_date = datetime.strptime(appt_date_str, "%Y-%m-%d")
+        except:
+            appt_date = end_date
+        
+        # Get patient name (with caching)
+        if patient_id not in patient_name_cache:
+            patient_name_cache[patient_id] = get_patient_name(patient_id)
+        patient_name = patient_name_cache[patient_id]
+        
+        # Find referring dentist
+        referring_dentist = find_referring_dentist(patient_id, appt_date)
+        
+        # Get treatment description
+        treatment = appt.get("reason", "") or appt.get("treatment_description", "") or "Therapy"
+        
+        appointment_info = {
+            "patient": patient_name,
+            "patient_id": patient_id,
+            "date": appt_date.strftime("%d/%m/%Y"),
+            "minutes": duration,
+            "treatment": treatment[:50]  # Truncate long descriptions
+        }
+        
+        if referring_dentist:
+            therapy_by_dentist[referring_dentist]["total_minutes"] += duration
+            therapy_by_dentist[referring_dentist]["appointments"].append(appointment_info)
+            print(f"      ✅ {patient_name}: {duration} min → {referring_dentist}")
+        else:
+            unassigned_appointments.append(appointment_info)
+            print(f"      ⚠️ {patient_name}: {duration} min → No referring dentist found")
+    
+    # Summary
+    print(f"\n   📊 Therapy Minutes Summary:")
+    total_minutes = 0
+    for dentist, data in therapy_by_dentist.items():
+        mins = data["total_minutes"]
+        cost = mins * THERAPY_RATE_PER_MINUTE
+        print(f"      {dentist}: {mins} min (£{cost:.2f})")
+        total_minutes += mins
+    
+    if unassigned_appointments:
+        unassigned_mins = sum(a["minutes"] for a in unassigned_appointments)
+        print(f"\n   ⚠️ {len(unassigned_appointments)} appointments ({unassigned_mins} min) could not be assigned")
+        print(f"      These need manual assignment in the spreadsheet")
+    
+    total_cost = total_minutes * THERAPY_RATE_PER_MINUTE
+    print(f"\n   💰 Total: {total_minutes} min = £{total_cost:.2f}")
+    
+    # Convert to simple dict for payslips
+    result = {}
+    for dentist, data in therapy_by_dentist.items():
+        result[dentist] = data["total_minutes"]
+    
+    return result, dict(therapy_by_dentist), unassigned_appointments
 
 def get_drive_service():
     """Get authenticated Google Drive service"""
@@ -2112,7 +2384,8 @@ def setup_new_payslip_spreadsheet(spreadsheet, period_str):
         tabs_to_create = [
             "Cross-Reference",
             "Lab Bills Log",
-            "Finance Flags"
+            "Finance Flags",
+            "Therapy Minutes"
         ]
         
         # Add dentist payslip tabs
@@ -2560,8 +2833,19 @@ def update_dentist_payslip(spreadsheet, dentist_name, payslip, period_str):
     
     # Therapy
     therapy_mins = payslip.get('therapy_minutes', 0)
-    rows.append(["", "Therapy", "", "", "", "", "", ""])
-    rows.append(["", "", f"Taryn ({therapy_mins} mins @ £0.58/min)", "", "", "", payslip.get('therapy_total', 0), ""])
+    therapy_appointments = payslip.get('therapy_appointments', [])
+    rows.append(["", "Therapy (Taryn Dawson)", "", "", "", "", "", ""])
+    
+    if therapy_appointments:
+        # Show breakdown of therapy appointments
+        for appt in therapy_appointments:
+            patient = appt.get('patient', 'Unknown')
+            mins = appt.get('minutes', 0)
+            date = appt.get('date', '')
+            rows.append(["", "", f"{patient} ({date})", "", "", "", mins, "min"])
+        rows.append(["", "", f"Total: {therapy_mins} mins @ £0.58/min", "", "", "", payslip.get('therapy_total', 0), ""])
+    else:
+        rows.append(["", "", f"Taryn ({therapy_mins} mins @ £0.58/min)", "", "", "", payslip.get('therapy_total', 0), ""])
     
     rows.append(["", "", "", "", "", "", "", ""])
     
@@ -2895,6 +3179,106 @@ def update_finance_flags(spreadsheet, finance_flags):
             ])
     else:
         rows.append(["", "No finance payments requiring term length", "", "", "", "", "", "", ""])
+    
+    sh.update(values=rows, range_name='A1')
+    time.sleep(1)  # Rate limit protection
+
+
+def update_therapy_tab(spreadsheet, therapy_details, unassigned_therapy, period_str):
+    """
+    Update Therapy Minutes tab with breakdown by dentist.
+    
+    Args:
+        spreadsheet: gspread spreadsheet object
+        therapy_details: {dentist: {total_minutes: int, appointments: [...]}}
+        unassigned_therapy: List of appointments without referring dentist
+        period_str: Period string (e.g., "December 2025")
+    """
+    print("   Updating Therapy Minutes...")
+    
+    try:
+        sh = spreadsheet.worksheet("Therapy Minutes")
+        sh.clear()
+    except:
+        try:
+            sh = spreadsheet.add_worksheet(title="Therapy Minutes", rows=300, cols=10)
+        except Exception as e:
+            print(f"      ⚠️ Cannot create Therapy Minutes tab: {e}")
+            return
+    
+    # Build data
+    rows = [
+        ["", "THERAPY MINUTES BREAKDOWN", "", "", "", "", ""],
+        ["", f"Period: {period_str}", "", "", "", "", ""],
+        ["", f"Therapist: Taryn Dawson", "", "", "", "", ""],
+        ["", f"Rate: £35.00/hour (£0.5833/min)", "", "", "", "", ""],
+        ["", "", "", "", "", "", ""],
+    ]
+    
+    # Summary by dentist
+    rows.append(["", "SUMMARY BY DENTIST", "", "", "", "", ""])
+    rows.append(["", "Dentist", "Total Minutes", "Cost", "", "", ""])
+    
+    total_minutes = 0
+    total_cost = 0
+    
+    for dentist, data in sorted(therapy_details.items()):
+        mins = data.get("total_minutes", 0)
+        cost = mins * THERAPY_RATE_PER_MINUTE
+        total_minutes += mins
+        total_cost += cost
+        rows.append(["", dentist, mins, f"£{cost:.2f}", "", "", ""])
+    
+    rows.append(["", "", "", "", "", "", ""])
+    rows.append(["", "TOTAL", total_minutes, f"£{total_cost:.2f}", "", "", ""])
+    rows.append(["", "", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", ""])
+    
+    # Detailed breakdown by dentist
+    rows.append(["", "DETAILED BREAKDOWN", "", "", "", "", ""])
+    rows.append(["", "", "", "", "", "", ""])
+    
+    for dentist, data in sorted(therapy_details.items()):
+        appointments = data.get("appointments", [])
+        if appointments:
+            rows.append(["", f"📋 {dentist}", "", "", "", "", ""])
+            rows.append(["", "Patient", "Date", "Minutes", "Treatment", "", ""])
+            
+            for appt in appointments:
+                rows.append([
+                    "",
+                    appt.get("patient", ""),
+                    appt.get("date", ""),
+                    appt.get("minutes", 0),
+                    appt.get("treatment", "")[:40],
+                    "",
+                    ""
+                ])
+            
+            dentist_total = data.get("total_minutes", 0)
+            rows.append(["", "", "Total:", dentist_total, "", "", ""])
+            rows.append(["", "", "", "", "", "", ""])
+    
+    # Unassigned appointments (need manual assignment)
+    if unassigned_therapy:
+        rows.append(["", "", "", "", "", "", ""])
+        rows.append(["", "⚠️ UNASSIGNED APPOINTMENTS", "", "", "", "", ""])
+        rows.append(["", "These could not be automatically assigned to a dentist", "", "", "", "", ""])
+        rows.append(["", "Patient", "Date", "Minutes", "Treatment", "Assign To", ""])
+        
+        for appt in unassigned_therapy:
+            rows.append([
+                "",
+                appt.get("patient", ""),
+                appt.get("date", ""),
+                appt.get("minutes", 0),
+                appt.get("treatment", "")[:40],
+                "",  # For manual assignment
+                ""
+            ])
+        
+        unassigned_total = sum(a.get("minutes", 0) for a in unassigned_therapy)
+        rows.append(["", "", "Total:", unassigned_total, "", "", ""])
     
     sh.update(values=rows, range_name='A1')
     time.sleep(1)  # Rate limit protection
@@ -4558,11 +4942,29 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
         print("\n❌ DENTALLY_API_TOKEN not set")
         return None
     
+    # Calculate therapy minutes automatically if not provided
+    therapy_details = {}
+    unassigned_therapy = []
+    if therapy_minutes is None:
+        try:
+            therapy_minutes, therapy_details, unassigned_therapy = calculate_therapy_minutes(start_date, end_date)
+        except Exception as e:
+            print(f"\n⚠️ Error calculating therapy minutes: {e}")
+            import traceback
+            traceback.print_exc()
+            therapy_minutes = {}
+    
     # Calculate payslips
     payslips, finance_flags = calculate_payslips(
         start_date, end_date,
         lab_bills, therapy_minutes, nhs_udas
     )
+    
+    # Add therapy appointment details to each payslip
+    if therapy_details:
+        for dentist, data in therapy_details.items():
+            if dentist in payslips:
+                payslips[dentist]['therapy_appointments'] = data.get('appointments', [])
     
     # Get or create monthly spreadsheet
     drive_service = get_drive_service()
@@ -4738,6 +5140,12 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
                 update_finance_flags(spreadsheet, finance_flags)
                 print(f"   ⚠️ {len(finance_flags)} finance payments need term length")
             
+            # Update therapy minutes tab
+            if therapy_details or unassigned_therapy:
+                update_therapy_tab(spreadsheet, therapy_details, unassigned_therapy, period_str)
+                total_therapy_mins = sum(d.get("total_minutes", 0) for d in therapy_details.values())
+                print(f"   ✅ Therapy Minutes: {total_therapy_mins} min total")
+            
             # Perform cross-reference with dentist logs
             client = get_sheets_client()
             xref_results = perform_cross_reference(client, payslips, month, year)
@@ -4780,12 +5188,15 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     total_nhs = sum(p.get('nhs_income', 0) for p in payslips.values())
     total_private = sum(p.get('net_private', 0) for p in payslips.values())
     total_deductions = sum(p.get('total_deductions', 0) for p in payslips.values())
+    total_therapy = sum(p.get('therapy_total', 0) for p in payslips.values())
     
     print(f"\n💰 Total Payout: £{total_payout:,.2f}")
     print(f"   Private Net: £{total_private:,.2f}")
     if total_nhs > 0:
         print(f"   NHS Income:  £{total_nhs:,.2f}")
     print(f"   Deductions:  £{total_deductions:,.2f}")
+    if total_therapy > 0:
+        print(f"     (incl. Therapy: £{total_therapy:,.2f})")
     
     # Show correct spreadsheet link
     if spreadsheet:
@@ -4796,6 +5207,11 @@ def run_payslip_generator(year=None, month=None, lab_bills=None, therapy_minutes
     # Warnings
     if finance_flags:
         print(f"\n⚠️ ACTION REQUIRED: Enter term lengths for {len(finance_flags)} finance payments")
+    
+    # Unassigned therapy warning
+    if unassigned_therapy:
+        unassigned_mins = sum(a.get('minutes', 0) for a in unassigned_therapy)
+        print(f"\n⚠️ THERAPY: {len(unassigned_therapy)} appointments ({unassigned_mins} min) need manual dentist assignment")
     
     # Duplicate check summary
     if all_duplicates:
