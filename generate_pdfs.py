@@ -141,7 +141,7 @@ def export_sheet_as_pdf(spreadsheet_id, sheet_id, credentials):
         'printtitle': 'false',
         'sheetnames': 'false',
         'pagenum': 'false',
-        'top_margin': '0.5',
+        'top_margin': '0.25',
         'bottom_margin': '0.5',
         'left_margin': '0.5',
         'right_margin': '0.5'
