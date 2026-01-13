@@ -1,0 +1,37 @@
+name: Generate PDFs
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Month (1-12)'
+        required: true
+        type: number
+      year:
+        description: 'Year (e.g., 2025)'
+        required: true
+        type: number
+
+jobs:
+  generate-pdfs:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install gspread google-auth google-auth-oauthlib google-api-python-client requests
+      
+      - name: Generate PDFs
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          PAYSLIPS_FOLDER_ID: ${{ secrets.PAYSLIPS_FOLDER_ID }}
+        run: |
+          python generate_pdfs.py --month ${{ inputs.month }} --year ${{ inputs.year }}
