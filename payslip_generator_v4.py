@@ -762,6 +762,15 @@ def calculate_therapy_minutes(start_date, end_date):
             print(f"      ⚠️ {patient_name}: Skipping - no duration")
             continue
         
+        # Get treatment description
+        treatment = appt.get("reason", "") or appt.get("treatment_description", "") or "Therapy"
+        
+        # EXCLUSION: SmileWhite exams are never charged to dentists
+        # These are booked directly with Taryn, not referred by any dentist
+        if "smilewhite" in treatment.lower():
+            print(f"      ⏭️ {patient_name}: Skipping SmileWhite exam - not charged to dentists")
+            continue
+        
         # Get appointment date
         appt_date_str = appt.get("start_time", "")[:10]  # YYYY-MM-DD
         try:
@@ -774,9 +783,6 @@ def calculate_therapy_minutes(start_date, end_date):
         
         # Find referring dentist
         referring_dentist, found_practitioner_id = find_referring_dentist(patient_id, appt_date)
-        
-        # Get treatment description
-        treatment = appt.get("reason", "") or appt.get("treatment_description", "") or "Therapy"
         
         appointment_info = {
             "patient": patient_name,
