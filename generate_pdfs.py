@@ -13,6 +13,7 @@ Or via GitHub Actions workflow.
 import os
 import sys
 import json
+import base64
 import argparse
 import requests
 import gspread
@@ -43,11 +44,24 @@ SCOPES = [
 # =============================================================================
 
 def get_credentials():
-    """Get Google credentials."""
-    if not GOOGLE_SHEETS_CREDENTIALS:
-        raise ValueError("GOOGLE_SHEETS_CREDENTIALS environment variable not set")
+    """Get Google credentials (base64 encoded)."""
+    print(f"\n🔐 Checking credentials...")
+    print(f"   Raw length: {len(GOOGLE_SHEETS_CREDENTIALS)} chars")
     
-    creds_dict = json.loads(GOOGLE_SHEETS_CREDENTIALS)
+    if not GOOGLE_SHEETS_CREDENTIALS or not GOOGLE_SHEETS_CREDENTIALS.strip():
+        raise ValueError("GOOGLE_SHEETS_CREDENTIALS environment variable not set or empty")
+    
+    creds_str = GOOGLE_SHEETS_CREDENTIALS.strip()
+    
+    # Decode from base64
+    try:
+        decoded = base64.b64decode(creds_str)
+        creds_dict = json.loads(decoded)
+        print(f"   ✅ Credentials decoded successfully")
+    except Exception as e:
+        print(f"   ❌ Failed to decode credentials: {e}")
+        raise ValueError(f"GOOGLE_SHEETS_CREDENTIALS decode failed: {e}")
+    
     return Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
 
