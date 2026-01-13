@@ -17,6 +17,7 @@ import argparse
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
+from google.auth.transport.requests import Request as GoogleAuthRequest
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from datetime import datetime
@@ -147,7 +148,7 @@ def export_sheet_as_pdf(spreadsheet_id, sheet_id, credentials):
     }
     
     # Get access token
-    credentials.refresh(requests.Request())
+    credentials.refresh(GoogleAuthRequest())
     headers = {
         'Authorization': f'Bearer {credentials.token}'
     }
@@ -231,15 +232,29 @@ def generate_all_pdfs(spreadsheet, month_name, year, drive_service, pdf_folder_i
 
 def main():
     parser = argparse.ArgumentParser(description='Generate payslip PDFs')
-    parser.add_argument('--month', type=int, required=True, help='Month (1-12)')
-    parser.add_argument('--year', type=int, required=True, help='Year (e.g., 2025)')
+    parser.add_argument('--month', type=int, required=False, help='Month (1-12), defaults to previous month')
+    parser.add_argument('--year', type=int, required=False, help='Year (e.g., 2025), defaults to previous month')
     parser.add_argument('--dentists', type=str, default='all', help='Comma-separated dentist names or "all"')
     args = parser.parse_args()
+    
+    # Default to previous month if not specified
+    if args.month and args.year:
+        month = args.month
+        year = args.year
+    else:
+        today = datetime.now()
+        # Get previous month
+        if today.month == 1:
+            month = 12
+            year = today.year - 1
+        else:
+            month = today.month - 1
+            year = today.year
     
     print("="*60)
     print("AURA DENTAL - GENERATE PAYSLIP PDFs")
     print("="*60)
-    print(f"Month: {args.month}/{args.year}")
+    print(f"Month: {month}/{year}")
     
     # Initialize clients
     credentials = get_credentials()
@@ -247,7 +262,7 @@ def main():
     drive_service = get_drive_service()
     
     # Find spreadsheet
-    spreadsheet, month_name, year = find_monthly_spreadsheet(client, args.month, args.year)
+    spreadsheet, month_name, found_year = find_monthly_spreadsheet(client, month, year)
     
     if not spreadsheet:
         print("\n❌ Could not find spreadsheet. Make sure payslips have been generated first.")
@@ -266,7 +281,7 @@ def main():
     
     # Generate PDFs
     created, errors = generate_all_pdfs(
-        spreadsheet, month_name, year, 
+        spreadsheet, month_name, found_year, 
         drive_service, pdf_folder_id, credentials
     )
     
