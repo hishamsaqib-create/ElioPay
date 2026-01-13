@@ -16,6 +16,7 @@ import json
 import argparse
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 from datetime import datetime
 
 # =============================================================================
@@ -31,33 +32,54 @@ SCOPES = [
 ]
 
 # =============================================================================
-# GOOGLE SHEETS CLIENT
+# GOOGLE CLIENTS
 # =============================================================================
 
-def get_sheets_client():
-    """Initialize Google Sheets client."""
+def get_credentials():
+    """Get Google credentials."""
     if not GOOGLE_SHEETS_CREDENTIALS:
         raise ValueError("GOOGLE_SHEETS_CREDENTIALS environment variable not set")
     
     creds_dict = json.loads(GOOGLE_SHEETS_CREDENTIALS)
-    credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    return Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+
+
+def get_sheets_client():
+    """Initialize Google Sheets client."""
+    credentials = get_credentials()
     return gspread.authorize(credentials)
 
 
-def find_monthly_spreadsheet(client, month, year):
-    """Find the payslip spreadsheet for given month/year."""
+def get_drive_service():
+    """Initialize Google Drive service."""
+    credentials = get_credentials()
+    return build('drive', 'v3', credentials=credentials)
+
+
+def find_monthly_spreadsheet(client, drive_service, month, year):
+    """Find the payslip spreadsheet for given month/year using Drive API."""
     month_name = datetime(year, month, 1).strftime("%B")
     sheet_name = f"Aura Payslips - {month_name} {year}"
     
     print(f"\n📊 Looking for: {sheet_name}")
     
     try:
-        # Search for spreadsheet
-        spreadsheets = client.list_spreadsheet_files()
-        for ss in spreadsheets:
-            if ss['name'] == sheet_name:
-                print(f"   ✅ Found: {ss['name']}")
-                return client.open_by_key(ss['id'])
+        # Search using Drive API for better reliability with shared drives
+        query = f"name = '{sheet_name}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
+        
+        results = drive_service.files().list(
+            q=query,
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        
+        files = results.get('files', [])
+        
+        if files:
+            file_id = files[0]['id']
+            print(f"   ✅ Found: {files[0]['name']}")
+            return client.open_by_key(file_id)
         
         print(f"   ❌ Not found: {sheet_name}")
         return None
@@ -384,11 +406,12 @@ def main():
     print("="*60)
     print(f"Month: {args.month}/{args.year}")
     
-    # Initialize client
+    # Initialize clients
     client = get_sheets_client()
+    drive_service = get_drive_service()
     
     # Find spreadsheet
-    spreadsheet = find_monthly_spreadsheet(client, args.month, args.year)
+    spreadsheet = find_monthly_spreadsheet(client, drive_service, args.month, args.year)
     
     if not spreadsheet:
         print("\n❌ Could not find spreadsheet. Make sure payslips have been generated first.")
