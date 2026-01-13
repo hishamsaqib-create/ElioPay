@@ -37,10 +37,23 @@ SCOPES = [
 
 def get_credentials():
     """Get Google credentials."""
-    if not GOOGLE_SHEETS_CREDENTIALS:
-        raise ValueError("GOOGLE_SHEETS_CREDENTIALS environment variable not set")
+    print(f"\n🔐 Checking credentials...")
+    print(f"   Raw length: {len(GOOGLE_SHEETS_CREDENTIALS)} chars")
+    print(f"   Stripped length: {len(GOOGLE_SHEETS_CREDENTIALS.strip())} chars")
     
-    creds_dict = json.loads(GOOGLE_SHEETS_CREDENTIALS)
+    if not GOOGLE_SHEETS_CREDENTIALS or not GOOGLE_SHEETS_CREDENTIALS.strip():
+        raise ValueError("GOOGLE_SHEETS_CREDENTIALS environment variable not set or empty")
+    
+    creds_str = GOOGLE_SHEETS_CREDENTIALS.strip()
+    
+    # Check if it starts with {
+    if not creds_str.startswith('{'):
+        print(f"   ⚠️ Credentials don't start with '{{' - first char: '{creds_str[0] if creds_str else 'EMPTY'}'")
+        raise ValueError("GOOGLE_SHEETS_CREDENTIALS doesn't look like valid JSON")
+    
+    print(f"   ✅ Credentials look valid (starts with '{{')")
+    
+    creds_dict = json.loads(creds_str)
     return Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
 
