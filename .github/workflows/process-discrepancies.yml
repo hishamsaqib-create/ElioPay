@@ -27,7 +27,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install gspread google-auth google-auth-oauthlib
+          pip install gspread google-auth google-auth-oauthlib google-api-python-client
       
       - name: Process Discrepancies
         env:
