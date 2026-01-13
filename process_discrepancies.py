@@ -487,21 +487,35 @@ def process_all_discrepancies(spreadsheet):
 
 def main():
     parser = argparse.ArgumentParser(description='Process payslip discrepancies')
-    parser.add_argument('--month', type=int, required=True, help='Month (1-12)')
-    parser.add_argument('--year', type=int, required=True, help='Year (e.g., 2025)')
+    parser.add_argument('--month', type=int, required=False, help='Month (1-12), defaults to previous month')
+    parser.add_argument('--year', type=int, required=False, help='Year (e.g., 2025), defaults to previous month')
     args = parser.parse_args()
+    
+    # Default to previous month if not specified
+    if args.month and args.year:
+        month = args.month
+        year = args.year
+    else:
+        today = datetime.now()
+        # Get previous month
+        if today.month == 1:
+            month = 12
+            year = today.year - 1
+        else:
+            month = today.month - 1
+            year = today.year
     
     print("="*60)
     print("AURA DENTAL - PROCESS DISCREPANCIES")
     print("="*60)
-    print(f"Month: {args.month}/{args.year}")
+    print(f"Month: {month}/{year}")
     
     # Initialize clients
     client = get_sheets_client()
     drive_service = get_drive_service()
     
     # Find spreadsheet
-    spreadsheet = find_monthly_spreadsheet(client, drive_service, args.month, args.year)
+    spreadsheet = find_monthly_spreadsheet(client, drive_service, month, year)
     
     if not spreadsheet:
         print("\n❌ Could not find spreadsheet. Make sure payslips have been generated first.")
