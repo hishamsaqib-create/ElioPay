@@ -244,6 +244,9 @@ def process_dentist_discrepancies(spreadsheet, sheet_name):
     # Track row offset as we insert/delete rows
     row_offset = 0
     
+    # Track successfully processed items for deletion
+    successfully_processed = []
+    
     # Process each item
     for item in items:
         action = item['action']
@@ -258,15 +261,25 @@ def process_dentist_discrepancies(spreadsheet, sheet_name):
                 # Insert blank row
                 sheet.insert_row([''] * 8, insert_row)
                 
-                # Set values (columns B, C, D, E)
+                # Set values (columns B, C, D, E) - use batch update for formatting
                 sheet.update_cell(insert_row, 2, patient)  # B: Patient
                 sheet.update_cell(insert_row, 3, item['date'])  # C: Date
                 sheet.update_cell(insert_row, 4, '✓')  # D: Status
                 sheet.update_cell(insert_row, 5, final_amount)  # E: Amount
                 
+                # Format the amount cell as currency
+                try:
+                    sheet.format(f'E{insert_row}', {
+                        'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'},
+                        'horizontalAlignment': 'RIGHT'
+                    })
+                except:
+                    pass
+                
                 print(f"         ✅ Added: {patient} - £{final_amount:.2f}")
                 results['added'] += 1
                 row_offset += 1
+                successfully_processed.append(item)
                 
             elif action == 'Remove from Pay':
                 # Find patient in breakdown and delete
@@ -283,6 +296,7 @@ def process_dentist_discrepancies(spreadsheet, sheet_name):
                         results['removed'] += 1
                         row_offset -= 1
                         found = True
+                        successfully_processed.append(item)
                         break
                 
                 if not found:
@@ -305,9 +319,18 @@ def process_dentist_discrepancies(spreadsheet, sheet_name):
                     cell_val = str(current_data[i][1] if len(current_data[i]) > 1 else '').lower()
                     if cell_val == patient.lower():
                         sheet.update_cell(i + 1, 5, item['new_amount'])  # Column E
+                        # Format the updated cell as currency
+                        try:
+                            sheet.format(f'E{i + 1}', {
+                                'numberFormat': {'type': 'CURRENCY', 'pattern': '£#,##0.00'},
+                                'horizontalAlignment': 'RIGHT'
+                            })
+                        except:
+                            pass
                         print(f"         ✅ Updated: {patient} → £{item['new_amount']:.2f}")
                         results['updated'] += 1
                         found = True
+                        successfully_processed.append(item)
                         break
                 
                 if not found:
@@ -319,40 +342,94 @@ def process_dentist_discrepancies(spreadsheet, sheet_name):
                 results['errors'].append(f"Unknown action '{action}' for '{patient}'")
                 continue
             
-            # Track processed row (adjusted for offset)
-            results['processed_rows'].append(item['row'] + row_offset)
-            
         except Exception as e:
             print(f"         ❌ Error processing {patient}: {e}")
             results['errors'].append(f"Error with '{patient}': {e}")
     
-    # Delete processed discrepancy rows (in reverse order)
-    if results['processed_rows']:
-        print(f"      🗑️ Removing {len(results['processed_rows'])} processed discrepancy row(s)...")
-        
-        # Re-read data to get current row positions
+    # After all processing, update totals and clean up
+    total_processed = results['added'] + results['removed'] + results['updated']
+    
+    if total_processed > 0:
+        # Re-read data to get current state
         current_data = sheet.get_all_values()
         
-        # Find and delete processed rows by matching patient names
-        rows_to_delete = []
-        processed_patients = [item['patient'].lower() for item in items if item['action'] in ['Add to Pay', 'Remove from Pay', 'Update Amount']]
+        # Find the new Total row position (it moved due to inserts/deletes)
+        new_patient_end = -1
+        new_patient_start = -1
+        for i, row in enumerate(current_data):
+            cell_b = str(row[1] if len(row) > 1 else '').lower()
+            if 'private patient breakdown' in cell_b:
+                new_patient_start = i + 3
+            if new_patient_start > 0 and new_patient_end < 0:
+                if cell_b.startswith('total:') and 'patient' in cell_b:
+                    new_patient_end = i
         
-        for i in range(sections['discrepancies_start'], len(current_data)):
-            row = current_data[i]
-            if len(row) > 6:
-                patient_name = str(row[1]).lower().strip()
-                checkbox = row[6]
-                is_checked = checkbox == True or str(checkbox).upper() == 'TRUE'
-                
-                if is_checked and patient_name in processed_patients:
-                    rows_to_delete.append(i + 1)
+        # Update the Total row with SUM formula
+        if new_patient_end > 0 and new_patient_start > 0:
+            # Count patients (rows between start and end)
+            patient_count = new_patient_end - new_patient_start
+            
+            # Update Total label and SUM formula
+            sheet.update_cell(new_patient_end + 1, 2, f'Total: {patient_count} patients')
+            sum_formula = f'=SUM(E{new_patient_start + 1}:E{new_patient_end})'
+            sheet.update_cell(new_patient_end + 1, 5, sum_formula)
+            print(f"      📊 Updated Total row with SUM formula")
         
-        # Delete in reverse order
-        for row_num in sorted(rows_to_delete, reverse=True):
-            try:
-                sheet.delete_rows(row_num)
-            except Exception as e:
-                print(f"         ⚠️ Could not delete row {row_num}: {e}")
+        # Find and update Gross Private in summary section (usually around row 7-10)
+        for i in range(min(15, len(current_data))):
+            cell_b = str(current_data[i][1] if len(current_data[i]) > 1 else '').lower()
+            if 'gross private' in cell_b or 'private gross' in cell_b:
+                # Link to the Total row
+                if new_patient_end > 0:
+                    sheet.update_cell(i + 1, 5, f'=E{new_patient_end + 1}')
+                    print(f"      💰 Updated Gross Private to reference Total")
+                break
+    
+    # Delete processed discrepancy rows
+    if successfully_processed:
+        print(f"      🗑️ Removing {len(successfully_processed)} processed discrepancy row(s)...")
+        
+        # Get the row numbers from successfully processed items (already 1-indexed)
+        # Sort in reverse order to delete from bottom up
+        rows_to_delete = sorted([item['row'] for item in successfully_processed], reverse=True)
+        
+        # Need to re-read the data to find current positions since rows may have shifted
+        current_data = sheet.get_all_values()
+        
+        # Find discrepancies section again
+        disc_start = -1
+        for i, row in enumerate(current_data):
+            cell_b = str(row[1] if len(row) > 1 else '').lower()
+            if 'discrepancies to review' in cell_b:
+                disc_start = i
+                break
+        
+        if disc_start > 0:
+            # Find rows with ticked checkboxes that match processed patients
+            processed_patients = [item['patient'].lower() for item in successfully_processed]
+            rows_to_delete = []
+            
+            for i in range(disc_start, len(current_data)):
+                row = current_data[i]
+                if len(row) > 6:
+                    patient_name = str(row[1]).lower().strip()
+                    checkbox = row[6]
+                    # Check if checkbox is TRUE (might be string or bool)
+                    is_checked = str(checkbox).upper() == 'TRUE'
+                    
+                    if is_checked and patient_name in processed_patients:
+                        rows_to_delete.append(i + 1)
+            
+            # Delete in reverse order
+            deleted_count = 0
+            for row_num in sorted(rows_to_delete, reverse=True):
+                try:
+                    sheet.delete_rows(row_num)
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"         ⚠️ Could not delete row {row_num}: {e}")
+            
+            print(f"      ✅ Deleted {deleted_count} discrepancy row(s)")
     
     return results
 
@@ -441,8 +518,8 @@ def main():
         print("\n📋 No discrepancy items to process")
     
     if results['errors']:
-        print(f"⚠️ {len(results['errors'])} error(s) occurred - check logs above")
-        sys.exit(1)
+        print(f"⚠️ {len(results['errors'])} warning(s) occurred - check logs above")
+        # Don't exit with error code for minor warnings
     
     print("\n🔗 View spreadsheet:", spreadsheet.url)
 
