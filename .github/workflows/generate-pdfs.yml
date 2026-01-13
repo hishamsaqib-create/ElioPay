@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       month:
-        description: 'Month (1-12)'
-        required: true
-        type: number
+        description: 'Month (1-12) - leave empty for previous month'
+        required: false
+        type: string
       year:
-        description: 'Year (e.g., 2025)'
-        required: true
-        type: number
+        description: 'Year (e.g., 2025) - leave empty for previous month'
+        required: false
+        type: string
 
 jobs:
   generate-pdfs:
@@ -34,4 +34,11 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           PAYSLIPS_FOLDER_ID: ${{ secrets.PAYSLIPS_FOLDER_ID }}
         run: |
-          python generate_pdfs.py --month ${{ inputs.month }} --year ${{ inputs.year }}
+          ARGS=""
+          if [ -n "${{ inputs.month }}" ]; then
+            ARGS="$ARGS --month ${{ inputs.month }}"
+          fi
+          if [ -n "${{ inputs.year }}" ]; then
+            ARGS="$ARGS --year ${{ inputs.year }}"
+          fi
+          python generate_pdfs.py $ARGS
