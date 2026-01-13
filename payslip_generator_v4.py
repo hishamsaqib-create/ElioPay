@@ -3888,7 +3888,7 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
     next_row = len(existing) + 3  # Leave 2 blank rows
     
     discrepancy_rows = []
-    data_rows = []  # Track which rows have data
+    data_rows = []  # Track which rows have data: (row_num, type)
     
     # Header section
     discrepancy_rows.extend([
@@ -3896,20 +3896,20 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
         ["", "", "", "", "", "", "", ""],
         ["", "─────────────────────────────────────────────────────────────", "", "", "", "", "", ""],
         ["", "⚠️ DISCREPANCIES TO REVIEW", "", "", "", "", "", ""],
-        ["", "Enter New £ → Select Action → Tick ✓ → Use menu: Update Discrepancies", "", "", "", "", "", ""],
+        ["", "Enter New £ → Select Action → Tick ✓ → Run GitHub: Process Discrepancies", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", ""],
     ])
     
     has_discrepancies = False
     
-    # 1. Items in dentist log but NOT in Dentally
+    # 1. Items in dentist log but NOT in Dentally - needs ADD TO PAY
     log_only = xref.get("log_only", [])
     if log_only:
         has_discrepancies = True
         discrepancy_rows.append(["", "🔴 IN LOG NOT DENTALLY (may need to ADD)", "", "", "", "", "", ""])
         discrepancy_rows.append(["", "Patient", "Date", "Amount", "New £", "Action", "✓", ""])
         for item in log_only:
-            data_rows.append(next_row + len(discrepancy_rows))
+            data_rows.append((next_row + len(discrepancy_rows), "log_only"))
             discrepancy_rows.append([
                 "",
                 item.get("patient", ""),
@@ -3922,14 +3922,14 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
             ])
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
-    # 2. Amount mismatches
+    # 2. Amount mismatches - needs UPDATE AMOUNT
     amount_mismatch = xref.get("amount_mismatch", [])
     if amount_mismatch:
         has_discrepancies = True
         discrepancy_rows.append(["", "🟡 AMOUNT MISMATCH", "", "", "", "", "", ""])
         discrepancy_rows.append(["", "Patient", "Dentally £", "Log £", "New £", "Action", "✓", ""])
         for item in amount_mismatch:
-            data_rows.append(next_row + len(discrepancy_rows))
+            data_rows.append((next_row + len(discrepancy_rows), "amount_mismatch"))
             discrepancy_rows.append([
                 "",
                 item.get("patient", ""),
@@ -3942,14 +3942,14 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
             ])
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
-    # 3. Items in Dentally but NOT in log
+    # 3. Items in Dentally but NOT in log - may need REMOVE FROM PAY
     dentally_only = xref.get("dentally_only", [])
     if dentally_only:
         has_discrepancies = True
         discrepancy_rows.append(["", "🔵 IN DENTALLY NOT LOG (verify if correct)", "", "", "", "", "", ""])
         discrepancy_rows.append(["", "Patient", "Date", "Amount", "New £", "Action", "✓", ""])
         for item in dentally_only:
-            data_rows.append(next_row + len(discrepancy_rows))
+            data_rows.append((next_row + len(discrepancy_rows), "dentally_only"))
             discrepancy_rows.append([
                 "",
                 item.get("patient", ""),
@@ -3962,14 +3962,14 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
             ])
         discrepancy_rows.append(["", "", "", "", "", "", "", ""])
     
-    # 4. Unpaid/Balance flags
+    # 4. Unpaid/Balance flags - may need ADD TO PAY
     unpaid_flags = xref.get("unpaid_flags", [])
     if unpaid_flags:
         has_discrepancies = True
         discrepancy_rows.append(["", "🟠 UNPAID/BALANCE (not in pay)", "", "", "", "", "", ""])
         discrepancy_rows.append(["", "Patient", "Date", "Amount", "New £", "Action", "✓", ""])
         for item in unpaid_flags:
-            data_rows.append(next_row + len(discrepancy_rows))
+            data_rows.append((next_row + len(discrepancy_rows), "unpaid"))
             discrepancy_rows.append([
                 "",
                 item.get("patient", ""),
@@ -3990,13 +3990,23 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
         sh.update(values=discrepancy_rows, range_name=f'A{next_row}', value_input_option='USER_ENTERED')
         time.sleep(1)
         
-        # Add dropdowns and checkboxes
+        # Add dropdowns and checkboxes based on discrepancy type
         if data_rows:
             try:
                 requests = []
                 sheet_id = sh.id
                 
-                for row_num in data_rows:
+                # Dropdown options per discrepancy type
+                dropdown_options = {
+                    'log_only': ['Add to Pay', 'Update Amount'],  # In log, not Dentally - usually ADD
+                    'amount_mismatch': ['Update Amount', 'Remove from Pay'],  # Amounts differ - UPDATE
+                    'dentally_only': ['Remove from Pay', 'Update Amount'],  # In Dentally, not log - maybe REMOVE
+                    'unpaid': ['Add to Pay', 'Update Amount']  # Unpaid - might need to ADD
+                }
+                
+                for row_num, disc_type in data_rows:
+                    options = dropdown_options.get(disc_type, ['Add to Pay', 'Remove from Pay', 'Update Amount'])
+                    
                     # Action dropdown (column F = index 5)
                     requests.append({
                         'setDataValidation': {
@@ -4010,11 +4020,7 @@ def update_payslip_discrepancies(spreadsheet, dentist_name, xref):
                             'rule': {
                                 'condition': {
                                     'type': 'ONE_OF_LIST',
-                                    'values': [
-                                        {'userEnteredValue': 'Add to Pay'},
-                                        {'userEnteredValue': 'Remove from Pay'},
-                                        {'userEnteredValue': 'Update Amount'}
-                                    ]
+                                    'values': [{'userEnteredValue': opt} for opt in options]
                                 },
                                 'showCustomUi': True,
                                 'strict': True
