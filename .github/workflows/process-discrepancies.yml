@@ -1,0 +1,37 @@
+name: Process Discrepancies
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Month (1-12)'
+        required: true
+        type: number
+      year:
+        description: 'Year (e.g., 2025)'
+        required: true
+        type: number
+
+jobs:
+  process-discrepancies:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install gspread google-auth google-auth-oauthlib
+      
+      - name: Process Discrepancies
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          PAYSLIPS_FOLDER_ID: ${{ secrets.PAYSLIPS_FOLDER_ID }}
+        run: |
+          python process_discrepancies.py --month ${{ inputs.month }} --year ${{ inputs.year }}
