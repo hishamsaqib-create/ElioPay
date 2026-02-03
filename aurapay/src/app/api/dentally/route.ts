@@ -350,16 +350,18 @@ export async function POST(req: NextRequest) {
     // Fetch all users first to identify clinicians by role
     const allUsers = await fetchAllUsers(token);
 
-    // Fetch invoices from Dentally
-    // Note: The API date filters may not work reliably, so we'll filter client-side as well
-    const url = `${DENTALLY_API}/invoices?site_id=${SITE_ID}`;
+    // Fetch invoices from Dentally WITH date filtering
+    // Use dated_on_from and dated_on_to to filter by invoice date (not created_at)
+    // This significantly reduces the number of invoices fetched
+    const url = `${DENTALLY_API}/invoices?site_id=${SITE_ID}&dated_on_from=${startDate}&dated_on_to=${endDate}`;
+    console.log(`[Dentally] Fetching invoices with date filter: ${startDate} to ${endDate}`);
     const allInvoices = await fetchAllPages(url, token);
 
-    console.log(`[Dentally] Total invoices from API: ${allInvoices.length}`);
+    console.log(`[Dentally] Total invoices from API (with date filter): ${allInvoices.length}`);
 
-    // CLIENT-SIDE DATE FILTERING: Only include invoices within the date range
+    // Additional client-side date filtering as safety net (in case API filter is loose)
     const invoices = allInvoices.filter(inv => isInvoiceInDateRange(inv, startDate, endDate));
-    console.log(`[Dentally] Invoices in date range (${startDate} to ${endDate}): ${invoices.length}`);
+    console.log(`[Dentally] Invoices after client-side verification: ${invoices.length}`);
 
     // Track data per dentist
     type DentistData = {
