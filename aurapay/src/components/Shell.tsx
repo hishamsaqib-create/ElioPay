@@ -64,8 +64,12 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       >
         <div className="h-16 flex items-center px-6 border-b border-border">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
-              <span className="text-amber-300 font-bold text-sm">£</span>
+            <div className="w-8 h-8 flex items-center justify-center">
+              <svg viewBox="0 0 100 100" className="w-8 h-8">
+                <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-700"/>
+                <path d="M50 25 L35 70 L42 70 L45 60 L55 60 L58 70 L65 70 L50 25 Z M47 53 L50 42 L53 53 Z" fill="currentColor" className="text-slate-700"/>
+                <path d="M40 58 Q50 68 60 58" fill="currentColor" className="text-slate-700"/>
+              </svg>
             </div>
             <div>
               <h1 className="text-base font-bold text-text leading-none">AuraPay<sup className="text-[8px] font-medium ml-0.5 text-text-subtle">TM</sup></h1>

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Shell from "@/components/Shell";
-import { Plus, Pencil, X, Check } from "lucide-react";
+import { Plus, Pencil, X, Check, RefreshCw, AlertCircle } from "lucide-react";
 
 interface Dentist {
   id: number; name: string; email: string | null; split_percentage: number;
@@ -18,6 +18,8 @@ export default function DentistsPage() {
   const [dentists, setDentists] = useState<Dentist[]>([]);
   const [editing, setEditing] = useState<Partial<Dentist> | null>(null);
   const [isNew, setIsNew] = useState(false);
+  const [dentallyIds, setDentallyIds] = useState<string[]>([]);
+  const [loadingIds, setLoadingIds] = useState(false);
 
   useEffect(() => { loadDentists(); }, []);
 
@@ -25,6 +27,30 @@ export default function DentistsPage() {
     const r = await fetch("/api/dentists");
     const d = await r.json();
     setDentists(d.dentists || []);
+  }
+
+  async function fetchDentallyIds() {
+    setLoadingIds(true);
+    try {
+      const r = await fetch("/api/dentally/debug");
+      const data = await r.json();
+      if (data.raw_first_invoice) {
+        // Extract practitioner IDs from the sample
+        const ids: string[] = [];
+        const inv = data.raw_first_invoice;
+        if (inv.practitioner_id) ids.push(String(inv.practitioner_id));
+        if (inv.practitioner) ids.push(String(inv.practitioner));
+        if (inv.invoice_items) {
+          for (const item of inv.invoice_items) {
+            if (item.practitioner_id) ids.push(String(item.practitioner_id));
+          }
+        }
+        setDentallyIds([...new Set(ids)]);
+      }
+    } catch (e) {
+      console.error("Failed to fetch Dentally IDs", e);
+    }
+    setLoadingIds(false);
   }
 
   async function save() {
@@ -161,36 +187,72 @@ export default function DentistsPage() {
           </div>
         )}
 
+        {/* Dentally ID Helper */}
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={18} className="text-amber-600 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-amber-800">Dentally Practitioner IDs</p>
+              <p className="text-xs text-amber-700 mt-1">
+                Each dentist needs a Practitioner ID from Dentally to auto-fetch invoice data.
+                Click &quot;Fetch from Dentally&quot; on a payslip to see which IDs are found.
+                Then edit each dentist below to enter their correct ID.
+              </p>
+              <button
+                onClick={fetchDentallyIds}
+                disabled={loadingIds}
+                className="mt-2 flex items-center gap-1.5 text-xs font-medium text-amber-700 hover:text-amber-900"
+              >
+                <RefreshCw size={12} className={loadingIds ? "animate-spin" : ""} />
+                {loadingIds ? "Checking..." : "Check Dentally connection"}
+              </button>
+              {dentallyIds.length > 0 && (
+                <div className="mt-2 text-xs text-amber-700">
+                  <span className="font-medium">Sample IDs from Dentally:</span> {dentallyIds.join(", ")}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Table */}
         <div className="bg-white rounded-xl border border-border overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-surface-dim border-b border-border">
-                <th className="text-left px-5 py-3 font-medium text-text-muted">Name</th>
-                <th className="text-left px-5 py-3 font-medium text-text-muted">Email</th>
-                <th className="text-center px-5 py-3 font-medium text-text-muted">Split</th>
-                <th className="text-center px-5 py-3 font-medium text-text-muted">NHS</th>
-                <th className="text-center px-5 py-3 font-medium text-text-muted">UDA Rate</th>
-                <th className="text-center px-5 py-3 font-medium text-text-muted">Status</th>
-                <th className="px-5 py-3"></th>
+                <th className="text-left px-4 py-3 font-medium text-text-muted">Name</th>
+                <th className="text-left px-4 py-3 font-medium text-text-muted">Email</th>
+                <th className="text-center px-4 py-3 font-medium text-text-muted">Dentally ID</th>
+                <th className="text-center px-4 py-3 font-medium text-text-muted">Split</th>
+                <th className="text-center px-4 py-3 font-medium text-text-muted">NHS</th>
+                <th className="text-center px-4 py-3 font-medium text-text-muted">UDA</th>
+                <th className="text-center px-4 py-3 font-medium text-text-muted">Status</th>
+                <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {dentists.map((d) => (
                 <tr key={d.id} className="hover:bg-surface-dim transition">
-                  <td className="px-5 py-3 font-medium text-text">{d.name}</td>
-                  <td className="px-5 py-3 text-text-muted">{d.email || "-"}</td>
-                  <td className="px-5 py-3 text-center">{d.split_percentage}%</td>
-                  <td className="px-5 py-3 text-center">
+                  <td className="px-4 py-3 font-medium text-text">{d.name}</td>
+                  <td className="px-4 py-3 text-text-muted text-xs">{d.email || "-"}</td>
+                  <td className="px-4 py-3 text-center">
+                    {d.practitioner_id ? (
+                      <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{d.practitioner_id}</code>
+                    ) : (
+                      <span className="text-xs text-amber-600 font-medium">Not set</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-center">{d.split_percentage}%</td>
+                  <td className="px-4 py-3 text-center">
                     {d.is_nhs ? <Check size={16} className="mx-auto text-success" /> : <span className="text-text-subtle">-</span>}
                   </td>
-                  <td className="px-5 py-3 text-center">{d.uda_rate > 0 ? `£${d.uda_rate}` : "-"}</td>
-                  <td className="px-5 py-3 text-center">
+                  <td className="px-4 py-3 text-center">{d.uda_rate > 0 ? `£${d.uda_rate}` : "-"}</td>
+                  <td className="px-4 py-3 text-center">
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${d.active ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
                       {d.active ? "Active" : "Inactive"}
                     </span>
                   </td>
-                  <td className="px-5 py-3 text-right">
+                  <td className="px-4 py-3 text-right">
                     <button
                       onClick={() => { setEditing({ ...d }); setIsNew(false); }}
                       className="text-text-subtle hover:text-primary-600 transition"

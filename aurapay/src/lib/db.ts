@@ -69,6 +69,8 @@ async function initializeDb(db: Client) {
       adjustments_json TEXT DEFAULT '[]',
       notes TEXT DEFAULT '',
       private_patients_json TEXT DEFAULT '[]',
+      discrepancies_json TEXT DEFAULT '[]',
+      dentist_log_json TEXT DEFAULT '[]',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(period_id, dentist_id)
@@ -91,6 +93,22 @@ async function initializeDb(db: Client) {
     await db.execute(sql);
   }
 
+  // Run migrations for existing databases
+  const migrations = [
+    "ALTER TABLE payslip_entries ADD COLUMN discrepancies_json TEXT DEFAULT '[]'",
+    "ALTER TABLE payslip_entries ADD COLUMN dentist_log_json TEXT DEFAULT '[]'",
+    "ALTER TABLE pay_periods ADD COLUMN nhs_period_start TEXT",
+    "ALTER TABLE pay_periods ADD COLUMN nhs_period_end TEXT",
+    "ALTER TABLE payslip_entries ADD COLUMN nhs_period_json TEXT DEFAULT '{}'",
+  ];
+  for (const sql of migrations) {
+    try {
+      await db.execute(sql);
+    } catch {
+      // Column already exists, ignore
+    }
+  }
+
   // Seed default users if none exist
   const userCount = await db.execute("SELECT COUNT(*) as c FROM users");
   if (Number(userCount.rows[0].c) === 0) {
@@ -106,16 +124,17 @@ async function initializeDb(db: Client) {
   }
 
   // Seed dentists if none exist
+  // NOTE: practitioner_id = Dentally user_id (appears on invoices)
   const dentistCount = await db.execute("SELECT COUNT(*) as c FROM dentists");
   if (Number(dentistCount.rows[0].c) === 0) {
     const dentists = [
-      { name: "Zeeshan Abbas", split: 45, nhs: 0, uda: 0, perf: null, prac: "283516" },
-      { name: "Ankush Patel", split: 45, nhs: 0, uda: 0, perf: null, prac: "110701" },
-      { name: "Peter Throw", split: 50, nhs: 1, uda: 16, perf: "780995", prac: "189357" },
-      { name: "Priyanka Kapoor", split: 50, nhs: 1, uda: 15, perf: "112376", prac: "189361" },
-      { name: "Moneeb Ahmad", split: 50, nhs: 1, uda: 15, perf: "701874", prac: "293046" },
-      { name: "Hani Dalati", split: 50, nhs: 0, uda: 0, perf: null, prac: "263970" },
-      { name: "Hisham Saqib", split: 50, nhs: 0, uda: 0, perf: null, prac: "127844" },
+      { name: "Zeeshan Abbas", split: 45, nhs: 0, uda: 0, perf: null, prac: "484388" },
+      { name: "Ankush Patel", split: 45, nhs: 0, uda: 0, perf: null, prac: "285115" },
+      { name: "Peter Throw", split: 50, nhs: 1, uda: 16, perf: "780995", prac: "396225" },
+      { name: "Priyanka Kapoor", split: 50, nhs: 1, uda: 15, perf: "112376", prac: "396229" },
+      { name: "Moneeb Ahmad", split: 50, nhs: 1, uda: 15, perf: "701874", prac: "497281" },
+      { name: "Hani Dalati", split: 50, nhs: 0, uda: 0, perf: null, prac: "462017" },
+      { name: "Hisham Saqib", split: 50, nhs: 0, uda: 0, perf: null, prac: "276544" },
     ];
     for (const d of dentists) {
       await db.execute({
@@ -123,6 +142,24 @@ async function initializeDb(db: Client) {
         args: [d.name, d.split, d.nhs, d.uda, d.perf, d.prac],
       });
     }
+  }
+
+  // Fix dentist IDs for existing databases (migration)
+  // These are the correct Dentally user_ids that appear on invoices
+  const idFixes: Record<string, string> = {
+    "Zeeshan Abbas": "484388",
+    "Ankush Patel": "285115",
+    "Peter Throw": "396225",
+    "Priyanka Kapoor": "396229",
+    "Moneeb Ahmad": "497281",
+    "Hani Dalati": "462017",
+    "Hisham Saqib": "276544",
+  };
+  for (const [name, id] of Object.entries(idFixes)) {
+    await db.execute({
+      sql: "UPDATE dentists SET practitioner_id = ? WHERE name = ? AND (practitioner_id IS NULL OR practitioner_id != ?)",
+      args: [id, name, id],
+    });
   }
 
   // Seed default settings
@@ -179,6 +216,15 @@ export interface PayPeriod {
   created_by: number | null;
   created_at: string;
   finalized_at: string | null;
+  nhs_period_start: string | null;
+  nhs_period_end: string | null;
+}
+
+export interface NhsPeriodInfo {
+  period_start?: string;
+  period_end?: string;
+  udas?: number;
+  extracted_from?: string;
 }
 
 export interface LabBillItem {
@@ -197,8 +243,34 @@ export interface PrivatePatient {
   name: string;
   date: string;
   amount: number;
+  amountPaid?: number;
+  amountOutstanding?: number;
+  status?: "paid" | "partial" | "unpaid";
   finance: boolean;
   finance_term?: number;
+  flagged?: boolean;
+  flagReason?: string;
+  notes?: string;
+}
+
+export interface Discrepancy {
+  type: "invoiced_not_paid" | "partial_payment" | "log_mismatch" | "in_log_not_system" | "in_system_not_log";
+  patientName: string;
+  patientId?: string;
+  invoiceId?: string;
+  invoicedAmount: number;
+  paidAmount: number;
+  logAmount?: number;
+  date: string;
+  notes: string;
+  resolved?: boolean;
+}
+
+export interface DentistLogEntry {
+  patientName: string;
+  date: string;
+  amount: number;
+  treatment?: string;
   notes?: string;
 }
 
@@ -215,6 +287,8 @@ export interface PayslipEntry {
   adjustments_json: string;
   notes: string;
   private_patients_json: string;
+  discrepancies_json: string;
+  dentist_log_json: string;
   created_at: string;
   updated_at: string;
 }

@@ -3,14 +3,7 @@ import { getDb, rowTo, PayslipEntry, Dentist } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { calculatePayslip, formatCurrency, getMonthName } from "@/lib/calculations";
 import { jsPDF } from "jspdf";
-import "jspdf-autotable";
-
-declare module "jspdf" {
-  interface jsPDF {
-    autoTable: (options: Record<string, unknown>) => jsPDF;
-    lastAutoTable: { finalY: number };
-  }
-}
+import autoTable from "jspdf-autotable";
 
 export async function GET(req: NextRequest) {
   const user = await getSession();
@@ -19,19 +12,20 @@ export async function GET(req: NextRequest) {
   const entryId = req.nextUrl.searchParams.get("entry_id");
   if (!entryId) return NextResponse.json({ error: "entry_id required" }, { status: 400 });
 
-  const db = await getDb();
-  const result = await db.execute({
-    sql: `SELECT e.*, d.name as dentist_name, d.email as dentist_email,
-            d.split_percentage, d.is_nhs, d.uda_rate, d.performer_number,
-            p.month, p.year
-     FROM payslip_entries e
-     JOIN dentists d ON d.id = e.dentist_id
-     JOIN pay_periods p ON p.id = e.period_id
-     WHERE e.id = ?`,
-    args: [entryId],
-  });
+  try {
+    const db = await getDb();
+    const result = await db.execute({
+      sql: `SELECT e.*, d.name as dentist_name, d.email as dentist_email,
+              d.split_percentage, d.is_nhs, d.uda_rate, d.performer_number,
+              p.month, p.year
+       FROM payslip_entries e
+       JOIN dentists d ON d.id = e.dentist_id
+       JOIN pay_periods p ON p.id = e.period_id
+       WHERE e.id = ?`,
+      args: [entryId],
+    });
 
-  if (result.rows.length === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (result.rows.length === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   type EntryRow = PayslipEntry & {
     dentist_name: string; dentist_email: string | null;
@@ -96,12 +90,12 @@ export async function GET(req: NextRequest) {
   }
   earningsData.push(["Total Earnings", formatCurrency(calc.totalEarnings)]);
 
-  doc.autoTable({
+  autoTable(doc, {
     startY: y, head: [["Description", "Amount"]], body: earningsData, theme: "striped",
     headStyles: { fillColor: [66, 99, 235], fontSize: 9 }, styles: { fontSize: 9, cellPadding: 3 },
     columnStyles: { 1: { halign: "right" } }, margin: { left: 15, right: 15 },
   });
-  y = doc.lastAutoTable.finalY + 10;
+  y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
 
   doc.setFontSize(13);
   doc.setFont("helvetica", "bold");
@@ -121,12 +115,12 @@ export async function GET(req: NextRequest) {
   deductionsData.push(["Total Deductions", formatCurrency(calc.totalDeductions)]);
 
   if (deductionsData.length > 1) {
-    doc.autoTable({
+    autoTable(doc, {
       startY: y, head: [["Description", "Amount"]], body: deductionsData, theme: "striped",
       headStyles: { fillColor: [220, 53, 69], fontSize: 9 }, styles: { fontSize: 9, cellPadding: 3 },
       columnStyles: { 1: { halign: "right" } }, margin: { left: 15, right: 15 },
     });
-    y = doc.lastAutoTable.finalY + 10;
+    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
   }
 
   const patients = JSON.parse(String(entry.private_patients_json) || "[]");
@@ -136,7 +130,7 @@ export async function GET(req: NextRequest) {
     doc.setFont("helvetica", "bold");
     doc.text("Private Patient Breakdown", 15, y);
     y += 3;
-    doc.autoTable({
+    autoTable(doc, {
       startY: y, head: [["Patient", "Date", "Amount", "Finance"]],
       body: patients.map((p: { name: string; date: string; amount: number; finance: boolean }) => [p.name, p.date, formatCurrency(p.amount), p.finance ? "Yes" : ""]),
       theme: "striped", headStyles: { fillColor: [66, 99, 235], fontSize: 8 },
@@ -158,4 +152,11 @@ export async function GET(req: NextRequest) {
   return new NextResponse(pdfBuffer, {
     headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${filename}"` },
   });
+  } catch (error) {
+    console.error("[PDF] Generation error:", error);
+    return NextResponse.json({
+      error: "PDF generation failed",
+      details: error instanceof Error ? error.message : "Unknown error"
+    }, { status: 500 });
+  }
 }

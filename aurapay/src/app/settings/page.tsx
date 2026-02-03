@@ -67,20 +67,102 @@ export default function SettingsPage() {
 
         <Section title="Practice">
           <Field label="Practice Name" k="practice_name" placeholder="Aura Dental Clinic" />
+          <Field label="Practice Address" k="practice_address" placeholder="East Avenue, Billingham, TS23 1BY" />
         </Section>
 
         <Section title="Calculation Rates">
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Therapy Rate (per minute)" k="therapy_rate" type="number" />
-            <Field label="Lab Bill Split (0.5 = 50%)" k="lab_bill_split" type="number" />
-            <Field label="Finance Fee Split" k="finance_fee_split" type="number" />
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">Therapy Rate (per min)</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle text-sm">£</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={settings.therapy_rate || "0.5833"}
+                  onChange={(e) => update("therapy_rate", e.target.value)}
+                  className="w-full pl-7 pr-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
+                />
+              </div>
+              <p className="text-[10px] text-text-subtle mt-1">Default: £0.5833 (£35/hour)</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">Lab Bill Split</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={settings.lab_bill_split || "0.50"}
+                  onChange={(e) => update("lab_bill_split", e.target.value)}
+                  className="w-full pr-8 pl-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-text-subtle text-xs">= 50%</span>
+              </div>
+              <p className="text-[10px] text-text-subtle mt-1">Dentist pays this fraction</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">Finance Fee Split</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={settings.finance_fee_split || "0.50"}
+                  onChange={(e) => update("finance_fee_split", e.target.value)}
+                  className="w-full pr-8 pl-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-text-subtle text-xs">= 50%</span>
+              </div>
+              <p className="text-[10px] text-text-subtle mt-1">Dentist pays this fraction</p>
+            </div>
           </div>
-          <p className="text-xs text-text-subtle">Finance fee rates by term:</p>
-          <div className="grid grid-cols-4 gap-3">
-            <Field label="3 months (%)" k="finance_rate_3m" type="number" />
-            <Field label="6 months (%)" k="finance_rate_6m" type="number" />
-            <Field label="10 months (%)" k="finance_rate_10m" type="number" />
-            <Field label="12 months (%)" k="finance_rate_12m" type="number" />
+          <div className="pt-2 border-t border-border mt-2">
+            <p className="text-xs font-medium text-text-muted mb-2">Tabeo Finance Rates (by term)</p>
+            <div className="grid grid-cols-4 gap-3">
+              <div>
+                <label className="block text-[10px] text-text-muted mb-1">3 months</label>
+                <input type="number" step="0.001" value={settings.finance_rate_3m || "0.045"} onChange={(e) => update("finance_rate_3m", e.target.value)} className="w-full px-2 py-1.5 border border-border rounded-lg text-xs" placeholder="0.045" />
+              </div>
+              <div>
+                <label className="block text-[10px] text-text-muted mb-1">12 months</label>
+                <input type="number" step="0.001" value={settings.finance_rate_12m || "0.08"} onChange={(e) => update("finance_rate_12m", e.target.value)} className="w-full px-2 py-1.5 border border-border rounded-lg text-xs" placeholder="0.08" />
+              </div>
+              <div>
+                <label className="block text-[10px] text-text-muted mb-1">36 months</label>
+                <input type="number" step="0.001" value={settings.finance_rate_36m || "0.034"} onChange={(e) => update("finance_rate_36m", e.target.value)} className="w-full px-2 py-1.5 border border-border rounded-lg text-xs" placeholder="0.034" />
+              </div>
+              <div>
+                <label className="block text-[10px] text-text-muted mb-1">60 months</label>
+                <input type="number" step="0.001" value={settings.finance_rate_60m || "0.037"} onChange={(e) => update("finance_rate_60m", e.target.value)} className="w-full px-2 py-1.5 border border-border rounded-lg text-xs" placeholder="0.037" />
+              </div>
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Dentally Integration">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2">
+              <Field label="Site ID" k="dentally_site_id" placeholder="212f9c01-f4f2-446d-b7a3-0162b135e9d3" />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-text-muted mb-1">Therapist IDs (comma-separated)</label>
+              <input
+                type="text"
+                value={settings.therapist_ids || "189342,189343,189349,189358,191534,209545,288298"}
+                onChange={(e) => update("therapist_ids", e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none font-mono text-xs"
+              />
+              <p className="text-[10px] text-text-subtle mt-1">Invoices from these IDs are excluded (therapists/hygienists)</p>
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-text-muted mb-1">NHS Amounts to Exclude (comma-separated)</label>
+              <input
+                type="text"
+                value={settings.nhs_amounts || "27.40,75.30,326.70,47.90,299.30,251.40,23.80,65.20,282.80"}
+                onChange={(e) => update("nhs_amounts", e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none font-mono text-xs"
+              />
+              <p className="text-[10px] text-text-subtle mt-1">NHS Band charges - items with these exact amounts are excluded</p>
+            </div>
           </div>
         </Section>
 
