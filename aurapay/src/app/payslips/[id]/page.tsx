@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import Shell from "@/components/Shell";
 import {
   Download, Mail, ChevronDown, ChevronUp, Save, CheckCircle2,
-  Plus, Trash2, Lock, Unlock, AlertCircle, Loader2
+  Plus, Trash2, Lock, Unlock, AlertCircle, Loader2, Undo2, FileSpreadsheet
 } from "lucide-react";
 
 interface LabBill { lab_name: string; amount: number; description?: string; }
@@ -77,6 +77,42 @@ export default function PeriodDetailPage() {
   const [showLogImport, setShowLogImport] = useState<number | null>(null);
   const [logCsv, setLogCsv] = useState("");
   const [importingLog, setImportingLog] = useState(false);
+  const [fetchingSheets, setFetchingSheets] = useState(false);
+
+  // Undo history - stores previous entry states
+  const [undoHistory, setUndoHistory] = useState<Map<number, Entry[]>>(new Map());
+  const MAX_UNDO_HISTORY = 10;
+
+  // Save state for undo before any change
+  function saveForUndo(entryId: number, currentEntry: Entry) {
+    setUndoHistory(prev => {
+      const newMap = new Map(prev);
+      const history = newMap.get(entryId) || [];
+      const newHistory = [...history, { ...currentEntry }].slice(-MAX_UNDO_HISTORY);
+      newMap.set(entryId, newHistory);
+      return newMap;
+    });
+  }
+
+  // Undo last change for an entry
+  function undoEntry(entryId: number) {
+    const history = undoHistory.get(entryId);
+    if (!history || history.length === 0) return;
+
+    const previousState = history[history.length - 1];
+    setEntries(prev => prev.map(e => e.id === entryId ? previousState : e));
+
+    // Remove the used state from history
+    setUndoHistory(prev => {
+      const newMap = new Map(prev);
+      const newHistory = [...(newMap.get(entryId) || [])];
+      newHistory.pop();
+      newMap.set(entryId, newHistory);
+      return newMap;
+    });
+
+    showToast("Change undone");
+  }
 
   const loadData = useCallback(async () => {
     const [periodsRes, entriesRes] = await Promise.all([
@@ -124,7 +160,11 @@ export default function PeriodDetailPage() {
     showToast(`Saved ${entry.dentist_name}`);
   }
 
-  function updateEntry(id: number, updates: Partial<Entry>) {
+  function updateEntry(id: number, updates: Partial<Entry>, skipUndo = false) {
+    const entry = entries.find(e => e.id === id);
+    if (entry && !skipUndo) {
+      saveForUndo(id, entry);
+    }
     setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...updates } : e)));
   }
 
@@ -224,6 +264,31 @@ export default function PeriodDetailPage() {
       showToast("Network error", "error");
     }
     setImportingLog(false);
+  }
+
+  async function fetchFromGoogleSheets(entryId: number, dentistName: string) {
+    setFetchingSheets(true);
+    try {
+      const res = await fetch("/api/google-sheets/takings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entry_id: entryId,
+          dentist_name: dentistName,
+          period_id: parseInt(periodId),
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message || `Imported ${data.count || 0} entries from Google Sheets`);
+        await loadData();
+      } else {
+        showToast(data.error || "Failed to fetch from Google Sheets", "error");
+      }
+    } catch {
+      showToast("Network error fetching from Google Sheets", "error");
+    }
+    setFetchingSheets(false);
   }
 
   if (!period) {
@@ -421,22 +486,35 @@ export default function PeriodDetailPage() {
 
                 {/* Expanded detail */}
                 {expanded && (
-                  <div className="border-t border-border px-5 py-5 space-y-6">
+                  <div className="border-t-2 border-primary-200 bg-gradient-to-b from-slate-50 to-white px-5 py-5 space-y-6">
+                    {/* Undo button */}
+                    {!isFinalized && (undoHistory.get(entry.id)?.length || 0) > 0 && (
+                      <div className="flex justify-end">
+                        <button
+                          onClick={() => undoEntry(entry.id)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+                        >
+                          <Undo2 size={14} />
+                          Undo ({undoHistory.get(entry.id)?.length || 0})
+                        </button>
+                      </div>
+                    )}
+
                     {/* Quick summary */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <div className="bg-surface-dim rounded-lg p-3">
+                      <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
                         <p className="text-xs text-text-muted">Gross Private</p>
                         <p className="text-sm font-bold mt-0.5">{fmt(c.grossPrivate)}</p>
                       </div>
-                      <div className="bg-surface-dim rounded-lg p-3">
+                      <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
                         <p className="text-xs text-text-muted">Net Private</p>
                         <p className="text-sm font-bold mt-0.5">{fmt(c.netPrivate)}</p>
                       </div>
-                      <div className="bg-surface-dim rounded-lg p-3">
+                      <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
                         <p className="text-xs text-text-muted">NHS Income</p>
                         <p className="text-sm font-bold mt-0.5">{fmt(c.nhsIncome)}</p>
                       </div>
-                      <div className="bg-red-50 rounded-lg p-3">
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-3 shadow-sm">
                         <p className="text-xs text-red-600">Total Deductions</p>
                         <p className="text-sm font-bold text-red-700 mt-0.5">-{fmt(c.totalDeductions)}</p>
                       </div>
@@ -878,18 +956,28 @@ export default function PeriodDetailPage() {
 
                       {/* Dentist Private Log Import */}
                       {!isFinalized && (
-                        <div className="border border-dashed border-border rounded-lg p-4">
+                        <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
                           <div className="flex items-center justify-between">
                             <div>
                               <h4 className="text-xs font-semibold text-text uppercase tracking-wide">Dentist Private Log</h4>
                               <p className="text-xs text-text-muted mt-0.5">Import dentist&apos;s own takings log to cross-reference</p>
                             </div>
-                            <button
-                              onClick={() => setShowLogImport(showLogImport === entry.id ? null : entry.id)}
-                              className="text-xs text-primary-600 hover:text-primary-700 font-medium"
-                            >
-                              {showLogImport === entry.id ? "Cancel" : "Import Log"}
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => fetchFromGoogleSheets(entry.id, entry.dentist_name)}
+                                disabled={fetchingSheets}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 hover:text-green-800 bg-green-50 hover:bg-green-100 border border-green-200 rounded-lg transition disabled:opacity-50"
+                              >
+                                {fetchingSheets ? <Loader2 size={12} className="animate-spin" /> : <FileSpreadsheet size={12} />}
+                                Google Sheets
+                              </button>
+                              <button
+                                onClick={() => setShowLogImport(showLogImport === entry.id ? null : entry.id)}
+                                className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+                              >
+                                {showLogImport === entry.id ? "Cancel" : "Paste CSV"}
+                              </button>
+                            </div>
                           </div>
                           {showLogImport === entry.id && (
                             <div className="mt-3 space-y-3">
