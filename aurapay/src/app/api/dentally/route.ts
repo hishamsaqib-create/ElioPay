@@ -14,8 +14,15 @@ const NHS_KEYWORDS = [
 ];
 const CBCT_KEYWORDS = ["cbct", "ct scan", "cone beam"];
 
-// Therapist practitioner IDs to exclude
-const THERAPIST_IDS = new Set(["189343", "288298", "189342", "189349", "189358", "191534", "209545"]);
+// Therapist/Hygienist/Nurse IDs to exclude (updated Dentally IDs)
+const THERAPIST_IDS = new Set([
+  "396210", // Colin Pritchard (Therapist)
+  "396211", // Taryn Dawson (Therapist)
+  "396217", // Karen Wraight (Hygienist)
+  "396226", // Student Student (Therapist)
+  "395937", // Bethany Harris (Nurse)
+  "395938", // Amanda Durham (Nurse)
+]);
 
 interface DentallyInvoice {
   id: string;
@@ -111,8 +118,8 @@ export async function POST(req: NextRequest) {
     let skippedTherapist = 0;
 
     for (const inv of invoices) {
-      // Skip unpaid or zero balance
-      if (!inv.paid || inv.balance > 0 || inv.amount <= 0) { skippedUnpaid++; continue; }
+      // Skip zero/negative amounts (but include unpaid - dentist did the work regardless)
+      if (inv.amount <= 0) { skippedUnpaid++; continue; }
 
       // Extract practitioner ID - handle various Dentally response formats
       const invAny = inv as unknown as Record<string, unknown>;
