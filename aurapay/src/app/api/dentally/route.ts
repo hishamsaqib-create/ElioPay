@@ -17,6 +17,32 @@ const CBCT_KEYWORDS = ["cbct", "ct scan", "cone beam"];
 // Roles that count as clinicians/dentists (case-insensitive match)
 const CLINICIAN_ROLES = ["dentist", "clinician", "associate", "principal"];
 
+// Therapist/Hygienist IDs to track for therapy breakdown
+// These are practitioner_ids from Dentally (excludes dentists)
+const THERAPIST_IDS = new Set([
+  "189342", // Colin Pritchard (Therapist)
+  "189343", // Taryn Dawson (Therapist)
+  "189349", // Karen Wraight (Hygienist)
+  "189358", // Student Student (Therapist)
+  "191534", // Kim Harrison (Therapist)
+  "209545", // Uche Okeke (Therapist)
+  "288298", // Taryn Dawson (Therapist - alternate)
+]);
+
+// Therapy rate per minute (£35/hour = £0.5833/min)
+const THERAPY_RATE_PER_MINUTE = 0.5833;
+
+// Therapy breakdown appointment record
+interface TherapyBreakdownItem {
+  patientName: string;
+  patientId: string;
+  date: string;
+  minutes: number;
+  treatment?: string;
+  therapistName?: string;
+  cost: number;
+}
+
 // Check if a role is a clinician role
 function isClinicianRole(role?: string): boolean {
   if (!role) return false;
@@ -371,6 +397,163 @@ function calculateDentistAnalytics(
     topPatientsByHourlyRate,
     topTreatmentsByHourlyRate,
   };
+}
+
+// Fetch patient's appointment history to find referring dentist
+async function fetchPatientAppointments(
+  patientId: string,
+  beforeDate: string,
+  token: string
+): Promise<DentallyAppointment[]> {
+  try {
+    // Fetch appointments for this patient before the given date
+    const url = `${DENTALLY_API}/appointments?site_id=${SITE_ID}&patient_id=${patientId}&end_date=${beforeDate}&per_page=50`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return data.appointments || data.data || [];
+    }
+  } catch (e) {
+    console.error(`[Dentally] Failed to fetch appointments for patient ${patientId}:`, e);
+  }
+  return [];
+}
+
+// Find referring dentist for a therapy appointment
+// Looks for the most recent exam/check-up with a dentist before the therapy date
+async function findReferringDentist(
+  patientId: string,
+  therapyDate: string,
+  token: string,
+  dentistByUserId: Map<string, Dentist>,
+  allUsers: Map<string, { name: string; role?: string; isClinician: boolean }>
+): Promise<Dentist | null> {
+  const appointments = await fetchPatientAppointments(patientId, therapyDate, token);
+
+  if (!appointments || appointments.length === 0) return null;
+
+  // Sort by date descending to find most recent
+  appointments.sort((a, b) => {
+    const dateA = a.starts_at || "";
+    const dateB = b.starts_at || "";
+    return dateB.localeCompare(dateA);
+  });
+
+  // Look for the most recent dentist appointment (not a therapist)
+  for (const apt of appointments) {
+    const practitionerId = String(apt.practitioner_id || apt.user_id || "");
+
+    // Skip if it's a therapist/hygienist
+    if (THERAPIST_IDS.has(practitionerId)) continue;
+
+    // Check if this is a known dentist
+    const dentist = dentistByUserId.get(practitionerId);
+    if (dentist) return dentist;
+
+    // Check if user is a clinician (could be unmapped dentist)
+    const userInfo = allUsers.get(practitionerId);
+    if (userInfo && userInfo.isClinician) {
+      // It's a clinician but not mapped to a dentist - log for debugging
+      console.log(`[Dentally] Found unmapped clinician ${practitionerId} (${userInfo.name}) as potential referrer`);
+    }
+  }
+
+  return null;
+}
+
+// Calculate therapy breakdown for all dentists
+async function calculateTherapyBreakdown(
+  appointments: DentallyAppointment[],
+  startDate: string,
+  endDate: string,
+  token: string,
+  dentistByUserId: Map<string, Dentist>,
+  dentists: Dentist[],
+  allUsers: Map<string, { name: string; role?: string; isClinician: boolean }>,
+  patientNames: Map<string, string>
+): Promise<Map<number, TherapyBreakdownItem[]>> {
+  const therapyByDentist = new Map<number, TherapyBreakdownItem[]>();
+
+  // Initialize empty arrays for all dentists
+  for (const d of dentists) {
+    therapyByDentist.set(d.id, []);
+  }
+
+  // Filter appointments to therapist appointments in the date range
+  const therapistAppointments = appointments.filter(apt => {
+    const practId = String(apt.practitioner_id || apt.user_id || "");
+    if (!THERAPIST_IDS.has(practId)) return false;
+
+    const aptDate = apt.starts_at?.substring(0, 10) || "";
+    return aptDate >= startDate && aptDate < endDate;
+  });
+
+  console.log(`[Dentally] Found ${therapistAppointments.length} therapist appointments to process`);
+
+  // Get therapist names
+  const therapistNames = new Map<string, string>();
+  for (const uid of THERAPIST_IDS) {
+    const userInfo = allUsers.get(uid);
+    if (userInfo) therapistNames.set(uid, userInfo.name);
+  }
+
+  // Process each therapy appointment
+  let assigned = 0;
+  let unassigned = 0;
+
+  for (const apt of therapistAppointments) {
+    const patientId = String(apt.patient_id);
+    const aptDate = apt.starts_at?.substring(0, 10) || "";
+    const practId = String(apt.practitioner_id || apt.user_id || "");
+    const duration = getAppointmentDuration(apt);
+
+    if (duration <= 0) continue;
+
+    // Find referring dentist
+    const referringDentist = await findReferringDentist(
+      patientId,
+      aptDate,
+      token,
+      dentistByUserId,
+      allUsers
+    );
+
+    const patientName = patientNames.get(patientId) || `Patient ${patientId}`;
+    const therapistName = therapistNames.get(practId) || "Therapist";
+    const treatment = apt.treatment_description || apt.reason || "";
+    const cost = Math.round(duration * THERAPY_RATE_PER_MINUTE * 100) / 100;
+
+    const item: TherapyBreakdownItem = {
+      patientName,
+      patientId,
+      date: aptDate,
+      minutes: duration,
+      treatment: treatment || undefined,
+      therapistName,
+      cost,
+    };
+
+    if (referringDentist) {
+      const existing = therapyByDentist.get(referringDentist.id) || [];
+      existing.push(item);
+      therapyByDentist.set(referringDentist.id, existing);
+      assigned++;
+    } else {
+      unassigned++;
+      console.log(`[Dentally] Unassigned therapy: ${patientName} on ${aptDate} (${duration} mins)`);
+    }
+  }
+
+  console.log(`[Dentally] Therapy breakdown: ${assigned} assigned, ${unassigned} unassigned`);
+
+  return therapyByDentist;
 }
 
 // Batch fetch patient names for efficiency
@@ -765,6 +948,19 @@ export async function POST(req: NextRequest) {
 
     console.log(`[Dentally] Processed ${processedCount} invoices, ${flaggedCount} flagged for review, ${financeCount} finance payments`);
 
+    // Calculate therapy breakdown (find referring dentist for each therapy appointment)
+    console.log(`[Dentally] Calculating therapy breakdown...`);
+    const therapyBreakdown = await calculateTherapyBreakdown(
+      appointments,
+      startDate,
+      endDate,
+      token,
+      dentistByUserId,
+      dentists,
+      allUsers,
+      patientNames
+    );
+
     // Update database
     let updated = 0;
     for (const [dentistId, data] of dentistTotals) {
@@ -784,6 +980,11 @@ export async function POST(req: NextRequest) {
       // Store analytics as JSON
       const analyticsJson = JSON.stringify(data.analytics || {});
 
+      // Get therapy breakdown for this dentist
+      const therapyItems = therapyBreakdown.get(dentistId) || [];
+      const therapyBreakdownJson = JSON.stringify(therapyItems);
+      const totalTherapyMinutes = therapyItems.reduce((sum, item) => sum + item.minutes, 0);
+
       if (entryResult.rows.length > 0) {
         await db.execute({
           sql: `UPDATE payslip_entries SET
@@ -791,6 +992,8 @@ export async function POST(req: NextRequest) {
             private_patients_json = ?,
             discrepancies_json = ?,
             analytics_json = ?,
+            therapy_breakdown_json = ?,
+            therapy_minutes = ?,
             updated_at = datetime('now')
           WHERE period_id = ? AND dentist_id = ?`,
           args: [
@@ -798,6 +1001,8 @@ export async function POST(req: NextRequest) {
             JSON.stringify(patientsForStorage),
             discrepanciesJson,
             analyticsJson,
+            therapyBreakdownJson,
+            totalTherapyMinutes,
             period_id,
             dentistId,
           ],
@@ -805,7 +1010,8 @@ export async function POST(req: NextRequest) {
         updated++;
         const dentistName = dentists.find(d => d.id === dentistId)?.name;
         const analytics = data.analytics;
-        console.log(`[Dentally] Updated ${dentistName}: £${data.totalPaid.toFixed(2)} paid, ${data.patients.length} patients, ${analytics?.totalChairMins || 0} mins chair time, £${analytics?.grossPerHour || 0}/hr gross`);
+        const therapyCost = Math.round(totalTherapyMinutes * THERAPY_RATE_PER_MINUTE * 100) / 100;
+        console.log(`[Dentally] Updated ${dentistName}: £${data.totalPaid.toFixed(2)} paid, ${data.patients.length} patients, ${analytics?.totalChairMins || 0} mins chair time, ${totalTherapyMinutes} therapy mins (£${therapyCost})`);
       }
     }
 

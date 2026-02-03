@@ -140,6 +140,59 @@ export async function GET(req: NextRequest) {
     y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
   }
 
+  // Parse therapy breakdown
+  interface TherapyBreakdownItem {
+    patientName: string;
+    patientId: string;
+    date: string;
+    minutes: number;
+    treatment?: string;
+    therapistName?: string;
+    cost: number;
+  }
+  const therapyBreakdown: TherapyBreakdownItem[] = entry.therapy_breakdown_json ? JSON.parse(String(entry.therapy_breakdown_json)) : [];
+
+  // Therapy Breakdown Section
+  if (therapyBreakdown.length > 0) {
+    if (y > 220) { doc.addPage(); y = 20; }
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(50, 50, 50);
+    doc.text("Therapy Referrals Breakdown", 15, y);
+    y += 3;
+
+    const therapyData: string[][] = therapyBreakdown.map(t => [
+      t.patientName,
+      new Date(t.date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
+      t.therapistName || "Therapist",
+      `${t.minutes}`,
+      formatCurrency(t.cost),
+    ]);
+
+    // Add total row
+    const totalMins = therapyBreakdown.reduce((sum, t) => sum + t.minutes, 0);
+    const totalCost = therapyBreakdown.reduce((sum, t) => sum + t.cost, 0);
+    therapyData.push(["Total", "", "", `${totalMins}`, formatCurrency(totalCost)]);
+
+    autoTable(doc, {
+      startY: y,
+      head: [["Patient", "Date", "Therapist", "Mins", "Cost"]],
+      body: therapyData,
+      theme: "striped",
+      headStyles: { fillColor: [147, 51, 234], fontSize: 8 },
+      styles: { fontSize: 8, cellPadding: 2 },
+      columnStyles: { 3: { halign: "right" }, 4: { halign: "right" } },
+      margin: { left: 15, right: 15 },
+      didParseCell: (data) => {
+        // Make the last row bold
+        if (data.row.index === therapyData.length - 1) {
+          data.cell.styles.fontStyle = "bold";
+        }
+      },
+    });
+    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
+  }
+
   // Parse analytics
   interface Analytics {
     totalChairMins: number;
