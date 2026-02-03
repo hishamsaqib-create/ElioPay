@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { getDb, rowsTo, Dentist } from "@/lib/db";
-import { getSession } from "@/lib/auth";
+import { getSession, isOwner } from "@/lib/auth";
 
 const DENTALLY_API = "https://api.dentally.co/v1";
-const SITE_ID = "212f9c01-f4f2-446d-b7a3-0162b135e9d3";
+
+// Get site ID from env var or use default
+function getSiteId(): string {
+  return process.env.DENTALLY_SITE_ID || "212f9c01-f4f2-446d-b7a3-0162b135e9d3";
+}
 
 interface DentallyUser {
   id: string;
@@ -16,12 +20,29 @@ interface DentallyUser {
 }
 
 export async function GET() {
+  // SECURITY: Only allow in development or for owners
   const user = await getSession();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Check if production and not owner
+  if (process.env.NODE_ENV === "production" && !isOwner(user)) {
+    return NextResponse.json(
+      { error: "Debug endpoints are restricted to owners in production" },
+      { status: 403 }
+    );
+  }
 
   const token = process.env.DENTALLY_API_TOKEN;
-  if (!token) return NextResponse.json({ error: "No DENTALLY_API_TOKEN" }, { status: 400 });
+  if (!token) {
+    return NextResponse.json(
+      { error: "DENTALLY_API_TOKEN environment variable not configured" },
+      { status: 400 }
+    );
+  }
 
+  const siteId = getSiteId();
   const db = await getDb();
   const dentistsResult = await db.execute("SELECT * FROM dentists");
   const dentists = rowsTo<Dentist>(dentistsResult.rows);
@@ -30,7 +51,7 @@ export async function GET() {
   let dentallyUsers: DentallyUser[] = [];
   let rawUsersResponse: unknown = null;
   try {
-    const usersRes = await fetch(`${DENTALLY_API}/users?site_id=${SITE_ID}&per_page=100`, {
+    const usersRes = await fetch(`${DENTALLY_API}/users?site_id=${siteId}&per_page=100`, {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     });
     if (usersRes.ok) {
@@ -54,7 +75,7 @@ export async function GET() {
   // Try fetching practitioners endpoint as well (some systems use this)
   let practitioners: DentallyUser[] = [];
   try {
-    const pracRes = await fetch(`${DENTALLY_API}/practitioners?site_id=${SITE_ID}&per_page=100`, {
+    const pracRes = await fetch(`${DENTALLY_API}/practitioners?site_id=${siteId}&per_page=100`, {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     });
     if (pracRes.ok) {
@@ -71,11 +92,17 @@ export async function GET() {
     console.error("Failed to fetch practitioners", e);
   }
 
-  // Fetch sample invoices from multiple date ranges to find more user IDs
+  // Fetch sample invoices from recent date ranges to find user IDs
+  const now = new Date();
   const dateRanges = [
-    { from: "2025-01-01", to: "2025-02-01" },
-    { from: "2024-12-01", to: "2025-01-01" },
-    { from: "2024-11-01", to: "2024-12-01" },
+    {
+      from: new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split("T")[0],
+      to: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0],
+    },
+    {
+      from: new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split("T")[0],
+      to: new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split("T")[0],
+    },
   ];
 
   const allInvoiceUserIds: Record<string, { count: number; totalAmount: number; name?: string }> = {};
@@ -83,7 +110,7 @@ export async function GET() {
 
   for (const range of dateRanges) {
     try {
-      const url = `${DENTALLY_API}/invoices?created_from=${range.from}&created_to=${range.to}&site_id=${SITE_ID}&per_page=50`;
+      const url = `${DENTALLY_API}/invoices?created_from=${range.from}&created_to=${range.to}&site_id=${siteId}&per_page=50`;
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       });
@@ -126,23 +153,14 @@ export async function GET() {
     }
   }
 
-  // Search for dentists by name in Dentally users
-  const missingDentists = ["Zeeshan Abbas", "Moneeb Ahmad", "Hani Dalati"];
-  const nameMatches: Record<string, DentallyUser[]> = {};
-  for (const name of missingDentists) {
-    const parts = name.toLowerCase().split(" ");
-    const matches = dentallyUsers.filter(u => {
-      const fullName = u.name.toLowerCase();
-      const firstName = (u.first_name || "").toLowerCase();
-      const lastName = (u.last_name || "").toLowerCase();
-      return parts.some(p => fullName.includes(p) || firstName.includes(p) || lastName.includes(p));
-    });
-    if (matches.length > 0) {
-      nameMatches[name] = matches;
-    }
-  }
-
   return NextResponse.json({
+    // Debug info
+    _debug: {
+      environment: process.env.NODE_ENV,
+      user: { id: user.id, email: user.email, role: user.role },
+      site_id: siteId,
+    },
+
     // All users from Dentally (sorted by name)
     dentally_users: dentallyUsers.sort((a, b) => a.name.localeCompare(b.name)),
     dentally_users_count: dentallyUsers.length,
@@ -164,12 +182,10 @@ export async function GET() {
       active: d.active,
     })),
 
-    // Potential matches for missing dentists
-    name_search_results: nameMatches,
-
-    // Sample invoice structure
-    sample_invoice: sampleInvoice,
-    sample_invoice_keys: sampleInvoice ? Object.keys(sampleInvoice) : [],
+    // Sample invoice structure (redact patient data in production)
+    sample_invoice: process.env.NODE_ENV === "production"
+      ? (sampleInvoice ? { keys: Object.keys(sampleInvoice) } : null)
+      : sampleInvoice,
 
     // Raw response for debugging
     raw_users_response_keys: rawUsersResponse ? Object.keys(rawUsersResponse as object) : [],

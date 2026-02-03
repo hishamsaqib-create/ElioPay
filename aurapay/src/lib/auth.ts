@@ -1,22 +1,44 @@
 import jwt from "jsonwebtoken";
 import { cookies } from "next/headers";
 
-const JWT_SECRET = process.env.JWT_SECRET || "aurapay-secret-key-change-in-production";
+// SECURITY: JWT_SECRET is required in production - no fallback
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("CRITICAL: JWT_SECRET environment variable is required in production");
+    }
+    // Only allow fallback in development with warning
+    console.warn("WARNING: Using default JWT secret. Set JWT_SECRET environment variable!");
+    return "dev-only-secret-not-for-production";
+  }
+  if (secret.length < 32) {
+    throw new Error("JWT_SECRET must be at least 32 characters");
+  }
+  return secret;
+}
 
 export interface AuthUser {
   id: number;
   email: string;
   name: string;
-  role: string;
+  role: "owner" | "manager" | "viewer";
 }
 
+// Role hierarchy for permission checks
+const ROLE_HIERARCHY: Record<string, number> = {
+  owner: 3,
+  manager: 2,
+  viewer: 1,
+};
+
 export function signToken(user: AuthUser): string {
-  return jwt.sign(user, JWT_SECRET, { expiresIn: "7d" });
+  return jwt.sign(user, getJwtSecret(), { expiresIn: "7d" });
 }
 
 export function verifyToken(token: string): AuthUser | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as AuthUser;
+    return jwt.verify(token, getJwtSecret()) as AuthUser;
   } catch {
     return null;
   }
@@ -27,4 +49,20 @@ export async function getSession(): Promise<AuthUser | null> {
   const token = cookieStore.get("aurapay_token")?.value;
   if (!token) return null;
   return verifyToken(token);
+}
+
+// Check if user has required role or higher
+export function hasRole(user: AuthUser | null, requiredRole: "owner" | "manager" | "viewer"): boolean {
+  if (!user) return false;
+  return (ROLE_HIERARCHY[user.role] || 0) >= (ROLE_HIERARCHY[requiredRole] || 0);
+}
+
+// Check if user can perform write operations
+export function canWrite(user: AuthUser | null): boolean {
+  return hasRole(user, "manager");
+}
+
+// Check if user can perform admin operations
+export function isOwner(user: AuthUser | null): boolean {
+  return hasRole(user, "owner");
 }

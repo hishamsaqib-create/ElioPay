@@ -1,3 +1,42 @@
 {
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "functions": {
+    "src/app/api/dentally/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/nhs-statement/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/google-sheets/takings/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/payslips/generate-pdf/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/payslips/send-email/route.ts": {
+      "maxDuration": 30
+    }
+  },
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-XSS-Protection",
+          "value": "1; mode=block"
+        }
+      ]
+    }
+  ]
 }

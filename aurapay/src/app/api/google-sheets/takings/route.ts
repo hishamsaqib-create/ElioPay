@@ -1,23 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, rowTo } from "@/lib/db";
+import { getDb, rowTo, getSettings, safeJsonParse } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { google } from "googleapis";
-import * as fs from "fs";
-import * as path from "path";
 
-// Private takings log spreadsheet IDs for each dentist
-const PRIVATE_TAKINGS_LOGS: Record<string, string> = {
+// Default spreadsheet IDs (can be overridden in settings table)
+const DEFAULT_TAKINGS_LOGS: Record<string, string> = {
   "Moneeb Ahmad": "1Y-cSU-8rZHr3uHswaZjY2MA0umZT3rxcws6nvwGIMFo",
   "Peter Throw": "1vdKw3_hDWHaenh7OUjrwTdvN-zvf1a8dR45K08HLxr0",
   "Priyanka Kapoor": "13EDcD6zfOdrBwUzQmn9rPXboCTUFeYiuaRHO-gCrjlo",
   "Zeeshan Abbas": "1NWwKzMO7B12WjDnkp-MiKF4j1ge4T6yICSE1anKJhxQ",
   "Ankush Patel": "111HtVp2ShaJm9fxzuaRHNGBWUGRq831joUfawCfevUg",
-  // Hani Dalati - no takings log (trusts practice)
-  // Hisham Saqib - no takings log (owner)
 };
 
-// Service account email for sharing instructions
-const SERVICE_ACCOUNT_EMAIL = "payslip-generator@aura-payslip-generator.iam.gserviceaccount.com";
+// Get service account email from credentials (for sharing instructions)
+function getServiceAccountEmail(): string {
+  const credentials = getServiceAccountCredentials();
+  if (credentials?.client_email) {
+    return credentials.client_email;
+  }
+  return "Configure GOOGLE_SERVICE_ACCOUNT_JSON environment variable";
+}
 
 interface SheetRow {
   patientName: string;
@@ -26,23 +28,72 @@ interface SheetRow {
   treatment?: string;
 }
 
+interface ServiceAccountCredentials {
+  type: string;
+  project_id: string;
+  private_key_id: string;
+  private_key: string;
+  client_email: string;
+  client_id: string;
+  auth_uri: string;
+  token_uri: string;
+}
+
+// Parse service account credentials from environment variable
+function getServiceAccountCredentials(): ServiceAccountCredentials | null {
+  const credentialsJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!credentialsJson) {
+    console.log("[GoogleSheets] GOOGLE_SERVICE_ACCOUNT_JSON not configured");
+    return null;
+  }
+
+  try {
+    // Support both raw JSON and base64 encoded
+    let jsonStr = credentialsJson;
+    if (!credentialsJson.startsWith("{")) {
+      // Try base64 decode
+      jsonStr = Buffer.from(credentialsJson, "base64").toString("utf-8");
+    }
+    return JSON.parse(jsonStr) as ServiceAccountCredentials;
+  } catch (e) {
+    console.error("[GoogleSheets] Failed to parse service account credentials:", e);
+    return null;
+  }
+}
+
 // Get authenticated Google Sheets client using service account
 async function getGoogleSheetsClient() {
+  const credentials = getServiceAccountCredentials();
+  if (!credentials) {
+    return null;
+  }
+
   try {
-    // Try to load service account credentials
-    const credPath = path.join(process.cwd(), "google-service-account.json");
-    if (fs.existsSync(credPath)) {
-      const credentials = JSON.parse(fs.readFileSync(credPath, "utf8"));
-      const auth = new google.auth.GoogleAuth({
-        credentials,
-        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-      });
-      return google.sheets({ version: "v4", auth });
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+    return google.sheets({ version: "v4", auth });
+  } catch (e) {
+    console.error("[GoogleSheets] Failed to initialize Google Sheets client:", e);
+    return null;
+  }
+}
+
+// Get spreadsheet IDs from settings or defaults
+async function getSpreadsheetIds(): Promise<Record<string, string>> {
+  try {
+    const settings = await getSettings();
+    const customIds = settings.get("takings_spreadsheet_ids");
+    if (customIds) {
+      const parsed = safeJsonParse<Record<string, string>>(customIds, {});
+      // Merge with defaults (custom overrides defaults)
+      return { ...DEFAULT_TAKINGS_LOGS, ...parsed };
     }
   } catch (e) {
-    console.log("[GoogleSheets] Service account not configured:", e);
+    console.error("[GoogleSheets] Error loading spreadsheet IDs from settings:", e);
   }
-  return null;
+  return DEFAULT_TAKINGS_LOGS;
 }
 
 // Get month name variations for sheet lookup
@@ -105,7 +156,7 @@ async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: 
           continue;
         }
         if (error.code === 403) {
-          lastError = `Sheet not shared with service account. Share the Google Sheet with: ${SERVICE_ACCOUNT_EMAIL}`;
+          lastError = `Sheet not shared with service account. Share the Google Sheet with: ${getServiceAccountEmail()}`;
           console.log(`[GoogleSheets] Permission denied for sheet "${sheetName}"`);
           continue;
         }
@@ -134,7 +185,7 @@ async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: 
 
       const text = await res.text();
       if (text.includes("<!DOCTYPE html>") || text.includes("<html")) {
-        lastError = `Sheet not accessible. Share with: ${SERVICE_ACCOUNT_EMAIL}`;
+        lastError = `Sheet not accessible. Share with: ${getServiceAccountEmail()}`;
         continue;
       }
 
@@ -150,7 +201,7 @@ async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: 
 
   return {
     rows: allRows,
-    error: allRows.length === 0 ? (lastError || `No data found. Share the sheet with: ${SERVICE_ACCOUNT_EMAIL}`) : undefined
+    error: allRows.length === 0 ? (lastError || `No data found. Share the sheet with: ${getServiceAccountEmail()}`) : undefined
   };
 }
 
@@ -354,18 +405,28 @@ export async function POST(req: NextRequest) {
   const user = await getSession();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { entry_id, dentist_name, period_id } = await req.json();
+  let body: { entry_id?: number; dentist_name?: string; period_id?: number };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+  }
+
+  const { entry_id, dentist_name, period_id } = body;
 
   if (!entry_id || !dentist_name || !period_id) {
     return NextResponse.json({ error: "entry_id, dentist_name, and period_id are required" }, { status: 400 });
   }
 
-  // Get spreadsheet ID for this dentist
-  const spreadsheetId = PRIVATE_TAKINGS_LOGS[dentist_name];
+  // Get spreadsheet IDs from settings or defaults
+  const spreadsheetIds = await getSpreadsheetIds();
+  const spreadsheetId = spreadsheetIds[dentist_name];
+
   if (!spreadsheetId) {
     return NextResponse.json({
       error: `No private takings log configured for ${dentist_name}`,
-      note: "This dentist may not have a Google Sheets log"
+      note: "This dentist may not have a Google Sheets log",
+      hint: "Configure takings_spreadsheet_ids in settings to add spreadsheet IDs",
     }, { status: 404 });
   }
 
@@ -400,8 +461,8 @@ export async function POST(req: NextRequest) {
         ok: false,
         message: sheetError || `No entries found in ${dentist_name}'s private log for ${period.month}/${period.year}`,
         count: 0,
-        hint: `Share the Google Sheet with: ${SERVICE_ACCOUNT_EMAIL}`,
-        serviceAccountEmail: SERVICE_ACCOUNT_EMAIL,
+        hint: `Share the Google Sheet with: ${getServiceAccountEmail()}`,
+        serviceAccountEmail: getServiceAccountEmail(),
       });
     }
 
