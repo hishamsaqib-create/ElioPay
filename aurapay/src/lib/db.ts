@@ -1,33 +1,40 @@
-import Database from "better-sqlite3";
-import path from "path";
+import { createClient, type Client, type Row } from "@libsql/client";
 import bcrypt from "bcryptjs";
 
-const DB_PATH = path.join(process.cwd(), "aurapay.db");
+let _client: Client | null = null;
+let _initialized = false;
 
-let _db: Database.Database | null = null;
-
-export function getDb(): Database.Database {
-  if (!_db) {
-    _db = new Database(DB_PATH);
-    _db.pragma("journal_mode = WAL");
-    _db.pragma("foreign_keys = ON");
-    initializeDb(_db);
+export function getClient(): Client {
+  if (!_client) {
+    _client = createClient({
+      url: process.env.TURSO_DATABASE_URL || "file:aurapay.db",
+      authToken: process.env.TURSO_AUTH_TOKEN,
+    });
   }
-  return _db;
+  return _client;
 }
 
-function initializeDb(db: Database.Database) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
+export async function getDb(): Promise<Client> {
+  const client = getClient();
+  if (!_initialized) {
+    await initializeDb(client);
+    _initialized = true;
+  }
+  return client;
+}
+
+async function initializeDb(db: Client) {
+  // Create tables one at a time (libsql doesn't support multi-statement exec reliably)
+  const tables = [
+    `CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'manager',
       created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS dentists (
+    )`,
+    `CREATE TABLE IF NOT EXISTS dentists (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       email TEXT,
@@ -38,9 +45,8 @@ function initializeDb(db: Database.Database) {
       practitioner_id TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS pay_periods (
+    )`,
+    `CREATE TABLE IF NOT EXISTS pay_periods (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       month INTEGER NOT NULL,
       year INTEGER NOT NULL,
@@ -49,9 +55,8 @@ function initializeDb(db: Database.Database) {
       created_at TEXT DEFAULT (datetime('now')),
       finalized_at TEXT,
       UNIQUE(month, year)
-    );
-
-    CREATE TABLE IF NOT EXISTS payslip_entries (
+    )`,
+    `CREATE TABLE IF NOT EXISTS payslip_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       period_id INTEGER NOT NULL REFERENCES pay_periods(id) ON DELETE CASCADE,
       dentist_id INTEGER NOT NULL REFERENCES dentists(id),
@@ -67,38 +72,42 @@ function initializeDb(db: Database.Database) {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(period_id, dentist_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS email_log (
+    )`,
+    `CREATE TABLE IF NOT EXISTS email_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       payslip_entry_id INTEGER REFERENCES payslip_entries(id),
       dentist_id INTEGER REFERENCES dentists(id),
       sent_at TEXT DEFAULT (datetime('now')),
       status TEXT NOT NULL DEFAULT 'sent',
       error TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS settings (
+    )`,
+    `CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
-    );
-  `);
+    )`,
+  ];
+
+  for (const sql of tables) {
+    await db.execute(sql);
+  }
 
   // Seed default users if none exist
-  const userCount = db.prepare("SELECT COUNT(*) as c FROM users").get() as { c: number };
-  if (userCount.c === 0) {
+  const userCount = await db.execute("SELECT COUNT(*) as c FROM users");
+  if (Number(userCount.rows[0].c) === 0) {
     const hash = bcrypt.hashSync("aurapay2025", 10);
-    db.prepare("INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)").run(
-      "hisham@aurapay.cloud", hash, "Hisham Saqib", "owner"
-    );
-    db.prepare("INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)").run(
-      "manager@aurapay.cloud", hash, "Practice Manager", "manager"
-    );
+    await db.execute({
+      sql: "INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)",
+      args: ["hisham@aurapay.cloud", hash, "Hisham Saqib", "owner"],
+    });
+    await db.execute({
+      sql: "INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)",
+      args: ["manager@aurapay.cloud", hash, "Practice Manager", "manager"],
+    });
   }
 
   // Seed dentists if none exist
-  const dentistCount = db.prepare("SELECT COUNT(*) as c FROM dentists").get() as { c: number };
-  if (dentistCount.c === 0) {
+  const dentistCount = await db.execute("SELECT COUNT(*) as c FROM dentists");
+  if (Number(dentistCount.rows[0].c) === 0) {
     const dentists = [
       { name: "Zeeshan Abbas", split: 45, nhs: 0, uda: 0, perf: null, prac: "283516" },
       { name: "Ankush Patel", split: 45, nhs: 0, uda: 0, perf: null, prac: "110701" },
@@ -108,17 +117,17 @@ function initializeDb(db: Database.Database) {
       { name: "Hani Dalati", split: 50, nhs: 0, uda: 0, perf: null, prac: "263970" },
       { name: "Hisham Saqib", split: 50, nhs: 0, uda: 0, perf: null, prac: "127844" },
     ];
-    const stmt = db.prepare(
-      "INSERT INTO dentists (name, split_percentage, is_nhs, uda_rate, performer_number, practitioner_id) VALUES (?, ?, ?, ?, ?, ?)"
-    );
     for (const d of dentists) {
-      stmt.run(d.name, d.split, d.nhs, d.uda, d.perf, d.prac);
+      await db.execute({
+        sql: "INSERT INTO dentists (name, split_percentage, is_nhs, uda_rate, performer_number, practitioner_id) VALUES (?, ?, ?, ?, ?, ?)",
+        args: [d.name, d.split, d.nhs, d.uda, d.perf, d.prac],
+      });
     }
   }
 
   // Seed default settings
-  const settingsCount = db.prepare("SELECT COUNT(*) as c FROM settings").get() as { c: number };
-  if (settingsCount.c === 0) {
+  const settingsCount = await db.execute("SELECT COUNT(*) as c FROM settings");
+  if (Number(settingsCount.rows[0].c) === 0) {
     const defaults = [
       ["practice_name", "Aura Dental Clinic"],
       ["therapy_rate", "0.5833"],
@@ -134,11 +143,19 @@ function initializeDb(db: Database.Database) {
       ["smtp_pass", ""],
       ["email_from", "payslips@aurapay.cloud"],
     ];
-    const stmt = db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)");
     for (const [k, v] of defaults) {
-      stmt.run(k, v);
+      await db.execute({ sql: "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", args: [k, v] });
     }
   }
+}
+
+// Helper to convert Row to typed object
+export function rowTo<T>(row: Row): T {
+  return row as unknown as T;
+}
+
+export function rowsTo<T>(rows: Row[]): T[] {
+  return rows as unknown as T[];
 }
 
 // Helper types

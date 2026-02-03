@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, PayslipEntry, Dentist } from "@/lib/db";
+import { getDb, rowTo, rowsTo, PayslipEntry, Dentist } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { calculatePayslip, formatCurrency, getMonthName } from "@/lib/calculations";
 import nodemailer from "nodemailer";
@@ -18,29 +18,34 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { entry_id } = await req.json();
-  const db = getDb();
+  const db = await getDb();
 
-  const entry = db.prepare(
-    `SELECT e.*, d.name as dentist_name, d.email as dentist_email,
+  const result = await db.execute({
+    sql: `SELECT e.*, d.name as dentist_name, d.email as dentist_email,
             d.split_percentage, d.is_nhs, d.uda_rate, d.performer_number,
             p.month, p.year
      FROM payslip_entries e
      JOIN dentists d ON d.id = e.dentist_id
      JOIN pay_periods p ON p.id = e.period_id
-     WHERE e.id = ?`
-  ).get(entry_id) as (PayslipEntry & {
+     WHERE e.id = ?`,
+    args: [entry_id],
+  });
+
+  if (result.rows.length === 0) return NextResponse.json({ error: "Entry not found" }, { status: 404 });
+
+  type EntryRow = PayslipEntry & {
     dentist_name: string; dentist_email: string | null;
     split_percentage: number; is_nhs: number; uda_rate: number;
     performer_number: string | null; month: number; year: number;
-  }) | undefined;
+  };
+  const entry = rowTo<EntryRow>(result.rows[0]);
 
-  if (!entry) return NextResponse.json({ error: "Entry not found" }, { status: 404 });
   if (!entry.dentist_email) return NextResponse.json({ error: "Dentist has no email address" }, { status: 400 });
 
   // Get SMTP settings
+  const settingsResult = await db.execute("SELECT key, value FROM settings WHERE key LIKE 'smtp_%' OR key = 'email_from'");
   const settings: Record<string, string> = {};
-  const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp_%' OR key = 'email_from'").all() as { key: string; value: string }[];
-  for (const r of rows) settings[r.key] = r.value;
+  for (const r of rowsTo<{ key: string; value: string }>(settingsResult.rows)) settings[r.key] = r.value;
 
   if (!settings.smtp_host || !settings.smtp_user || !settings.smtp_pass) {
     return NextResponse.json({ error: "SMTP not configured. Go to Settings to configure email." }, { status: 400 });
@@ -54,7 +59,6 @@ export async function POST(req: NextRequest) {
   };
   const calc = calculatePayslip(entry, dentist);
 
-  // Generate PDF inline (simplified)
   const doc = new jsPDF();
   const pw = doc.internal.pageSize.getWidth();
   doc.setFillColor(66, 99, 235);
@@ -85,10 +89,7 @@ export async function POST(req: NextRequest) {
     `Therapy: ${formatCurrency(calc.therapyDeduction)}`,
     `Total Deductions: ${formatCurrency(calc.totalDeductions)}`,
   ];
-  for (const line of lines) {
-    doc.text(line, 15, y);
-    y += 7;
-  }
+  for (const line of lines) { doc.text(line, 15, y); y += 7; }
 
   const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
   const filename = `${entry.dentist_name.replace(/\s+/g, "_")}_${getMonthName(entry.month)}_${entry.year}.pdf`;
@@ -128,11 +129,11 @@ export async function POST(req: NextRequest) {
       attachments: [{ filename, content: pdfBuffer, contentType: "application/pdf" }],
     });
 
-    db.prepare("INSERT INTO email_log (payslip_entry_id, dentist_id, status) VALUES (?, ?, 'sent')").run(entry.id, entry.dentist_id);
+    await db.execute({ sql: "INSERT INTO email_log (payslip_entry_id, dentist_id, status) VALUES (?, ?, 'sent')", args: [entry.id, entry.dentist_id] });
     return NextResponse.json({ ok: true, message: `Email sent to ${entry.dentist_email}` });
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : "Unknown error";
-    db.prepare("INSERT INTO email_log (payslip_entry_id, dentist_id, status, error) VALUES (?, ?, 'failed', ?)").run(entry.id, entry.dentist_id, errMsg);
+    await db.execute({ sql: "INSERT INTO email_log (payslip_entry_id, dentist_id, status, error) VALUES (?, ?, 'failed', ?)", args: [entry.id, entry.dentist_id, errMsg] });
     return NextResponse.json({ error: `Failed to send: ${errMsg}` }, { status: 500 });
   }
 }

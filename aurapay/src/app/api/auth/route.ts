@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { getDb } from "@/lib/db";
+import { getDb, rowTo } from "@/lib/db";
 import { signToken } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   const { email, password } = await req.json();
-  const db = getDb();
-  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as {
-    id: number; email: string; password_hash: string; name: string; role: string;
-  } | undefined;
+  const db = await getDb();
+  const result = await db.execute({ sql: "SELECT * FROM users WHERE email = ?", args: [email] });
 
-  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+  if (result.rows.length === 0) {
+    return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+  }
+  const user = rowTo<{ id: number; email: string; password_hash: string; name: string; role: string }>(result.rows[0]);
+
+  if (!bcrypt.compareSync(password, user.password_hash)) {
     return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
   }
 

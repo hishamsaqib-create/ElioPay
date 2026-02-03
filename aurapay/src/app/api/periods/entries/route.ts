@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, PayslipEntry, Dentist } from "@/lib/db";
+import { getDb, rowsTo, PayslipEntry, Dentist } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { calculatePayslip } from "@/lib/calculations";
 
@@ -10,15 +10,19 @@ export async function GET(req: NextRequest) {
   const periodId = req.nextUrl.searchParams.get("period_id");
   if (!periodId) return NextResponse.json({ error: "period_id required" }, { status: 400 });
 
-  const db = getDb();
-  const entries = db.prepare(
-    `SELECT e.*, d.name as dentist_name, d.email as dentist_email,
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `SELECT e.*, d.name as dentist_name, d.email as dentist_email,
             d.split_percentage, d.is_nhs, d.uda_rate, d.performer_number
      FROM payslip_entries e
      JOIN dentists d ON d.id = e.dentist_id
      WHERE e.period_id = ?
-     ORDER BY d.name`
-  ).all(periodId) as (PayslipEntry & { dentist_name: string; dentist_email: string | null; split_percentage: number; is_nhs: number; uda_rate: number; performer_number: string | null })[];
+     ORDER BY d.name`,
+    args: [periodId],
+  });
+
+  type EntryRow = PayslipEntry & { dentist_name: string; dentist_email: string | null; split_percentage: number; is_nhs: number; uda_rate: number; performer_number: string | null };
+  const entries = rowsTo<EntryRow>(result.rows);
 
   const results = entries.map((entry) => {
     const dentist: Dentist = {
@@ -44,10 +48,10 @@ export async function PUT(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const db = getDb();
+  const db = await getDb();
 
-  db.prepare(
-    `UPDATE payslip_entries SET
+  await db.execute({
+    sql: `UPDATE payslip_entries SET
       gross_private = ?,
       nhs_udas = ?,
       lab_bills_json = ?,
@@ -58,19 +62,20 @@ export async function PUT(req: NextRequest) {
       notes = ?,
       private_patients_json = ?,
       updated_at = datetime('now')
-    WHERE id = ?`
-  ).run(
-    body.gross_private ?? 0,
-    body.nhs_udas ?? 0,
-    JSON.stringify(body.lab_bills || []),
-    body.finance_fees ?? 0,
-    body.therapy_minutes ?? 0,
-    body.therapy_rate ?? 0.5833,
-    JSON.stringify(body.adjustments || []),
-    body.notes ?? "",
-    JSON.stringify(body.private_patients || []),
-    body.id
-  );
+    WHERE id = ?`,
+    args: [
+      body.gross_private ?? 0,
+      body.nhs_udas ?? 0,
+      JSON.stringify(body.lab_bills || []),
+      body.finance_fees ?? 0,
+      body.therapy_minutes ?? 0,
+      body.therapy_rate ?? 0.5833,
+      JSON.stringify(body.adjustments || []),
+      body.notes ?? "",
+      JSON.stringify(body.private_patients || []),
+      body.id,
+    ],
+  });
 
   return NextResponse.json({ ok: true });
 }
