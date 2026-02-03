@@ -8,10 +8,10 @@ const CORRECT_IDS: Record<string, string> = {
   "Ankush Patel": "285115",
   "Peter Throw": "396225",
   "Priyanka Kapoor": "396229",
-  // These need to be looked up in Dentally - leaving old IDs for now
-  // "Zeeshan Abbas": "???",
-  // "Moneeb Ahmad": "???",
-  // "Hani Dalati": "???",
+  "Zeeshan Abbas": "484388",
+  "Moneeb Ahmad": "497281",
+  "Hani Dalati": "462017",
+  "Syed Abdullah": "367953",
 };
 
 async function updateIds() {
@@ -32,7 +32,6 @@ async function updateIds() {
   return NextResponse.json({
     message: "Updated dentist IDs",
     updates,
-    note: "Zeeshan Abbas, Moneeb Ahmad, and Hani Dalati still need their IDs looked up in Dentally dashboard",
   });
 }
 

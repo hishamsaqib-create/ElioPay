@@ -14,15 +14,15 @@ const NHS_KEYWORDS = [
 ];
 const CBCT_KEYWORDS = ["cbct", "ct scan", "cone beam"];
 
-// Therapist/Hygienist/Nurse IDs to exclude
-const THERAPIST_IDS = new Set([
-  "396210", // Colin Pritchard (Therapist)
-  "396211", // Taryn Dawson (Therapist)
-  "396217", // Karen Wraight (Hygienist)
-  "396226", // Student Student (Therapist)
-  "395937", // Bethany Harris (Nurse)
-  "395938", // Amanda Durham (Nurse)
-]);
+// Roles that count as clinicians/dentists (case-insensitive match)
+const CLINICIAN_ROLES = ["dentist", "clinician", "associate", "principal"];
+
+// Check if a role is a clinician role
+function isClinicianRole(role?: string): boolean {
+  if (!role) return false;
+  const lower = role.toLowerCase();
+  return CLINICIAN_ROLES.some(r => lower.includes(r));
+}
 
 function parseAmount(val: unknown): number {
   if (typeof val === "number") return val;
@@ -182,6 +182,50 @@ async function fetchUserInfo(userId: string, token: string): Promise<{ name: str
   return null;
 }
 
+// Fetch all site users to get their roles
+interface DentallyUser {
+  id: string | number;
+  first_name?: string;
+  last_name?: string;
+  role?: string;
+  user_type?: string;
+  job_title?: string;
+}
+
+async function fetchAllUsers(token: string): Promise<Map<string, { name: string; role?: string; isClinician: boolean }>> {
+  const userMap = new Map<string, { name: string; role?: string; isClinician: boolean }>();
+
+  try {
+    // Fetch users for the site
+    const res = await fetch(`${DENTALLY_API}/users?site_id=${SITE_ID}&per_page=100`, {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const users: DentallyUser[] = data.users || data.data || [];
+
+      for (const user of users) {
+        const userId = String(user.id);
+        const firstName = user.first_name || "";
+        const lastName = user.last_name || "";
+        const name = `${firstName} ${lastName}`.trim() || `User ${userId}`;
+        const role = user.role || user.user_type || user.job_title || undefined;
+        const isClinician = isClinicianRole(role);
+
+        userMap.set(userId, { name, role, isClinician });
+        console.log(`[Dentally] User ${userId}: ${name} (${role || "no role"}) - ${isClinician ? "CLINICIAN" : "non-clinician"}`);
+      }
+
+      console.log(`[Dentally] Loaded ${users.length} users, ${Array.from(userMap.values()).filter(u => u.isClinician).length} are clinicians`);
+    }
+  } catch (e) {
+    console.error(`[Dentally] Failed to fetch users:`, e);
+  }
+
+  return userMap;
+}
+
 // Determine payment status from invoice
 function getPaymentStatus(inv: DentallyInvoice, privateAmount: number): { status: "paid" | "partial" | "unpaid"; amountPaid: number; amountOutstanding: number } {
   const totalAmount = parseAmount(inv.amount);
@@ -245,9 +289,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // Fetch all users first to identify clinicians by role
+    const allUsers = await fetchAllUsers(token);
+
     // Fetch invoices from Dentally
-    // Note: page and per_page are added by fetchAllPages
-    const url = `${DENTALLY_API}/invoices?created_from=${startDate}&created_to=${endDate}&site_id=${SITE_ID}`;
+    // Use dated_after/dated_before to filter by invoice date (consistent with payments endpoint)
+    // This ensures we only get invoices for the specific calendar month
+    const url = `${DENTALLY_API}/invoices?dated_after=${startDate}&dated_before=${endDate}&site_id=${SITE_ID}`;
     const invoices = await fetchAllPages(url, token);
 
     console.log(`[Dentally] Total invoices fetched: ${invoices.length}`);
@@ -266,7 +314,7 @@ export async function POST(req: NextRequest) {
     const patientNameCache = new Map<string, string>();
 
     let skippedZeroAmount = 0;
-    let skippedTherapist = 0;
+    let skippedNonClinician = 0;
     let skippedNhs = 0;
     let processedCount = 0;
     let flaggedCount = 0;
@@ -282,8 +330,11 @@ export async function POST(req: NextRequest) {
       const userId = String(inv.user_id || inv.practitioner_id || "");
       if (!userId) continue;
 
-      if (THERAPIST_IDS.has(userId)) {
-        skippedTherapist++;
+      // Check if user is a clinician by role
+      const userInfo = allUsers.get(userId);
+      if (userInfo && !userInfo.isClinician) {
+        // User is known but not a clinician - skip
+        skippedNonClinician++;
         continue;
       }
 
@@ -448,15 +499,28 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Look up names for unmatched user IDs
-    const unmatchedWithNames: Array<{ id: string; name?: string; role?: string }> = [];
+    // Look up names for unmatched user IDs (only clinicians)
+    const unmatchedClinicians: Array<{ id: string; name?: string; role?: string }> = [];
     for (const uid of unmatchedUserIds) {
-      const userInfo = await fetchUserInfo(uid, token);
-      unmatchedWithNames.push({
-        id: uid,
-        name: userInfo?.name,
-        role: userInfo?.role,
-      });
+      // First check if we already have this user info
+      let info = allUsers.get(uid);
+      if (!info) {
+        // Fetch individual user info
+        const fetchedInfo = await fetchUserInfo(uid, token);
+        if (fetchedInfo) {
+          const isClinician = isClinicianRole(fetchedInfo.role);
+          info = { name: fetchedInfo.name, role: fetchedInfo.role, isClinician };
+        }
+      }
+
+      // Only report clinicians as unmatched - non-clinicians are expected to be unmatched
+      if (info && info.isClinician) {
+        unmatchedClinicians.push({
+          id: uid,
+          name: info.name,
+          role: info.role,
+        });
+      }
     }
 
     // Build summary
@@ -483,15 +547,15 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      message: `Fetched ${invoices.length} invoices, updated ${updated} dentists. ${flaggedCount} items flagged for review.`,
+      message: `Fetched ${invoices.length} invoices for ${startDate} to ${endDate}, updated ${updated} dentists. ${flaggedCount} items flagged for review.`,
       debug: {
         totalInvoices: invoices.length,
         processedInvoices: processedCount,
         flaggedForReview: flaggedCount,
         skippedZeroAmount,
-        skippedTherapist,
+        skippedNonClinician,
         skippedNhs,
-        unmatchedUserIds: unmatchedWithNames,
+        unmatchedClinicianIds: unmatchedClinicians,
         dateRange: { start: startDate, end: endDate },
       },
       summary,
