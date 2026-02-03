@@ -53,15 +53,38 @@ export async function GET(req: NextRequest) {
   const gray = { r: 107, g: 114, b: 128 };     // #6B7280 - Gray text
   const lightGray = { r: 243, g: 244, b: 246 }; // #F3F4F6 - Light background
 
-  // Clean header - Logo on left
-  doc.setFontSize(24);
+  // Draw Aura logo (circle with stylized A)
+  const logoX = 15;
+  const logoY = y - 5;
+  const logoSize = 12;
+  const logoCenter = logoSize / 2;
+
+  // Draw circle
+  doc.setDrawColor(navy.r, navy.g, navy.b);
+  doc.setLineWidth(0.6);
+  doc.circle(logoX + logoCenter, logoY + logoCenter, logoCenter, "S");
+
+  // Draw the "A" shape
+  doc.setLineWidth(0.5);
+  // Left leg of A
+  doc.line(logoX + logoCenter, logoY + 2, logoX + 2.5, logoY + logoSize - 2);
+  // Right leg of A
+  doc.line(logoX + logoCenter, logoY + 2, logoX + logoSize - 2.5, logoY + logoSize - 2);
+  // Curved crossbar (wave effect) - using a bezier-like approach with line
+  doc.setLineWidth(0.6);
+  const waveY = logoY + logoSize * 0.55;
+  doc.line(logoX + 4, waveY + 1, logoX + logoCenter, waveY - 1);
+  doc.line(logoX + logoCenter, waveY - 1, logoX + logoSize - 4, waveY + 1);
+
+  // Clean header - Logo text next to icon
+  doc.setFontSize(20);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(navy.r, navy.g, navy.b);
-  doc.text("AURA", 15, y);
-  doc.setFontSize(8);
+  doc.text("AURA", logoX + logoSize + 4, y + 2);
+  doc.setFontSize(7);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(gray.r, gray.g, gray.b);
-  doc.text("DENTAL CLINIC", 15, y + 6);
+  doc.text("DENTAL CLINIC", logoX + logoSize + 4, y + 7);
 
   // Period info - right aligned
   doc.setFontSize(10);
@@ -82,7 +105,7 @@ export async function GET(req: NextRequest) {
   y += 12;
   doc.setFontSize(9);
   doc.setTextColor(gray.r, gray.g, gray.b);
-  doc.text("EMPLOYEE", 15, y);
+  doc.text("DENTIST", 15, y);
   doc.text("DETAILS", pageWidth / 2 + 10, y);
 
   y += 8;
