@@ -144,6 +144,8 @@ export default function PeriodDetailPage() {
     const labBills: LabBill[] = JSON.parse(entry.lab_bills_json || "[]");
     const adjustments: Adjustment[] = JSON.parse(entry.adjustments_json || "[]");
     const privatePatients: PrivatePatient[] = JSON.parse(entry.private_patients_json || "[]");
+    const discrepancies: Discrepancy[] = JSON.parse(entry.discrepancies_json || "[]");
+    const dentistLog: DentistLogEntry[] = JSON.parse(entry.dentist_log_json || "[]");
 
     await fetch("/api/periods/entries", {
       method: "PUT",
@@ -159,6 +161,8 @@ export default function PeriodDetailPage() {
         adjustments: adjustments,
         notes: entry.notes,
         private_patients: privatePatients,
+        discrepancies: discrepancies,
+        dentist_log: dentistLog,
       }),
     });
     await loadData();
@@ -187,15 +191,28 @@ export default function PeriodDetailPage() {
   }
 
   async function downloadPdf(entryId: number) {
-    const res = await fetch(`/api/payslips/generate-pdf?entry_id=${entryId}`);
-    if (!res.ok) { showToast("PDF generation failed", "error"); return; }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = res.headers.get("Content-Disposition")?.split("filename=")[1]?.replace(/"/g, "") || "payslip.pdf";
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const res = await fetch(`/api/payslips/generate-pdf?entry_id=${entryId}`);
+      if (!res.ok) {
+        const contentType = res.headers.get("Content-Type");
+        if (contentType?.includes("application/json")) {
+          const errData = await res.json();
+          showToast(errData.details || errData.error || "PDF generation failed", "error");
+        } else {
+          showToast("PDF generation failed", "error");
+        }
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.headers.get("Content-Disposition")?.split("filename=")[1]?.replace(/"/g, "") || "payslip.pdf";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      showToast(`PDF error: ${e instanceof Error ? e.message : "Unknown error"}`, "error");
+    }
   }
 
   async function sendEmail(entryId: number, dentistId: number) {

@@ -1,8 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <!-- Outer circle -->
-  <circle cx="50" cy="50" r="45" fill="none" stroke="#000000" stroke-width="3"/>
-  <!-- Letter A -->
-  <path d="M50 20 L30 70 L38 70 L42 58 L58 58 L62 70 L70 70 L50 20 Z M45 50 L50 35 L55 50 Z" fill="#000000"/>
-  <!-- Curved swoosh under A -->
-  <path d="M35 62 Q50 78 65 62" fill="none" stroke="#000000" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="50" cy="50" r="46" fill="none" stroke="#000" stroke-width="2.5"/>
+  <path d="M50 22 L32 72 L40 72 L44 60 L56 60 L60 72 L68 72 L50 22 Z M47 52 L50 40 L53 52 Z" fill="#000"/>
+  <path d="M36 64 C42 76 58 76 64 64" fill="none" stroke="#000" stroke-width="4" stroke-linecap="round"/>
 </svg>
