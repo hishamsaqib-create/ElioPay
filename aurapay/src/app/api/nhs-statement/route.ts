@@ -194,32 +194,17 @@ function extractUdasFromText(text: string, nhsDentists: Dentist[]): UdaExtractio
   return results;
 }
 
-// Parse PDF and extract text using pdfjs-dist
+// Parse PDF and extract text using unpdf (serverless-friendly)
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   try {
-    // Dynamic import for pdfjs-dist (works in serverless)
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    // unpdf is designed for serverless/edge environments
+    const { extractText } = await import("unpdf");
 
-    // Load the PDF document
-    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
-    const pdf = await loadingTask.promise;
+    const result = await extractText(new Uint8Array(buffer));
+    // result.text can be string or string[] depending on version
+    const fullText = Array.isArray(result.text) ? result.text.join("\n") : (result.text || "");
 
-    console.log(`[NHS] PDF loaded: ${pdf.numPages} pages`);
-
-    // Extract text from all pages
-    const textParts: string[] = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const pageText = textContent.items
-        .map((item: any) => item.str || "")
-        .join(" ");
-      textParts.push(pageText);
-    }
-
-    const fullText = textParts.join("\n");
-    console.log(`[NHS] Extracted ${fullText.length} characters from PDF`);
+    console.log(`[NHS] Extracted ${fullText.length} characters from PDF (${result.totalPages} pages)`);
     return fullText;
   } catch (error) {
     console.error("[NHS] PDF parsing error:", error);
