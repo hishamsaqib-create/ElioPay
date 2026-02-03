@@ -16,19 +16,12 @@ export async function POST(req: NextRequest) {
   try {
     const buffer = Buffer.from(await pdf_file.arrayBuffer());
 
-    // Extract text using pdf-parse
-    const { PDFParse } = await import("pdf-parse");
-    const pdfParser = new PDFParse({ data: new Uint8Array(buffer) });
-    const textResult = await pdfParser.getText();
+    // Extract text using unpdf (same as main extraction code)
+    const { extractText } = await import("unpdf");
+    const result = await extractText(new Uint8Array(buffer));
 
-    // Get text from each page
-    const pages = textResult.pages.map((p, i) => ({
-      pageNumber: i + 1,
-      text: p.text,
-      length: p.text.length,
-    }));
-
-    const fullText = pages.map(p => p.text).join("\n\n--- PAGE BREAK ---\n\n");
+    // result.text can be string or string[] depending on version
+    const fullText = Array.isArray(result.text) ? result.text.join("\n") : (result.text || "");
 
     // Look for key patterns
     const patterns = {
@@ -50,16 +43,23 @@ export async function POST(req: NextRequest) {
         .map(({ line, idx }) => `Line ${idx}: ${line}`);
     }
 
+    // Find the per-clinician section
+    const perClinicianMatch = fullText.match(/Units\s+of\s+Dental\s+Activity\s+per\s+Clinician/i);
+    const perClinicianIndex = perClinicianMatch ? fullText.indexOf(perClinicianMatch[0]) : -1;
+    const clinicianSection = perClinicianIndex >= 0 ? fullText.substring(perClinicianIndex) : null;
+
     return NextResponse.json({
       ok: true,
       fileName: pdf_file.name,
       fileSize: pdf_file.size,
-      totalPages: pages.length,
+      totalPages: result.totalPages,
       totalTextLength: fullText.length,
-      pages: pages.map(p => ({ pageNumber: p.pageNumber, length: p.length, preview: p.text.substring(0, 500) })),
       fullText: fullText,
       patterns,
       performerLines,
+      perClinicianSectionFound: perClinicianIndex >= 0,
+      perClinicianSectionIndex: perClinicianIndex,
+      clinicianSectionPreview: clinicianSection ? clinicianSection.substring(0, 2000) : null,
     });
   } catch (error) {
     return NextResponse.json({
