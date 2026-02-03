@@ -108,160 +108,133 @@ function parseEnglishDate(dateStr: string): string {
 // Each clinician has: "PERFORMER_NUM NAME" followed by "Current Financial Year YYYY/YY: VALUE"
 function extractUdasFromText(text: string, nhsDentists: Dentist[]): UdaExtraction[] {
   const results: UdaExtraction[] = [];
-  const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
 
   console.log("[NHS] Extracting UDAs from text, searching for dentists:", nhsDentists.map(d => `${d.name} (${d.performer_number})`));
-  console.log("[NHS] Text preview (first 1000 chars):", text.substring(0, 1000));
+  console.log("[NHS] Full extracted text:\n", text);
 
-  // Method 1: Parse NHS Activity Statement format (performer number based)
-  // Look for sections like:
-  // "701874 M AHMAD"
-  // "Current Financial Year 2025/26    232.40"
-  for (const dentist of nhsDentists) {
-    if (!dentist.performer_number) continue;
+  // CRITICAL: First, find the "Units of Dental Activity per Clinician" section
+  // This section contains the per-clinician UDA breakdown we need
+  const perClinicianMatch = text.match(/Units\s+of\s+Dental\s+Activity\s+per\s+Clinician/i);
+  if (!perClinicianMatch) {
+    console.log("[NHS] WARNING: Could not find 'Units of Dental Activity per Clinician' section");
+  }
 
-    let foundUdas = 0;
-    const perfNum = dentist.performer_number;
+  // Get the text AFTER the "per Clinician" header
+  const perClinicianIndex = perClinicianMatch ? text.indexOf(perClinicianMatch[0]) : 0;
+  const clinicianSection = text.substring(perClinicianIndex);
+  console.log("[NHS] Per-clinician section preview:", clinicianSection.substring(0, 1500));
 
-    // Find the line containing this performer number
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+  // Parse the clinician section to extract performer number -> UDA mappings
+  // Look for pattern: PERFORMER_NUMBER NAME followed by Current Financial Year value
+  // Example: "701874 M AHMAD" ... "Current Financial Year 2025/26" ... "232.40"
 
-      // Check if line starts with or contains the performer number
-      if (line.includes(perfNum)) {
-        console.log(`[NHS] Found performer ${perfNum} (${dentist.name}) on line ${i}: "${line}"`);
+  // Strategy: Find all performer numbers (6 digits) in the clinician section
+  // Then for each, find the next "Current Financial Year" and its associated value
+  const performerPattern = /(\d{6})\s+([A-Z][A-Z\s]+?)(?=\s*Current\s+Financial\s+Year|\s*\d{6}|$)/gi;
+  const clinicianBlocks: { perfNum: string; name: string; startIndex: number }[] = [];
 
-        // Look at subsequent lines for "Current Financial Year" value
-        for (let j = 1; j <= 5 && i + j < lines.length; j++) {
-          const nextLine = lines[i + j];
+  let match;
+  while ((match = performerPattern.exec(clinicianSection)) !== null) {
+    clinicianBlocks.push({
+      perfNum: match[1],
+      name: match[2].trim(),
+      startIndex: match.index,
+    });
+    console.log(`[NHS] Found clinician block: ${match[1]} ${match[2].trim()} at index ${match.index}`);
+  }
 
-          // Check if we hit another performer number (next clinician section)
-          if (/^\d{5,6}\s+[A-Z]/.test(nextLine)) {
-            console.log(`[NHS] Hit next clinician at line ${i + j}, stopping search for ${dentist.name}`);
-            break;
-          }
+  // For each clinician block, find the Current Financial Year value
+  for (let i = 0; i < clinicianBlocks.length; i++) {
+    const block = clinicianBlocks[i];
+    const nextBlockStart = i + 1 < clinicianBlocks.length ? clinicianBlocks[i + 1].startIndex : clinicianSection.length;
+    const blockText = clinicianSection.substring(block.startIndex, nextBlockStart);
 
-          // Look for "Current Financial Year" line with the UDA value
-          if (/current\s+financial\s+year/i.test(nextLine)) {
-            console.log(`[NHS] Found Current Financial Year line: "${nextLine}"`);
+    console.log(`[NHS] Processing block for ${block.perfNum}: "${blockText.substring(0, 200)}..."`);
 
-            // Case 1: Value is on the same line (format: "Current Financial Year 2025/26    232.40")
-            // Look for a decimal number that's NOT part of the year pattern (2025/26)
-            const sameLineMatch = nextLine.match(/\s(\d{1,3}(?:,\d{3})*\.\d{1,2})\s*$/);
-            if (sameLineMatch) {
-              const numStr = sameLineMatch[1].replace(/,/g, "");
-              const num = parseFloat(numStr);
-              if (num >= 0 && num <= 10000) {
-                foundUdas = num;
-                console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name} from same line: "${nextLine}"`);
-                break;
-              }
-            }
+    // Find "Current Financial Year YYYY/YY" followed by a number
+    // The number might be on same line or next line
+    const currentFYMatch = blockText.match(/Current\s+Financial\s+Year\s+\d{4}\/\d{2}\s*[\n\r\s]*(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})/i);
+    if (currentFYMatch) {
+      const udaValue = parseFloat(currentFYMatch[1].replace(/,/g, ""));
+      console.log(`[NHS] Found UDA value ${udaValue} for performer ${block.perfNum} (${block.name})`);
 
-            // Case 2: Value is on the NEXT line (PDF text might split lines)
-            if (!foundUdas && i + j + 1 < lines.length) {
-              const valueLine = lines[i + j + 1];
-              // Value line should be just a number (possibly with commas)
-              const nextLineMatch = valueLine.match(/^(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+\.\d{1,2})$/);
-              if (nextLineMatch) {
-                const numStr = nextLineMatch[1].replace(/,/g, "");
-                const num = parseFloat(numStr);
-                if (num >= 0 && num <= 10000) {
-                  foundUdas = num;
-                  console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name} from next line: "${valueLine}"`);
-                  break;
-                }
-              }
-            }
-
-            // Case 3: Fallback - find any decimal number on the line
-            if (!foundUdas) {
-              const anyNumberMatch = nextLine.match(/(\d+\.\d{1,2})/);
-              if (anyNumberMatch) {
-                const num = parseFloat(anyNumberMatch[1]);
-                if (num >= 0.1 && num <= 10000) {
-                  foundUdas = num;
-                  console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name} (fallback) from: "${nextLine}"`);
-                  break;
-                }
-              }
-            }
-          }
-        }
-
-        if (foundUdas > 0) break;
+      // Find matching dentist in our database
+      const dentist = nhsDentists.find(d => d.performer_number === block.perfNum);
+      if (dentist) {
+        results.push({
+          dentistName: dentist.name,
+          performerNumber: block.perfNum,
+          udas: udaValue,
+          udaRate: dentist.uda_rate,
+          nhsIncome: Math.round(udaValue * dentist.uda_rate * 100) / 100,
+        });
+        console.log(`[NHS] Matched to dentist ${dentist.name}: ${udaValue} UDAs @ £${dentist.uda_rate} = £${(udaValue * dentist.uda_rate).toFixed(2)}`);
+      } else {
+        console.log(`[NHS] No database match for performer ${block.perfNum} (${block.name})`);
       }
-    }
-
-    if (foundUdas > 0) {
-      results.push({
-        dentistName: dentist.name,
-        performerNumber: perfNum,
-        udas: foundUdas,
-        udaRate: dentist.uda_rate,
-        nhsIncome: Math.round(foundUdas * dentist.uda_rate * 100) / 100,
-      });
     } else {
-      console.log(`[NHS] No UDAs found for ${dentist.name} (${perfNum})`);
+      console.log(`[NHS] No Current Financial Year value found in block for ${block.perfNum}`);
     }
   }
 
-  // Method 2: Fallback - search by name patterns if performer number not found
-  for (const dentist of nhsDentists) {
-    // Skip if already found via performer number
-    if (results.some(r => r.dentistName === dentist.name)) continue;
+  // Fallback: If no blocks found, try line-by-line approach with performer numbers
+  if (clinicianBlocks.length === 0) {
+    console.log("[NHS] No clinician blocks found, trying line-by-line fallback");
+    const lines = clinicianSection.split(/[\n\r]+/).map(l => l.trim()).filter(l => l.length > 0);
 
-    const nameParts = dentist.name.toLowerCase().split(" ");
-    const lastName = nameParts[nameParts.length - 1];
-    const firstInitial = nameParts[0][0];
+    for (const dentist of nhsDentists) {
+      if (!dentist.performer_number) continue;
+      const perfNum = dentist.performer_number;
 
-    // Search patterns: "KAPOOR", "M AHMAD", "PE THROW"
-    const patterns = [
-      lastName.toUpperCase(),
-      `${firstInitial} ${lastName}`.toUpperCase(),
-      `${firstInitial.toUpperCase()}${firstInitial.toUpperCase()} ${lastName.toUpperCase()}`, // PE THROW pattern
-    ];
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes(perfNum)) {
+          console.log(`[NHS] Found performer ${perfNum} on line: ${lines[i]}`);
 
-    let foundUdas = 0;
+          // Look ahead for Current Financial Year value
+          for (let j = 1; j <= 10 && i + j < lines.length; j++) {
+            const nextLine = lines[i + j];
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].toUpperCase();
+            // Stop if we hit another performer
+            if (/^\d{6}\s+[A-Z]/.test(nextLine)) break;
 
-      // Check if line contains any name pattern (typically after a performer number)
-      const hasNameMatch = patterns.some(p => line.includes(p));
-      const hasPerformerFormat = /^\d{5,6}\s+/.test(line);
+            if (/current\s+financial\s+year/i.test(nextLine)) {
+              // Check same line for value
+              const sameLineValue = nextLine.match(/(\d+\.\d{2})\s*$/);
+              if (sameLineValue) {
+                const udaValue = parseFloat(sameLineValue[1]);
+                results.push({
+                  dentistName: dentist.name,
+                  performerNumber: perfNum,
+                  udas: udaValue,
+                  udaRate: dentist.uda_rate,
+                  nhsIncome: Math.round(udaValue * dentist.uda_rate * 100) / 100,
+                });
+                console.log(`[NHS] Fallback: Found ${udaValue} UDAs for ${dentist.name}`);
+                break;
+              }
 
-      if (hasNameMatch && hasPerformerFormat) {
-        console.log(`[NHS] Found name match for ${dentist.name} on line: "${lines[i]}"`);
-
-        // Look for Current Financial Year value in subsequent lines
-        for (let j = 1; j <= 5 && i + j < lines.length; j++) {
-          const nextLine = lines[i + j];
-
-          if (/^\d{5,6}\s+[A-Z]/.test(nextLine)) break;
-
-          if (/current\s+financial\s+year/i.test(nextLine)) {
-            const numberMatch = nextLine.match(/(\d+\.\d{1,2})\s*$/);
-            if (numberMatch) {
-              foundUdas = parseFloat(numberMatch[1]);
-              console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name} (by name)`);
-              break;
+              // Check next line for just a number
+              if (i + j + 1 < lines.length) {
+                const valueLine = lines[i + j + 1];
+                const valueMatch = valueLine.match(/^(\d+\.\d{2})$/);
+                if (valueMatch) {
+                  const udaValue = parseFloat(valueMatch[1]);
+                  results.push({
+                    dentistName: dentist.name,
+                    performerNumber: perfNum,
+                    udas: udaValue,
+                    udaRate: dentist.uda_rate,
+                    nhsIncome: Math.round(udaValue * dentist.uda_rate * 100) / 100,
+                  });
+                  console.log(`[NHS] Fallback: Found ${udaValue} UDAs for ${dentist.name} on next line`);
+                  break;
+                }
+              }
             }
           }
+          break;
         }
-
-        if (foundUdas > 0) break;
       }
-    }
-
-    if (foundUdas > 0) {
-      results.push({
-        dentistName: dentist.name,
-        performerNumber: dentist.performer_number || undefined,
-        udas: foundUdas,
-        udaRate: dentist.uda_rate,
-        nhsIncome: Math.round(foundUdas * dentist.uda_rate * 100) / 100,
-      });
     }
   }
 
@@ -429,7 +402,9 @@ export async function POST(req: NextRequest) {
       start: nhs_period_start || null,
       end: nhs_period_end || null,
     },
-    extractedText: extractedText.length > 0 ? extractedText.substring(0, 500) + "..." : null,
+    // Return full extracted text for debugging (truncated for large PDFs)
+    extractedText: extractedText.length > 0 ? extractedText.substring(0, 5000) : null,
+    extractedTextLength: extractedText.length,
   });
 }
 
