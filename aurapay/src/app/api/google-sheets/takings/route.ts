@@ -45,13 +45,36 @@ async function getGoogleSheetsClient() {
   return null;
 }
 
+// Get month name variations for sheet lookup
+function getMonthSheetNames(month: number, year: number): string[] {
+  const monthNames = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"];
+  const monthShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const m = monthNames[month - 1];
+  const ms = monthShort[month - 1];
+  const y2 = String(year).slice(-2); // "26" from 2026
+
+  return [
+    `${m.toUpperCase()} ${y2}`,    // "JANUARY 26"
+    `${m} ${y2}`,                   // "January 26"
+    `${m.toUpperCase()} ${year}`,  // "JANUARY 2026"
+    `${m} ${year}`,                 // "January 2026"
+    `${ms.toUpperCase()} ${y2}`,   // "JAN 26"
+    `${ms} ${y2}`,                  // "Jan 26"
+    `${m}`,                         // "January"
+    `${ms}`,                        // "Jan"
+    "Sheet1", "Takings", "Private Takings", "Log", "Main", "Data"
+  ];
+}
+
 // Fetch data from Google Sheets using service account or fallback to public access
 async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: number): Promise<{ rows: SheetRow[]; error?: string }> {
-  const sheetNames = ["Sheet1", "Takings", "Private Takings", "Log", "Main", "Data"];
+  const sheetNames = getMonthSheetNames(month, year);
   let allRows: SheetRow[] = [];
   let lastError: string | undefined;
 
   console.log(`[GoogleSheets] Fetching spreadsheet ${spreadsheetId} for ${month}/${year}`);
+  console.log(`[GoogleSheets] Will try sheet names:`, sheetNames.slice(0, 6));
 
   // Try service account authentication first
   const sheets = await getGoogleSheetsClient();
@@ -135,39 +158,51 @@ async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: 
 function parseSheetValues(values: string[][], month: number, year: number): SheetRow[] {
   const rows: SheetRow[] = [];
 
-  // Find header row (look for "Patient", "Name", "Date", "Amount" etc.)
+  // Find header row - scan more rows since header might be further down (e.g., row 11)
   let headerIndex = -1;
   let nameCol = -1;
   let dateCol = -1;
   let amountCol = -1;
   let treatmentCol = -1;
 
-  for (let i = 0; i < Math.min(10, values.length); i++) {
+  for (let i = 0; i < Math.min(20, values.length); i++) {
     const row = values[i] || [];
     const lowerRow = row.map(cell => (cell || "").toString().toLowerCase().trim());
+
+    // Reset for each potential header row
+    let foundDate = -1, foundName = -1, foundAmount = -1, foundTreatment = -1;
 
     // Look for header columns
     for (let j = 0; j < lowerRow.length; j++) {
       const cell = lowerRow[j];
-      if (cell.includes("patient") || cell.includes("name")) {
-        nameCol = j;
-        headerIndex = i;
+      // Patient name column - check for various names
+      if (cell.includes("patient") || cell === "name" || cell.includes("initials")) {
+        foundName = j;
       }
-      if (cell.includes("date")) {
-        dateCol = j;
-        headerIndex = i;
+      // Date column
+      if (cell === "date" || cell.includes("date")) {
+        foundDate = j;
       }
-      if (cell.includes("amount") || cell.includes("total") || cell.includes("fee") || cell === "£") {
-        amountCol = j;
-        headerIndex = i;
+      // Amount column - look for "fee", "invoiced", "amount", "total"
+      if (cell.includes("fee") || cell.includes("invoiced") || cell.includes("amount") || cell.includes("total") || cell === "£") {
+        foundAmount = j;
       }
-      if (cell.includes("treatment") || cell.includes("procedure") || cell.includes("description")) {
-        treatmentCol = j;
-        headerIndex = i;
+      // Treatment column
+      if (cell.includes("treatment") || cell.includes("procedure") || cell.includes("description") || cell.includes("completed")) {
+        foundTreatment = j;
       }
     }
 
-    if (nameCol >= 0 && dateCol >= 0 && amountCol >= 0) break;
+    // If we found at least date and one other column, use this as header
+    if (foundDate >= 0 && (foundName >= 0 || foundAmount >= 0)) {
+      headerIndex = i;
+      dateCol = foundDate;
+      nameCol = foundName >= 0 ? foundName : 1; // Default to column B if not found
+      amountCol = foundAmount >= 0 ? foundAmount : 3; // Default to column D if not found
+      treatmentCol = foundTreatment >= 0 ? foundTreatment : 2;
+      console.log(`[GoogleSheets] Found header at row ${i}: date=${dateCol}, name=${nameCol}, amount=${amountCol}, treatment=${treatmentCol}`);
+      break;
+    }
   }
 
   // Default columns if headers not found
@@ -188,7 +223,9 @@ function parseSheetValues(values: string[][], month: number, year: number): Shee
     const amountStr = (row[amountCol] || "").toString().trim();
     const treatment = treatmentCol >= 0 && row[treatmentCol] ? row[treatmentCol].toString().trim() : undefined;
 
+    // Skip empty rows or total rows
     if (!patientName || !dateStr) continue;
+    if (patientName.toLowerCase().includes("total") || patientName.toLowerCase().includes("gross")) continue;
 
     // Parse amount (remove £ sign and commas)
     const amount = parseFloat(amountStr.replace(/[£,]/g, "")) || 0;
@@ -199,11 +236,14 @@ function parseSheetValues(values: string[][], month: number, year: number): Shee
     if (!parsedDate) continue;
 
     const [pYear, pMonth] = parsedDate.split("-").map(Number);
+    // For month-specific sheets (like "JANUARY 26"), accept all rows regardless of date
+    // since the sheet itself is already filtered by month
     if (pMonth === month && pYear === year) {
       rows.push({ patientName, date: parsedDate, amount, treatment });
     }
   }
 
+  console.log(`[GoogleSheets] Parsed ${rows.length} rows for ${month}/${year}`);
   return rows;
 }
 
