@@ -14,11 +14,13 @@ interface PrivatePatient {
   amountPaid?: number; amountOutstanding?: number;
   status?: "paid" | "partial" | "unpaid";
   flagged?: boolean; flagReason?: string;
+  financeFee?: number; invoiceId?: string; patientId?: string;
+  resolved?: boolean; resolvedNote?: string;
 }
 interface Discrepancy {
   type: "invoiced_not_paid" | "partial_payment" | "log_mismatch" | "in_log_not_system" | "in_system_not_log";
   patientName: string; invoicedAmount: number; paidAmount: number;
-  date: string; notes: string;
+  date: string; notes: string; resolved?: boolean;
 }
 interface DentistLogEntry {
   patientName: string; date: string; amount: number; treatment?: string;
@@ -320,11 +322,17 @@ export default function PeriodDetailPage() {
               if (!debug) return null;
               return (
                 <div className="text-xs text-blue-600 space-y-1">
-                  <p>Total invoices: {String(debug.totalInvoices)} | Processed: {String(debug.processedInvoices)}</p>
-                  <p>Flagged for review: <span className="text-amber-600 font-medium">{String(debug.flaggedForReview || 0)}</span></p>
-                  <p>Skipped: {String(debug.skippedTherapist)} therapist, {String(debug.skippedNhs)} NHS</p>
+                  <p>
+                    Total from API: {String(debug.totalInvoicesFromApi || debug.totalInvoices || 0)} |
+                    In date range: <span className="font-semibold">{String(debug.invoicesInDateRange || debug.processedInvoices || 0)}</span>
+                  </p>
+                  <p>
+                    Flagged for review: <span className="text-amber-600 font-medium">{String(debug.flaggedForReview || 0)}</span>
+                    {debug.financePayments ? <span className="text-blue-600 ml-2">| Finance: {String(debug.financePayments)}</span> : null}
+                  </p>
+                  <p>Skipped: {String(debug.skippedNonClinician || debug.skippedTherapist || 0)} non-clinician, {String(debug.skippedNhs || 0)} NHS</p>
                   {(() => {
-                    const unmatched = debug.unmatchedUserIds as Array<{ id: string; name?: string; role?: string }> | string[];
+                    const unmatched = (debug.unmatchedClinicianIds || debug.unmatchedUserIds) as Array<{ id: string; name?: string; role?: string }> | string[];
                     if (!unmatched || unmatched.length === 0) return null;
                     // Handle both old format (string[]) and new format (object[])
                     if (typeof unmatched[0] === "string") {
@@ -332,7 +340,7 @@ export default function PeriodDetailPage() {
                     }
                     return (
                       <div className="text-amber-600">
-                        <p className="font-medium">Unmatched IDs (add these to Dentists page):</p>
+                        <p className="font-medium">Unmatched Clinician IDs (add these to Dentists page):</p>
                         {(unmatched as Array<{ id: string; name?: string; role?: string }>).map((u, i) => (
                           <p key={i} className="ml-2">
                             <code className="bg-amber-100 px-1 rounded">{u.id}</code>
@@ -347,7 +355,7 @@ export default function PeriodDetailPage() {
               );
             })()}
             {(() => {
-              const summary = dentallyResult.summary as Record<string, { invoiced: number; paid: number; outstanding: number; patients: number; flagged: number }> | undefined;
+              const summary = dentallyResult.summary as Record<string, { invoiced: number; paid: number; outstanding: number; patients: number; flagged: number; finance?: number }> | undefined;
               if (!summary || Object.keys(summary).length === 0) return null;
               return (
                 <div className="text-xs text-blue-700 mt-2">
@@ -356,12 +364,13 @@ export default function PeriodDetailPage() {
                     {Object.entries(summary).map(([name, data]) => (
                       <div key={name} className="bg-white/50 rounded p-2">
                         <p className="font-medium">{name}</p>
-                        <div className="flex gap-4 mt-1 text-[11px]">
+                        <div className="flex flex-wrap gap-3 mt-1 text-[11px]">
                           <span>Invoiced: {fmt(data.invoiced)}</span>
                           <span className="text-green-600">Paid: {fmt(data.paid)}</span>
                           {data.outstanding > 0 && <span className="text-red-600">Outstanding: {fmt(data.outstanding)}</span>}
                           <span>{data.patients} patients</span>
                           {data.flagged > 0 && <span className="text-amber-600">{data.flagged} flagged</span>}
+                          {data.finance && data.finance > 0 && <span className="text-blue-600">{data.finance} finance</span>}
                         </div>
                       </div>
                     ))}
@@ -680,15 +689,17 @@ export default function PeriodDetailPage() {
                                     <th className="text-right px-3 py-2 font-medium text-text-muted">Amount</th>
                                     <th className="text-center px-3 py-2 font-medium text-text-muted">Status</th>
                                     <th className="text-center px-3 py-2 font-medium text-text-muted">Finance</th>
+                                    <th className="text-right px-3 py-2 font-medium text-text-muted">Fee</th>
                                     {!isFinalized && <th className="w-8"></th>}
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {patients.map((pt, i) => (
-                                    <tr key={i} className={`border-b border-border last:border-0 ${pt.flagged ? "bg-amber-50" : ""}`}>
+                                    <tr key={i} className={`border-b border-border last:border-0 ${pt.flagged && !pt.resolved ? "bg-amber-50" : pt.resolved ? "bg-green-50" : ""}`}>
                                       <td className="px-3 py-1.5">
                                         <div className="flex items-center gap-1">
-                                          {pt.flagged && <AlertCircle size={12} className="text-amber-500 shrink-0" />}
+                                          {pt.flagged && !pt.resolved && <AlertCircle size={12} className="text-amber-500 shrink-0" />}
+                                          {pt.resolved && <CheckCircle2 size={12} className="text-green-500 shrink-0" />}
                                           <input
                                             placeholder="Name"
                                             value={pt.name}
@@ -701,6 +712,9 @@ export default function PeriodDetailPage() {
                                             className="w-full bg-transparent text-xs outline-none disabled:text-text-muted"
                                           />
                                         </div>
+                                        {pt.flagReason && !pt.resolved && (
+                                          <p className="text-[10px] text-amber-600 mt-0.5 ml-4">{pt.flagReason}</p>
+                                        )}
                                       </td>
                                       <td className="px-3 py-1.5">
                                         <input
@@ -730,31 +744,108 @@ export default function PeriodDetailPage() {
                                         />
                                       </td>
                                       <td className="px-3 py-1.5 text-center">
-                                        {pt.status === "paid" ? (
-                                          <span className="inline-block px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-medium">PAID</span>
-                                        ) : pt.status === "partial" ? (
-                                          <span className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium" title={`Paid: ${fmt(pt.amountPaid || 0)}`}>PARTIAL</span>
-                                        ) : pt.status === "unpaid" ? (
-                                          <span className="inline-block px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium">UNPAID</span>
+                                        {!isFinalized ? (
+                                          <select
+                                            value={pt.status || "paid"}
+                                            onChange={(e) => {
+                                              const updated = [...patients];
+                                              const newStatus = e.target.value as "paid" | "partial" | "unpaid";
+                                              updated[i] = {
+                                                ...updated[i],
+                                                status: newStatus,
+                                                amountPaid: newStatus === "paid" ? pt.amount : newStatus === "unpaid" ? 0 : pt.amountPaid,
+                                                amountOutstanding: newStatus === "unpaid" ? pt.amount : newStatus === "paid" ? 0 : pt.amountOutstanding,
+                                                flagged: newStatus !== "paid",
+                                                flagReason: newStatus === "unpaid" ? "Invoice not paid" : newStatus === "partial" ? "Partial payment" : undefined,
+                                              };
+                                              updatePatients(entry.id, updated);
+                                            }}
+                                            className={`text-[10px] font-medium rounded px-1 py-0.5 border-0 outline-none ${
+                                              pt.status === "paid" ? "bg-green-100 text-green-700" :
+                                              pt.status === "partial" ? "bg-amber-100 text-amber-700" :
+                                              pt.status === "unpaid" ? "bg-red-100 text-red-700" :
+                                              "bg-gray-100 text-gray-600"
+                                            }`}
+                                          >
+                                            <option value="paid">PAID</option>
+                                            <option value="partial">PARTIAL</option>
+                                            <option value="unpaid">UNPAID</option>
+                                          </select>
                                         ) : (
-                                          <span className="text-text-subtle">-</span>
+                                          pt.status === "paid" ? (
+                                            <span className="inline-block px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-medium">PAID</span>
+                                          ) : pt.status === "partial" ? (
+                                            <span className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">PARTIAL</span>
+                                          ) : pt.status === "unpaid" ? (
+                                            <span className="inline-block px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium">UNPAID</span>
+                                          ) : (
+                                            <span className="text-text-subtle">-</span>
+                                          )
                                         )}
                                       </td>
                                       <td className="px-3 py-1.5 text-center">
-                                        {pt.finance ? (
+                                        {!isFinalized ? (
+                                          <input
+                                            type="checkbox"
+                                            checked={pt.finance || false}
+                                            onChange={(e) => {
+                                              const updated = [...patients];
+                                              updated[i] = {
+                                                ...updated[i],
+                                                finance: e.target.checked,
+                                                flagged: e.target.checked || pt.status !== "paid",
+                                                flagReason: e.target.checked && pt.status === "paid" ? "Paid via finance - verify fee deduction" : pt.flagReason,
+                                              };
+                                              updatePatients(entry.id, updated);
+                                            }}
+                                            className="w-4 h-4 text-blue-600 rounded"
+                                          />
+                                        ) : pt.finance ? (
                                           <span className="inline-block px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-medium">FIN</span>
                                         ) : (
                                           <span className="text-text-subtle">-</span>
                                         )}
                                       </td>
+                                      <td className="px-2 py-1.5 text-right">
+                                        {pt.finance && (
+                                          <input
+                                            type="number"
+                                            step="0.01"
+                                            placeholder="0"
+                                            value={pt.financeFee || ""}
+                                            onChange={(e) => {
+                                              const updated = [...patients];
+                                              updated[i] = { ...updated[i], financeFee: parseFloat(e.target.value) || 0 };
+                                              updatePatients(entry.id, updated);
+                                            }}
+                                            disabled={isFinalized}
+                                            className="w-16 bg-white border border-blue-200 rounded px-1 py-0.5 text-[10px] text-right outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-surface-muted"
+                                          />
+                                        )}
+                                      </td>
                                       {!isFinalized && (
                                         <td className="px-1 py-1.5">
-                                          <button
-                                            onClick={() => updatePatients(entry.id, patients.filter((_, j) => j !== i))}
-                                            className="text-text-subtle hover:text-danger transition"
-                                          >
-                                            <Trash2 size={12} />
-                                          </button>
+                                          <div className="flex items-center gap-1">
+                                            {pt.flagged && !pt.resolved && (
+                                              <button
+                                                onClick={() => {
+                                                  const updated = [...patients];
+                                                  updated[i] = { ...updated[i], resolved: true, flagged: false };
+                                                  updatePatients(entry.id, updated);
+                                                }}
+                                                title="Mark as resolved"
+                                                className="text-green-500 hover:text-green-600 transition"
+                                              >
+                                                <CheckCircle2 size={12} />
+                                              </button>
+                                            )}
+                                            <button
+                                              onClick={() => updatePatients(entry.id, patients.filter((_, j) => j !== i))}
+                                              className="text-text-subtle hover:text-danger transition"
+                                            >
+                                              <Trash2 size={12} />
+                                            </button>
+                                          </div>
                                         </td>
                                       )}
                                     </tr>
@@ -770,8 +861,11 @@ export default function PeriodDetailPage() {
                                         <span className="text-amber-600 ml-1">{patients.filter(p => p.status !== "paid" && p.status).length} review</span>
                                       )}
                                     </td>
-                                    <td className="px-3 py-2 text-center text-xs text-text-muted">
+                                    <td className="px-3 py-2 text-center text-xs text-blue-600">
                                       {patients.filter(p => p.finance).length > 0 && `${patients.filter(p => p.finance).length} fin`}
+                                    </td>
+                                    <td className="px-2 py-2 text-right text-xs font-medium text-blue-700">
+                                      {patients.some(p => p.financeFee && p.financeFee > 0) && fmt(patients.reduce((s, p) => s + (p.financeFee || 0), 0))}
                                     </td>
                                     {!isFinalized && <td></td>}
                                   </tr>
@@ -844,32 +938,66 @@ export default function PeriodDetailPage() {
 
                       {/* Discrepancies / Flagged Items */}
                       {(() => {
-                        const discrepancies: Discrepancy[] = JSON.parse(entry.discrepancies_json || "[]");
+                        let discrepancies: Discrepancy[] = JSON.parse(entry.discrepancies_json || "[]");
+                        const unresolvedCount = discrepancies.filter(d => !d.resolved).length;
                         if (discrepancies.length === 0) return null;
                         return (
                           <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-                            <div className="flex items-center gap-2 mb-3">
-                              <AlertCircle size={16} className="text-amber-600" />
-                              <h4 className="text-sm font-semibold text-amber-800">Items for Review ({discrepancies.length})</h4>
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <AlertCircle size={16} className="text-amber-600" />
+                                <h4 className="text-sm font-semibold text-amber-800">
+                                  Items for Review ({unresolvedCount} unresolved / {discrepancies.length} total)
+                                </h4>
+                              </div>
+                              {!isFinalized && unresolvedCount > 0 && (
+                                <button
+                                  onClick={() => {
+                                    const updated = discrepancies.map(d => ({ ...d, resolved: true }));
+                                    updateEntry(entry.id, { discrepancies_json: JSON.stringify(updated) });
+                                  }}
+                                  className="text-xs text-green-600 hover:text-green-700 font-medium"
+                                >
+                                  Resolve All
+                                </button>
+                              )}
                             </div>
                             <div className="space-y-2 max-h-64 overflow-y-auto">
-                              {discrepancies.map((d, i) => (
+                              {discrepancies.filter(d => !d.resolved).map((d, i) => (
                                 <div key={i} className="bg-white rounded p-2 text-xs">
                                   <div className="flex items-center justify-between">
                                     <span className="font-medium">{d.patientName}</span>
-                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                      d.type === "invoiced_not_paid" ? "bg-red-100 text-red-700" :
-                                      d.type === "partial_payment" ? "bg-amber-100 text-amber-700" :
-                                      d.type === "in_log_not_system" ? "bg-purple-100 text-purple-700" :
-                                      d.type === "in_system_not_log" ? "bg-blue-100 text-blue-700" :
-                                      "bg-slate-100 text-slate-700"
-                                    }`}>
-                                      {d.type === "invoiced_not_paid" ? "NOT PAID" :
-                                       d.type === "partial_payment" ? "PARTIAL" :
-                                       d.type === "in_log_not_system" ? "IN LOG ONLY" :
-                                       d.type === "in_system_not_log" ? "IN SYSTEM ONLY" :
-                                       "MISMATCH"}
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                        d.type === "invoiced_not_paid" ? "bg-red-100 text-red-700" :
+                                        d.type === "partial_payment" ? "bg-amber-100 text-amber-700" :
+                                        d.type === "in_log_not_system" ? "bg-purple-100 text-purple-700" :
+                                        d.type === "in_system_not_log" ? "bg-blue-100 text-blue-700" :
+                                        "bg-slate-100 text-slate-700"
+                                      }`}>
+                                        {d.type === "invoiced_not_paid" ? "NOT PAID" :
+                                         d.type === "partial_payment" ? "PARTIAL" :
+                                         d.type === "in_log_not_system" ? "IN LOG ONLY" :
+                                         d.type === "in_system_not_log" ? "IN SYSTEM ONLY" :
+                                         "MISMATCH"}
+                                      </span>
+                                      {!isFinalized && (
+                                        <button
+                                          onClick={() => {
+                                            const updated = discrepancies.map((disc, j) =>
+                                              discrepancies.filter(x => !x.resolved).indexOf(disc) === i
+                                                ? { ...disc, resolved: true }
+                                                : disc
+                                            );
+                                            updateEntry(entry.id, { discrepancies_json: JSON.stringify(updated) });
+                                          }}
+                                          className="text-green-500 hover:text-green-600"
+                                          title="Mark as resolved"
+                                        >
+                                          <CheckCircle2 size={14} />
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
                                   <p className="text-text-muted mt-1">
                                     {d.date}
@@ -879,6 +1007,21 @@ export default function PeriodDetailPage() {
                                   <p className="text-amber-700 mt-0.5">{d.notes}</p>
                                 </div>
                               ))}
+                              {discrepancies.some(d => d.resolved) && (
+                                <details className="mt-2">
+                                  <summary className="text-xs text-text-muted cursor-pointer hover:text-text">
+                                    {discrepancies.filter(d => d.resolved).length} resolved items
+                                  </summary>
+                                  <div className="mt-2 space-y-1 opacity-60">
+                                    {discrepancies.filter(d => d.resolved).map((d, i) => (
+                                      <div key={i} className="bg-green-50 rounded p-2 text-xs flex items-center justify-between">
+                                        <span>{d.patientName} - {fmt(d.invoicedAmount)}</span>
+                                        <span className="text-green-600 text-[10px]">RESOLVED</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </details>
+                              )}
                             </div>
                           </div>
                         );

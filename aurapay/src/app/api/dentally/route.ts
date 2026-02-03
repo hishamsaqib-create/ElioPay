@@ -51,6 +51,35 @@ function isCbctItem(item: { name?: string }): boolean {
   return CBCT_KEYWORDS.some((k) => lower.includes(k));
 }
 
+// Check if invoice is within date range (client-side filter since API filter doesn't work reliably)
+function isInvoiceInDateRange(inv: DentallyInvoice, startDate: string, endDate: string): boolean {
+  // Get the invoice date (dated_on is the invoice date, created_at is when it was created in system)
+  const invoiceDate = inv.dated_on || inv.created_at?.substring(0, 10) || "";
+  if (!invoiceDate) return false;
+
+  // Compare dates (YYYY-MM-DD format)
+  return invoiceDate >= startDate && invoiceDate < endDate;
+}
+
+// Check if invoice was paid via finance/payment plan
+function isFinancePayment(inv: DentallyInvoice): boolean {
+  // Check various indicators of finance/payment plan
+  if (inv.payment_plan_id) return true;
+  if (inv.finance === true) return true;
+  if (inv.payment_method?.toLowerCase().includes("finance")) return true;
+  if (inv.payment_method?.toLowerCase().includes("payment plan")) return true;
+  if (inv.payment_explanation?.links?.payments) return true;
+
+  // Check invoice items for finance indicators
+  const items = inv.invoice_items || [];
+  for (const item of items) {
+    const name = (item.name || "").toLowerCase();
+    if (name.includes("finance") || name.includes("payment plan")) return true;
+  }
+
+  return false;
+}
+
 interface DentallyInvoice {
   id: number | string;
   patient_id: number | string;
@@ -63,6 +92,9 @@ interface DentallyInvoice {
   state?: string;
   created_at?: string;
   dated_on?: string;
+  payment_plan_id?: number | string;
+  finance?: boolean;
+  payment_method?: string;
   invoice_items?: Array<{ name?: string; amount?: unknown; nhs_charge?: boolean; practitioner_id?: string | number }>;
   payment_explanation?: { links?: { payments?: string } };
 }
@@ -98,7 +130,7 @@ async function fetchAllPages(baseUrl: string, token: string): Promise<DentallyIn
   const all: DentallyInvoice[] = [];
   let page = 1;
   const perPage = 100;
-  const maxPages = 50; // Safety limit: 50 pages x 100 = 5000 invoices max
+  const maxPages = 100; // Higher limit to ensure we get all invoices
 
   while (page <= maxPages) {
     // Build URL with page number
@@ -142,22 +174,47 @@ async function fetchAllPages(baseUrl: string, token: string): Promise<DentallyIn
   return all;
 }
 
-async function fetchPatientName(patientId: string | number, token: string): Promise<string> {
-  try {
-    const res = await fetch(`${DENTALLY_API}/patients/${patientId}`, {
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+// Batch fetch patient names for efficiency
+async function fetchPatientNames(patientIds: string[], token: string): Promise<Map<string, string>> {
+  const nameMap = new Map<string, string>();
+
+  console.log(`[Dentally] Fetching names for ${patientIds.length} patients...`);
+
+  // Fetch in parallel batches of 10
+  const batchSize = 10;
+  for (let i = 0; i < patientIds.length; i += batchSize) {
+    const batch = patientIds.slice(i, i + batchSize);
+    const promises = batch.map(async (patientId) => {
+      try {
+        const res = await fetch(`${DENTALLY_API}/patients/${patientId}`, {
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const patient = data.patient || data;
+          const firstName = patient.first_name || patient.firstName || "";
+          const lastName = patient.last_name || patient.lastName || "";
+          const name = `${firstName} ${lastName}`.trim();
+          if (name) {
+            nameMap.set(patientId, name);
+            return;
+          }
+        }
+      } catch (e) {
+        console.error(`[Dentally] Failed to fetch patient ${patientId}:`, e);
+      }
+      nameMap.set(patientId, `Patient ${patientId}`);
     });
-    if (res.ok) {
-      const data = await res.json();
-      const patient = data.patient || data;
-      const firstName = patient.first_name || patient.firstName || "";
-      const lastName = patient.last_name || patient.lastName || "";
-      return `${firstName} ${lastName}`.trim() || `Patient ${patientId}`;
+
+    await Promise.all(promises);
+
+    // Log progress
+    if ((i + batchSize) % 50 === 0 || i + batchSize >= patientIds.length) {
+      console.log(`[Dentally] Fetched ${Math.min(i + batchSize, patientIds.length)}/${patientIds.length} patient names`);
     }
-  } catch (e) {
-    console.error(`[Dentally] Failed to fetch patient ${patientId}:`, e);
   }
-  return `Patient ${patientId}`;
+
+  return nameMap;
 }
 
 // Fetch user info from Dentally to identify unknown user IDs
@@ -264,13 +321,14 @@ export async function POST(req: NextRequest) {
   if (periodResult.rows.length === 0) return NextResponse.json({ error: "Period not found" }, { status: 404 });
   const period = rowTo<{ id: number; month: number; year: number }>(periodResult.rows[0]);
 
-  // Calculate date range for the period
+  // Calculate date range for the period (first day to last day of the month)
   const startDate = `${period.year}-${String(period.month).padStart(2, "0")}-01`;
+  // For end date, use the first day of the NEXT month (exclusive)
   const endMonth = period.month === 12 ? 1 : period.month + 1;
   const endYear = period.month === 12 ? period.year + 1 : period.year;
   const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
 
-  console.log(`[Dentally] Fetching invoices for period: ${startDate} to ${endDate}`);
+  console.log(`[Dentally] Fetching invoices for period: ${startDate} to ${endDate} (exclusive)`);
 
   const token = process.env.DENTALLY_API_TOKEN;
   if (!token) return NextResponse.json({ error: "DENTALLY_API_TOKEN not configured" }, { status: 400 });
@@ -293,12 +351,15 @@ export async function POST(req: NextRequest) {
     const allUsers = await fetchAllUsers(token);
 
     // Fetch invoices from Dentally
-    // Use dated_after/dated_before to filter by invoice date (consistent with payments endpoint)
-    // This ensures we only get invoices for the specific calendar month
-    const url = `${DENTALLY_API}/invoices?dated_after=${startDate}&dated_before=${endDate}&site_id=${SITE_ID}`;
-    const invoices = await fetchAllPages(url, token);
+    // Note: The API date filters may not work reliably, so we'll filter client-side as well
+    const url = `${DENTALLY_API}/invoices?site_id=${SITE_ID}`;
+    const allInvoices = await fetchAllPages(url, token);
 
-    console.log(`[Dentally] Total invoices fetched: ${invoices.length}`);
+    console.log(`[Dentally] Total invoices from API: ${allInvoices.length}`);
+
+    // CLIENT-SIDE DATE FILTERING: Only include invoices within the date range
+    const invoices = allInvoices.filter(inv => isInvoiceInDateRange(inv, startDate, endDate));
+    console.log(`[Dentally] Invoices in date range (${startDate} to ${endDate}): ${invoices.length}`);
 
     // Track data per dentist
     type DentistData = {
@@ -307,17 +368,22 @@ export async function POST(req: NextRequest) {
       totalInvoiced: number;
       totalPaid: number;
       totalOutstanding: number;
+      financeCount: number;
     };
 
     const dentistTotals = new Map<number, DentistData>();
     const unmatchedUserIds = new Set<string>();
-    const patientNameCache = new Map<string, string>();
+    const allPatientIds = new Set<string>();
 
     let skippedZeroAmount = 0;
     let skippedNonClinician = 0;
     let skippedNhs = 0;
     let processedCount = 0;
     let flaggedCount = 0;
+    let financeCount = 0;
+
+    // First pass: process invoices and collect patient IDs
+    const invoiceDataByDentist = new Map<number, Array<{ inv: DentallyInvoice; privateAmount: number; patientId: string }>>();
 
     for (const inv of invoices) {
       const totalAmount = parseAmount(inv.amount);
@@ -367,99 +433,95 @@ export async function POST(req: NextRequest) {
 
       if (privateAmount <= 0) continue;
 
-      // Initialize dentist data
-      if (!dentistTotals.has(dentist.id)) {
-        dentistTotals.set(dentist.id, {
+      const patientId = String(inv.patient_id);
+      allPatientIds.add(patientId);
+
+      if (!invoiceDataByDentist.has(dentist.id)) {
+        invoiceDataByDentist.set(dentist.id, []);
+      }
+      invoiceDataByDentist.get(dentist.id)!.push({ inv, privateAmount, patientId });
+    }
+
+    // Fetch ALL patient names upfront
+    const patientNames = await fetchPatientNames(Array.from(allPatientIds), token);
+
+    // Second pass: create patient records with names
+    for (const [dentistId, invoiceData] of invoiceDataByDentist) {
+      if (!dentistTotals.has(dentistId)) {
+        dentistTotals.set(dentistId, {
           patients: [],
           discrepancies: [],
           totalInvoiced: 0,
           totalPaid: 0,
           totalOutstanding: 0,
+          financeCount: 0,
         });
       }
-      const data = dentistTotals.get(dentist.id)!;
+      const data = dentistTotals.get(dentistId)!;
 
-      // Get payment status
-      const paymentInfo = getPaymentStatus(inv, privateAmount);
-      const patientId = String(inv.patient_id);
-      const invoiceDate = inv.dated_on || inv.created_at?.substring(0, 10) || "";
-      const isFinance = !!(inv.payment_explanation?.links?.payments);
+      for (const { inv, privateAmount, patientId } of invoiceData) {
+        // Get payment status
+        const paymentInfo = getPaymentStatus(inv, privateAmount);
+        const invoiceDate = inv.dated_on || inv.created_at?.substring(0, 10) || "";
+        const isFinance = isFinancePayment(inv);
+        const patientName = patientNames.get(patientId) || `Patient ${patientId}`;
 
-      // Cache patient name placeholder
-      if (!patientNameCache.has(patientId)) {
-        patientNameCache.set(patientId, `Patient ${patientId}`);
-      }
+        if (isFinance) {
+          financeCount++;
+          data.financeCount++;
+        }
 
-      // Create patient record
-      const patientRecord: PatientRecord = {
-        name: patientNameCache.get(patientId)!,
-        date: invoiceDate,
-        amount: Math.round(privateAmount * 100) / 100,
-        amountPaid: paymentInfo.amountPaid,
-        amountOutstanding: paymentInfo.amountOutstanding,
-        status: paymentInfo.status,
-        finance: isFinance,
-        invoiceId: String(inv.id),
-        patientId,
-      };
-
-      // Flag if not fully paid
-      if (paymentInfo.status !== "paid") {
-        patientRecord.flagged = true;
-        patientRecord.flagReason = paymentInfo.status === "unpaid"
-          ? "Invoice not paid"
-          : `Partial payment: £${paymentInfo.amountPaid} of £${privateAmount}`;
-        flaggedCount++;
-
-        // Add to discrepancies
-        data.discrepancies.push({
-          type: paymentInfo.status === "unpaid" ? "invoiced_not_paid" : "partial_payment",
-          patientName: patientRecord.name,
-          patientId,
-          invoiceId: String(inv.id),
-          invoicedAmount: privateAmount,
-          paidAmount: paymentInfo.amountPaid,
+        // Create patient record
+        const patientRecord: PatientRecord = {
+          name: patientName,
           date: invoiceDate,
-          notes: patientRecord.flagReason,
-        });
+          amount: Math.round(privateAmount * 100) / 100,
+          amountPaid: paymentInfo.amountPaid,
+          amountOutstanding: paymentInfo.amountOutstanding,
+          status: paymentInfo.status,
+          finance: isFinance,
+          invoiceId: String(inv.id),
+          patientId,
+        };
+
+        // Flag if not fully paid OR if finance (for review)
+        if (paymentInfo.status !== "paid") {
+          patientRecord.flagged = true;
+          patientRecord.flagReason = paymentInfo.status === "unpaid"
+            ? "Invoice not paid"
+            : `Partial payment: £${paymentInfo.amountPaid} of £${privateAmount}`;
+          flaggedCount++;
+
+          // Add to discrepancies
+          data.discrepancies.push({
+            type: paymentInfo.status === "unpaid" ? "invoiced_not_paid" : "partial_payment",
+            patientName: patientName,
+            patientId,
+            invoiceId: String(inv.id),
+            invoicedAmount: privateAmount,
+            paidAmount: paymentInfo.amountPaid,
+            date: invoiceDate,
+            notes: patientRecord.flagReason,
+          });
+        } else if (isFinance) {
+          // Flag finance payments for review even if paid
+          patientRecord.flagged = true;
+          patientRecord.flagReason = "Paid via finance - verify fee deduction";
+        }
+
+        data.patients.push(patientRecord);
+        data.totalInvoiced += privateAmount;
+        data.totalPaid += paymentInfo.amountPaid;
+        data.totalOutstanding += paymentInfo.amountOutstanding;
+
+        processedCount++;
       }
 
-      data.patients.push(patientRecord);
-      data.totalInvoiced += privateAmount;
-      data.totalPaid += paymentInfo.amountPaid;
-      data.totalOutstanding += paymentInfo.amountOutstanding;
-
-      processedCount++;
-    }
-
-    console.log(`[Dentally] Processed ${processedCount} invoices, ${flaggedCount} flagged for review`);
-
-    // Fetch patient names
-    const allPatientIds = new Set<string>();
-    for (const [, data] of dentistTotals) {
-      for (const p of data.patients) {
-        allPatientIds.add(p.patientId);
-      }
-    }
-
-    const patientIdsToFetch = Array.from(allPatientIds).slice(0, 200);
-    console.log(`[Dentally] Fetching names for ${patientIdsToFetch.length} patients...`);
-
-    for (const patientId of patientIdsToFetch) {
-      const name = await fetchPatientName(patientId, token);
-      patientNameCache.set(patientId, name);
-    }
-
-    // Update patient names
-    for (const [, data] of dentistTotals) {
-      for (const p of data.patients) {
-        p.name = patientNameCache.get(p.patientId) || p.name;
-      }
-      for (const d of data.discrepancies) {
-        d.patientName = patientNameCache.get(d.patientId) || d.patientName;
-      }
+      // Sort patients by date
       data.patients.sort((a, b) => a.date.localeCompare(b.date));
     }
+
+    console.log(`[Dentally] Processed ${processedCount} invoices, ${flaggedCount} flagged for review, ${financeCount} finance payments`);
 
     // Update database
     let updated = 0;
@@ -470,8 +532,8 @@ export async function POST(req: NextRequest) {
       });
 
       // Prepare patient data for storage (include payment status)
-      const patientsForStorage = data.patients.map(({ name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason }) => ({
-        name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason
+      const patientsForStorage = data.patients.map(({ name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason, invoiceId, patientId }) => ({
+        name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason, invoiceId, patientId
       }));
 
       // Store discrepancies as JSON
@@ -495,7 +557,7 @@ export async function POST(req: NextRequest) {
         });
         updated++;
         const dentistName = dentists.find(d => d.id === dentistId)?.name;
-        console.log(`[Dentally] Updated ${dentistName}: £${data.totalPaid.toFixed(2)} paid, £${data.totalOutstanding.toFixed(2)} outstanding (${data.patients.length} patients, ${data.discrepancies.length} flagged)`);
+        console.log(`[Dentally] Updated ${dentistName}: £${data.totalPaid.toFixed(2)} paid, £${data.totalOutstanding.toFixed(2)} outstanding (${data.patients.length} patients, ${data.discrepancies.length} flagged, ${data.financeCount} finance)`);
       }
     }
 
@@ -530,6 +592,7 @@ export async function POST(req: NextRequest) {
       outstanding: number;
       patients: number;
       flagged: number;
+      finance: number;
     }> = {};
 
     for (const [dentistId, data] of dentistTotals) {
@@ -541,17 +604,20 @@ export async function POST(req: NextRequest) {
           outstanding: Math.round(data.totalOutstanding * 100) / 100,
           patients: data.patients.length,
           flagged: data.discrepancies.length,
+          finance: data.financeCount,
         };
       }
     }
 
     return NextResponse.json({
       ok: true,
-      message: `Fetched ${invoices.length} invoices for ${startDate} to ${endDate}, updated ${updated} dentists. ${flaggedCount} items flagged for review.`,
+      message: `Found ${allInvoices.length} total invoices, ${invoices.length} in ${startDate} to ${endDate}. Updated ${updated} dentists. ${flaggedCount} items need review, ${financeCount} finance payments.`,
       debug: {
-        totalInvoices: invoices.length,
+        totalInvoicesFromApi: allInvoices.length,
+        invoicesInDateRange: invoices.length,
         processedInvoices: processedCount,
         flaggedForReview: flaggedCount,
+        financePayments: financeCount,
         skippedZeroAmount,
         skippedNonClinician,
         skippedNhs,
