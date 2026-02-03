@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -12,16 +13,27 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const res = await fetch("/api/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
-    if (res.ok) {
-      router.push("/dashboard");
-    } else {
-      setError("Invalid password");
+
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        router.push("/dashboard");
+      } else if (res.status === 429) {
+        setError("Too many login attempts. Please try again later.");
+      } else {
+        setError(data.error || "Invalid email or password");
+      }
+    } catch {
+      setError("Connection error. Please try again.");
     }
+
     setLoading(false);
   }
 
@@ -30,23 +42,48 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <div className="text-5xl mb-3">💷</div>
-          <h1 className="text-4xl font-extrabold text-white tracking-tight">AuraPay<sup className="text-sm font-medium align-super ml-0.5 opacity-60">TM</sup></h1>
+          <h1 className="text-4xl font-extrabold text-white tracking-tight">
+            AuraPay<sup className="text-sm font-medium align-super ml-0.5 opacity-60">TM</sup>
+          </h1>
           <p className="text-primary-200 mt-2 text-sm">Aura Dental Clinic</p>
         </div>
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-2xl p-8 space-y-5">
           <div>
-            <label className="block text-sm font-medium text-text-muted mb-1.5">Enter password to continue</label>
+            <label htmlFor="email" className="block text-sm font-medium text-text-muted mb-1.5">
+              Email
+            </label>
             <input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 border border-border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition text-sm"
+              placeholder="you@example.com"
+              required
+              autoFocus
+              autoComplete="email"
+            />
+          </div>
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium text-text-muted mb-1.5">
+              Password
+            </label>
+            <input
+              id="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 border border-border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition text-sm text-center tracking-widest"
+              className="w-full px-4 py-3 border border-border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition text-sm"
               placeholder="Password"
               required
-              autoFocus
+              autoComplete="current-password"
             />
           </div>
-          {error && <p className="text-danger text-sm font-medium text-center">{error}</p>}
+          {error && (
+            <p className="text-danger text-sm font-medium text-center bg-red-50 p-2 rounded-lg">
+              {error}
+            </p>
+          )}
           <button
             type="submit"
             disabled={loading}
@@ -55,6 +92,9 @@ export default function LoginPage() {
             {loading ? "Signing in..." : "Sign In"}
           </button>
         </form>
+        <p className="text-primary-200 text-xs text-center mt-4 opacity-70">
+          Secure payslip management system
+        </p>
       </div>
     </div>
   );

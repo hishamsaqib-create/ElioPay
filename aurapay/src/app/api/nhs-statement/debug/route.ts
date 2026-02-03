@@ -1,16 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth";
+import { getSession, isOwner } from "@/lib/auth";
 
 // Debug endpoint to see what text is extracted from NHS PDF
+// SECURITY: Only available to owners in production
 export async function POST(req: NextRequest) {
   const user = await getSession();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-  const formData = await req.formData();
+  // Check if production and not owner
+  if (process.env.NODE_ENV === "production" && !isOwner(user)) {
+    return NextResponse.json(
+      { error: "Debug endpoints are restricted to owners in production" },
+      { status: 403 }
+    );
+  }
+
+  let formData: FormData;
+  try {
+    formData = await req.formData();
+  } catch {
+    return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
+  }
+
   const pdf_file = formData.get("pdf_file") as File | null;
 
   if (!pdf_file || pdf_file.size === 0) {
     return NextResponse.json({ error: "No PDF file provided" }, { status: 400 });
+  }
+
+  // Limit file size to 10MB
+  const MAX_FILE_SIZE = 10 * 1024 * 1024;
+  if (pdf_file.size > MAX_FILE_SIZE) {
+    return NextResponse.json(
+      { error: "File too large. Maximum size is 10MB." },
+      { status: 400 }
+    );
   }
 
   try {
@@ -50,6 +76,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
+      _debug: {
+        user: { id: user.id, email: user.email, role: user.role },
+        environment: process.env.NODE_ENV,
+      },
       fileName: pdf_file.name,
       fileSize: pdf_file.size,
       totalPages: result.totalPages,
@@ -62,6 +92,7 @@ export async function POST(req: NextRequest) {
       clinicianSectionPreview: clinicianSection ? clinicianSection.substring(0, 2000) : null,
     });
   } catch (error) {
+    console.error("[NHS-Debug] PDF parsing error:", error);
     return NextResponse.json({
       error: "Failed to parse PDF",
       details: error instanceof Error ? error.message : "Unknown error",

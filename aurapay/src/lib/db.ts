@@ -1,25 +1,73 @@
 import { createClient, type Client, type Row } from "@libsql/client";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 let _client: Client | null = null;
 let _initialized = false;
+let _initializingPromise: Promise<void> | null = null;
+
+// Validate database configuration
+function validateDbConfig(): { url: string; authToken?: string } {
+  const url = process.env.TURSO_DATABASE_URL;
+  const authToken = process.env.TURSO_AUTH_TOKEN;
+
+  if (!url) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("CRITICAL: TURSO_DATABASE_URL environment variable is required in production");
+    }
+    console.warn("WARNING: Using local SQLite database. Set TURSO_DATABASE_URL for production.");
+    return { url: "file:aurapay.db" };
+  }
+
+  // Validate URL format
+  if (!url.startsWith("libsql://") && !url.startsWith("file:") && !url.startsWith("http")) {
+    throw new Error("Invalid TURSO_DATABASE_URL format. Must start with libsql://, file:, or http(s)://");
+  }
+
+  // Turso cloud requires auth token
+  if (url.startsWith("libsql://") && !authToken) {
+    throw new Error("TURSO_AUTH_TOKEN is required for Turso cloud database");
+  }
+
+  return { url, authToken };
+}
 
 export function getClient(): Client {
   if (!_client) {
+    const config = validateDbConfig();
     _client = createClient({
-      url: process.env.TURSO_DATABASE_URL || "file:aurapay.db",
-      authToken: process.env.TURSO_AUTH_TOKEN,
+      url: config.url,
+      authToken: config.authToken,
     });
   }
   return _client;
 }
 
+// Use mutex pattern to prevent race condition during initialization
 export async function getDb(): Promise<Client> {
   const client = getClient();
-  if (!_initialized) {
-    await initializeDb(client);
-    _initialized = true;
+
+  if (_initialized) {
+    return client;
   }
+
+  // If already initializing, wait for it
+  if (_initializingPromise) {
+    await _initializingPromise;
+    return client;
+  }
+
+  // Start initialization
+  _initializingPromise = initializeDb(client)
+    .then(() => {
+      _initialized = true;
+    })
+    .catch((error) => {
+      _initializingPromise = null;
+      throw error;
+    });
+
+  await _initializingPromise;
   return client;
 }
 
@@ -32,6 +80,7 @@ async function initializeDb(db: Client) {
       password_hash TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'manager',
+      must_change_password INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now'))
     )`,
     `CREATE TABLE IF NOT EXISTS dentists (
@@ -44,33 +93,39 @@ async function initializeDb(db: Client) {
       performer_number TEXT,
       practitioner_id TEXT,
       active INTEGER NOT NULL DEFAULT 1,
+      weekly_hours REAL DEFAULT 40,
       created_at TEXT DEFAULT (datetime('now'))
     )`,
     `CREATE TABLE IF NOT EXISTS pay_periods (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      month INTEGER NOT NULL,
-      year INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'draft',
+      month INTEGER NOT NULL CHECK(month >= 1 AND month <= 12),
+      year INTEGER NOT NULL CHECK(year >= 2020 AND year <= 2100),
+      status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'finalized')),
       created_by INTEGER REFERENCES users(id),
       created_at TEXT DEFAULT (datetime('now')),
       finalized_at TEXT,
+      nhs_period_start TEXT,
+      nhs_period_end TEXT,
       UNIQUE(month, year)
     )`,
     `CREATE TABLE IF NOT EXISTS payslip_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       period_id INTEGER NOT NULL REFERENCES pay_periods(id) ON DELETE CASCADE,
       dentist_id INTEGER NOT NULL REFERENCES dentists(id),
-      gross_private REAL NOT NULL DEFAULT 0,
-      nhs_udas REAL NOT NULL DEFAULT 0,
+      gross_private REAL NOT NULL DEFAULT 0 CHECK(gross_private >= 0),
+      nhs_udas REAL NOT NULL DEFAULT 0 CHECK(nhs_udas >= 0),
       lab_bills_json TEXT DEFAULT '[]',
-      finance_fees REAL NOT NULL DEFAULT 0,
-      therapy_minutes REAL NOT NULL DEFAULT 0,
+      finance_fees REAL NOT NULL DEFAULT 0 CHECK(finance_fees >= 0),
+      therapy_minutes REAL NOT NULL DEFAULT 0 CHECK(therapy_minutes >= 0),
       therapy_rate REAL NOT NULL DEFAULT 0.5833,
       adjustments_json TEXT DEFAULT '[]',
       notes TEXT DEFAULT '',
       private_patients_json TEXT DEFAULT '[]',
       discrepancies_json TEXT DEFAULT '[]',
       dentist_log_json TEXT DEFAULT '[]',
+      nhs_period_json TEXT DEFAULT '{}',
+      analytics_json TEXT DEFAULT '{}',
+      therapy_breakdown_json TEXT DEFAULT '[]',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(period_id, dentist_id)
@@ -90,7 +145,12 @@ async function initializeDb(db: Client) {
   ];
 
   for (const sql of tables) {
-    await db.execute(sql);
+    try {
+      await db.execute(sql);
+    } catch (error) {
+      console.error("Failed to create table:", error);
+      throw error;
+    }
   }
 
   // Run migrations for existing databases
@@ -103,32 +163,46 @@ async function initializeDb(db: Client) {
     "ALTER TABLE payslip_entries ADD COLUMN analytics_json TEXT DEFAULT '{}'",
     "ALTER TABLE dentists ADD COLUMN weekly_hours REAL DEFAULT 40",
     "ALTER TABLE payslip_entries ADD COLUMN therapy_breakdown_json TEXT DEFAULT '[]'",
+    "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
     "UPDATE dentists SET is_nhs = 1, uda_rate = 35.45, performer_number = '110271' WHERE name = 'Hisham Saqib'",
   ];
+
   for (const sql of migrations) {
     try {
       await db.execute(sql);
     } catch {
-      // Column already exists, ignore
+      // Column/table already exists, ignore
     }
   }
 
   // Seed default users if none exist
   const userCount = await db.execute("SELECT COUNT(*) as c FROM users");
   if (Number(userCount.rows[0].c) === 0) {
-    const hash = bcrypt.hashSync("aurapay2025", 10);
+    // Generate random initial password or use environment variable
+    const initialPassword = process.env.INITIAL_ADMIN_PASSWORD || crypto.randomBytes(16).toString("hex");
+    const hash = bcrypt.hashSync(initialPassword, 12);
+
     await db.execute({
-      sql: "INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)",
-      args: ["hisham@aurapay.cloud", hash, "Hisham Saqib", "owner"],
+      sql: "INSERT INTO users (email, password_hash, name, role, must_change_password) VALUES (?, ?, ?, ?, ?)",
+      args: ["hisham@aurapay.cloud", hash, "Hisham Saqib", "owner", 1],
     });
     await db.execute({
-      sql: "INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)",
-      args: ["manager@aurapay.cloud", hash, "Practice Manager", "manager"],
+      sql: "INSERT INTO users (email, password_hash, name, role, must_change_password) VALUES (?, ?, ?, ?, ?)",
+      args: ["manager@aurapay.cloud", hash, "Practice Manager", "manager", 1],
     });
+
+    // Log the initial password (only visible in server logs during first deployment)
+    if (!process.env.INITIAL_ADMIN_PASSWORD) {
+      console.log("=".repeat(60));
+      console.log("IMPORTANT: Initial admin password generated");
+      console.log("Email: hisham@aurapay.cloud");
+      console.log("Password:", initialPassword);
+      console.log("Please change this password immediately after first login!");
+      console.log("=".repeat(60));
+    }
   }
 
   // Seed dentists if none exist
-  // NOTE: practitioner_id = Dentally user_id (appears on invoices)
   const dentistCount = await db.execute("SELECT COUNT(*) as c FROM dentists");
   if (Number(dentistCount.rows[0].c) === 0) {
     const dentists = [
@@ -149,7 +223,6 @@ async function initializeDb(db: Client) {
   }
 
   // Fix dentist IDs for existing databases (migration)
-  // These are the correct Dentally user_ids that appear on invoices
   const idFixes: Record<string, string> = {
     "Zeeshan Abbas": "484388",
     "Ankush Patel": "285115",
@@ -169,7 +242,7 @@ async function initializeDb(db: Client) {
   // Seed default settings
   const settingsCount = await db.execute("SELECT COUNT(*) as c FROM settings");
   if (Number(settingsCount.rows[0].c) === 0) {
-    const defaults = [
+    const defaults: [string, string][] = [
       ["practice_name", "Aura Dental Clinic"],
       ["therapy_rate", "0.5833"],
       ["lab_bill_split", "0.5"],
@@ -178,16 +251,64 @@ async function initializeDb(db: Client) {
       ["finance_rate_6m", "6.0"],
       ["finance_rate_10m", "7.0"],
       ["finance_rate_12m", "8.0"],
-      ["smtp_host", "smtp.gmail.com"],
-      ["smtp_port", "587"],
-      ["smtp_user", ""],
-      ["smtp_pass", ""],
-      ["email_from", "payslips@aurapay.cloud"],
+      // SMTP credentials should be in environment variables
+      ["smtp_host", process.env.SMTP_HOST || "smtp.gmail.com"],
+      ["smtp_port", process.env.SMTP_PORT || "587"],
+      ["smtp_user", process.env.SMTP_USER || ""],
+      ["smtp_pass", process.env.SMTP_PASS || ""],
+      ["email_from", process.env.EMAIL_FROM || "payslips@aurapay.cloud"],
     ];
     for (const [k, v] of defaults) {
       await db.execute({ sql: "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", args: [k, v] });
     }
   }
+}
+
+// Helper to get settings with caching
+let _settingsCache: Map<string, string> | null = null;
+let _settingsCacheTime = 0;
+const SETTINGS_CACHE_TTL = 60000; // 1 minute
+
+export async function getSettings(): Promise<Map<string, string>> {
+  const now = Date.now();
+  if (_settingsCache && now - _settingsCacheTime < SETTINGS_CACHE_TTL) {
+    return _settingsCache;
+  }
+
+  const db = await getDb();
+  const result = await db.execute("SELECT key, value FROM settings");
+  const settings = new Map<string, string>();
+  for (const row of result.rows) {
+    settings.set(String(row.key), String(row.value));
+  }
+
+  _settingsCache = settings;
+  _settingsCacheTime = now;
+  return settings;
+}
+
+export function clearSettingsCache() {
+  _settingsCache = null;
+  _settingsCacheTime = 0;
+}
+
+// Get a setting with type conversion and default
+export async function getSetting(key: string, defaultValue: string): Promise<string>;
+export async function getSetting(key: string, defaultValue: number): Promise<number>;
+export async function getSetting(key: string, defaultValue: string | number): Promise<string | number> {
+  const settings = await getSettings();
+  const value = settings.get(key);
+
+  if (value === undefined) {
+    return defaultValue;
+  }
+
+  if (typeof defaultValue === "number") {
+    const num = parseFloat(value);
+    return isNaN(num) ? defaultValue : num;
+  }
+
+  return value;
 }
 
 // Helper to convert Row to typed object
@@ -197,6 +318,39 @@ export function rowTo<T>(row: Row): T {
 
 export function rowsTo<T>(rows: Row[]): T[] {
   return rows as unknown as T[];
+}
+
+// Safe JSON parse with fallback
+export function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback;
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    console.warn("Failed to parse JSON, using fallback:", json.substring(0, 100));
+    return fallback;
+  }
+}
+
+// Validation helpers
+export function validateMonth(month: number): boolean {
+  return Number.isInteger(month) && month >= 1 && month <= 12;
+}
+
+export function validateYear(year: number): boolean {
+  return Number.isInteger(year) && year >= 2020 && year <= 2100;
+}
+
+export function validatePercentage(pct: number): boolean {
+  return typeof pct === "number" && pct >= 0 && pct <= 100;
+}
+
+export function validatePositiveNumber(num: number): boolean {
+  return typeof num === "number" && num >= 0 && isFinite(num);
+}
+
+export function validatePerformerNumber(num: string | null): boolean {
+  if (num === null) return true;
+  return /^\d{6}$/.test(num);
 }
 
 // Helper types
@@ -210,13 +364,14 @@ export interface Dentist {
   performer_number: string | null;
   practitioner_id: string | null;
   active: number;
+  weekly_hours?: number;
 }
 
 export interface PayPeriod {
   id: number;
   month: number;
   year: number;
-  status: string;
+  status: "draft" | "finalized";
   created_by: number | null;
   created_at: string;
   finalized_at: string | null;
@@ -255,6 +410,8 @@ export interface PrivatePatient {
   flagged?: boolean;
   flagReason?: string;
   notes?: string;
+  invoiceId?: string;
+  patientId?: string;
 }
 
 export interface Discrepancy {
@@ -295,6 +452,7 @@ export interface PayslipEntry {
   dentist_log_json: string;
   analytics_json: string;
   therapy_breakdown_json: string;
+  nhs_period_json?: string;
   created_at: string;
   updated_at: string;
 }
@@ -306,4 +464,5 @@ export interface TherapyAppointment {
   minutes: number;
   treatment?: string;
   therapistName?: string;
+  cost?: number;
 }
