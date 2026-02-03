@@ -103,6 +103,7 @@ async function initializeDb(db: Client) {
     "ALTER TABLE payslip_entries ADD COLUMN analytics_json TEXT DEFAULT '{}'",
     "ALTER TABLE dentists ADD COLUMN weekly_hours REAL DEFAULT 40",
     "ALTER TABLE payslip_entries ADD COLUMN therapy_breakdown_json TEXT DEFAULT '[]'",
+    "UPDATE dentists SET is_nhs = 1, uda_rate = 35.45, performer_number = '110271' WHERE name = 'Hisham Saqib'",
   ];
   for (const sql of migrations) {
     try {
@@ -137,7 +138,7 @@ async function initializeDb(db: Client) {
       { name: "Priyanka Kapoor", split: 50, nhs: 1, uda: 15, perf: "112376", prac: "396229" },
       { name: "Moneeb Ahmad", split: 50, nhs: 1, uda: 15, perf: "701874", prac: "497281" },
       { name: "Hani Dalati", split: 50, nhs: 0, uda: 0, perf: null, prac: "462017" },
-      { name: "Hisham Saqib", split: 50, nhs: 0, uda: 0, perf: null, prac: "276544" },
+      { name: "Hisham Saqib", split: 50, nhs: 1, uda: 35.45, perf: "110271", prac: "276544" },
     ];
     for (const d of dentists) {
       await db.execute({
