@@ -57,6 +57,7 @@ export default function PeriodDetailPage() {
   const [emailSending, setEmailSending] = useState<Record<number, boolean>>({});
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
   const [fetchingDentally, setFetchingDentally] = useState(false);
+  const [dentallyResult, setDentallyResult] = useState<Record<string, unknown> | null>(null);
 
   const loadData = useCallback(async () => {
     const [periodsRes, entriesRes] = await Promise.all([
@@ -155,7 +156,7 @@ export default function PeriodDetailPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        console.log("Dentally fetch debug:", data.debug);
+        setDentallyResult(data);
         showToast(data.message || "Data fetched from Dentally");
         await loadData();
       } else {
@@ -262,6 +263,34 @@ export default function PeriodDetailPage() {
           </div>
         </div>
 
+        {/* Dentally fetch results */}
+        {dentallyResult && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-blue-800">Dentally Fetch Results</h3>
+              <button onClick={() => setDentallyResult(null)} className="text-xs text-blue-600 hover:underline">Dismiss</button>
+            </div>
+            <p className="text-sm text-blue-700">{String(dentallyResult.message || "")}</p>
+            {dentallyResult.debug && (
+              <div className="text-xs text-blue-600 space-y-1">
+                <p>Total invoices: {String((dentallyResult.debug as Record<string, unknown>).totalInvoices)}</p>
+                <p>Skipped unpaid: {String((dentallyResult.debug as Record<string, unknown>).skippedUnpaid)}</p>
+                <p>Skipped therapist: {String((dentallyResult.debug as Record<string, unknown>).skippedTherapist)}</p>
+                <p>Unmatched practitioner IDs: {JSON.stringify((dentallyResult.debug as Record<string, unknown>).unmatchedPracIds)}</p>
+                <p>Sample invoice: {JSON.stringify((dentallyResult.debug as Record<string, unknown>).sampleInvoice)}</p>
+              </div>
+            )}
+            {dentallyResult.summary && Object.keys(dentallyResult.summary as object).length > 0 && (
+              <div className="text-xs text-blue-700">
+                <p className="font-medium mb-1">Summary:</p>
+                {Object.entries(dentallyResult.summary as Record<string, { gross: number; patients: number }>).map(([name, data]) => (
+                  <p key={name}>{name}: {fmt(data.gross)} ({data.patients} patients)</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Dentist cards */}
         <div className="space-y-3">
           {entries.map((entry) => {
@@ -287,6 +316,7 @@ export default function PeriodDetailPage() {
                       <p className="text-xs text-text-muted">
                         {c.splitPercentage}% split
                         {entry.dentist.is_nhs ? " | NHS" : ""}
+                        {(() => { const pts: PrivatePatient[] = JSON.parse(entry.private_patients_json || "[]"); return pts.length > 0 ? ` | ${pts.length} patients` : ""; })()}
                       </p>
                     </div>
                   </div>
@@ -533,10 +563,17 @@ export default function PeriodDetailPage() {
                         )}
                       </div>
 
-                      {/* Private Patients */}
+                      {/* Private Patients Breakdown */}
                       <div>
                         <div className="flex items-center justify-between mb-2">
-                          <label className="text-xs font-semibold text-text uppercase tracking-wide">Private Patients</label>
+                          <label className="text-xs font-semibold text-text uppercase tracking-wide">
+                            Private Patients ({patients.length})
+                            {patients.length > 0 && (
+                              <span className="ml-2 text-primary-600 font-normal normal-case">
+                                Total: {fmt(patients.reduce((s, p) => s + p.amount, 0))}
+                              </span>
+                            )}
+                          </label>
                           {!isFinalized && (
                             <button
                               onClick={() => updatePatients(entry.id, [...patients, { name: "", date: "", amount: 0, finance: false }])}
@@ -547,81 +584,96 @@ export default function PeriodDetailPage() {
                           )}
                         </div>
                         {patients.length === 0 ? (
-                          <p className="text-xs text-text-subtle italic">No individual patients logged</p>
+                          <p className="text-xs text-text-subtle italic">No individual patients logged. Click &quot;Fetch from Dentally&quot; to auto-import or add manually.</p>
                         ) : (
-                          <div className="space-y-2">
-                            <div className="grid grid-cols-12 gap-2 text-xs text-text-muted font-medium px-1">
-                              <span className="col-span-4">Patient Name</span>
-                              <span className="col-span-2">Date</span>
-                              <span className="col-span-2">Amount</span>
-                              <span className="col-span-2">Finance</span>
-                              <span className="col-span-2"></span>
+                          <div className="space-y-1">
+                            {/* Read-only summary table */}
+                            <div className="bg-surface-dim rounded-lg overflow-hidden">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="border-b border-border">
+                                    <th className="text-left px-3 py-2 font-medium text-text-muted">Patient</th>
+                                    <th className="text-left px-3 py-2 font-medium text-text-muted">Date</th>
+                                    <th className="text-right px-3 py-2 font-medium text-text-muted">Amount</th>
+                                    <th className="text-center px-3 py-2 font-medium text-text-muted">Finance</th>
+                                    {!isFinalized && <th className="w-8"></th>}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {patients.map((pt, i) => (
+                                    <tr key={i} className="border-b border-border last:border-0">
+                                      <td className="px-3 py-1.5">
+                                        <input
+                                          placeholder="Name"
+                                          value={pt.name}
+                                          onChange={(e) => {
+                                            const updated = [...patients];
+                                            updated[i] = { ...updated[i], name: e.target.value };
+                                            updatePatients(entry.id, updated);
+                                          }}
+                                          disabled={isFinalized}
+                                          className="w-full bg-transparent text-xs outline-none disabled:text-text-muted"
+                                        />
+                                      </td>
+                                      <td className="px-3 py-1.5">
+                                        <input
+                                          type="date"
+                                          value={pt.date}
+                                          onChange={(e) => {
+                                            const updated = [...patients];
+                                            updated[i] = { ...updated[i], date: e.target.value };
+                                            updatePatients(entry.id, updated);
+                                          }}
+                                          disabled={isFinalized}
+                                          className="w-full bg-transparent text-xs outline-none disabled:text-text-muted"
+                                        />
+                                      </td>
+                                      <td className="px-3 py-1.5 text-right font-medium">
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          value={pt.amount || ""}
+                                          onChange={(e) => {
+                                            const updated = [...patients];
+                                            updated[i] = { ...updated[i], amount: parseFloat(e.target.value) || 0 };
+                                            updatePatients(entry.id, updated);
+                                          }}
+                                          disabled={isFinalized}
+                                          className="w-20 bg-transparent text-xs text-right outline-none disabled:text-text-muted"
+                                        />
+                                      </td>
+                                      <td className="px-3 py-1.5 text-center">
+                                        {pt.finance ? (
+                                          <span className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">FIN</span>
+                                        ) : (
+                                          <span className="text-text-subtle">-</span>
+                                        )}
+                                      </td>
+                                      {!isFinalized && (
+                                        <td className="px-1 py-1.5">
+                                          <button
+                                            onClick={() => updatePatients(entry.id, patients.filter((_, j) => j !== i))}
+                                            className="text-text-subtle hover:text-danger transition"
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        </td>
+                                      )}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr className="bg-slate-100">
+                                    <td className="px-3 py-2 font-semibold text-xs" colSpan={2}>Total ({patients.length} patients)</td>
+                                    <td className="px-3 py-2 text-right font-bold text-xs">{fmt(patients.reduce((s, p) => s + p.amount, 0))}</td>
+                                    <td className="px-3 py-2 text-center text-xs text-text-muted">
+                                      {patients.filter(p => p.finance).length > 0 && `${patients.filter(p => p.finance).length} fin`}
+                                    </td>
+                                    {!isFinalized && <td></td>}
+                                  </tr>
+                                </tfoot>
+                              </table>
                             </div>
-                            {patients.map((pt, i) => (
-                              <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                                <input
-                                  placeholder="Name"
-                                  value={pt.name}
-                                  onChange={(e) => {
-                                    const updated = [...patients];
-                                    updated[i] = { ...updated[i], name: e.target.value };
-                                    updatePatients(entry.id, updated);
-                                  }}
-                                  disabled={isFinalized}
-                                  className="col-span-4 px-2 py-1.5 border border-border rounded-lg text-xs focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted"
-                                />
-                                <input
-                                  type="date"
-                                  value={pt.date}
-                                  onChange={(e) => {
-                                    const updated = [...patients];
-                                    updated[i] = { ...updated[i], date: e.target.value };
-                                    updatePatients(entry.id, updated);
-                                  }}
-                                  disabled={isFinalized}
-                                  className="col-span-2 px-2 py-1.5 border border-border rounded-lg text-xs focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted"
-                                />
-                                <div className="col-span-2 relative">
-                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-subtle text-xs">£</span>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    value={pt.amount || ""}
-                                    onChange={(e) => {
-                                      const updated = [...patients];
-                                      updated[i] = { ...updated[i], amount: parseFloat(e.target.value) || 0 };
-                                      updatePatients(entry.id, updated);
-                                    }}
-                                    disabled={isFinalized}
-                                    className="w-full pl-5 pr-2 py-1.5 border border-border rounded-lg text-xs focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted"
-                                  />
-                                </div>
-                                <label className="col-span-2 flex items-center gap-1.5 text-xs cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={pt.finance}
-                                    onChange={(e) => {
-                                      const updated = [...patients];
-                                      updated[i] = { ...updated[i], finance: e.target.checked };
-                                      updatePatients(entry.id, updated);
-                                    }}
-                                    disabled={isFinalized}
-                                    className="w-3.5 h-3.5 rounded border-border"
-                                  />
-                                  Finance
-                                </label>
-                                <div className="col-span-2 flex justify-end">
-                                  {!isFinalized && (
-                                    <button
-                                      onClick={() => updatePatients(entry.id, patients.filter((_, j) => j !== i))}
-                                      className="text-text-subtle hover:text-danger transition"
-                                    >
-                                      <Trash2 size={13} />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
                           </div>
                         )}
                       </div>

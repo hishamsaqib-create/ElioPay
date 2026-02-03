@@ -115,7 +115,12 @@ export async function POST(req: NextRequest) {
       if (!inv.paid || inv.balance > 0 || inv.amount <= 0) { skippedUnpaid++; continue; }
 
       // Extract practitioner ID - handle various Dentally response formats
-      const pracId = String(inv.practitioner_id || "");
+      const pracId = String(
+        inv.practitioner_id ||
+        (inv as Record<string, unknown>).practitioner ||
+        (inv as Record<string, unknown>).user_id ||
+        ""
+      );
 
       // Skip therapists
       if (THERAPIST_IDS.has(pracId)) { skippedTherapist++; continue; }
