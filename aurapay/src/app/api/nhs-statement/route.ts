@@ -163,6 +163,8 @@ export async function POST(req: NextRequest) {
   const period_id_raw = formData.get("period_id");
   const statement_text = formData.get("statement_text") as string;
   const manual_udas = formData.get("manual_udas") as string; // JSON: { "dentist_name": uda_value }
+  const nhs_period_start = formData.get("nhs_period_start") as string;
+  const nhs_period_end = formData.get("nhs_period_end") as string;
 
   if (!period_id_raw) {
     return NextResponse.json({ error: "period_id is required" }, { status: 400 });
@@ -174,6 +176,14 @@ export async function POST(req: NextRequest) {
   }
 
   const db = await getDb();
+
+  // Update NHS period dates on the pay_period if provided
+  if (nhs_period_start || nhs_period_end) {
+    await db.execute({
+      sql: `UPDATE pay_periods SET nhs_period_start = ?, nhs_period_end = ? WHERE id = ?`,
+      args: [nhs_period_start || null, nhs_period_end || null, period_id],
+    });
+  }
 
   // Get NHS dentists from database
   const dentistsResult = await db.execute("SELECT * FROM dentists WHERE is_nhs = 1 AND active = 1");

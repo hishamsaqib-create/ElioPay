@@ -81,6 +81,8 @@ export default function PeriodDetailPage() {
   const [showNhsUpload, setShowNhsUpload] = useState(false);
   const [nhsText, setNhsText] = useState("");
   const [nhsManual, setNhsManual] = useState<Record<string, string>>({});
+  const [nhsPeriodStart, setNhsPeriodStart] = useState("");
+  const [nhsPeriodEnd, setNhsPeriodEnd] = useState("");
   const [processingNhs, setProcessingNhs] = useState(false);
 
   // Undo history - stores previous entry states
@@ -306,6 +308,12 @@ export default function PeriodDetailPage() {
       if (Object.keys(nhsManual).length > 0) {
         formData.append("manual_udas", JSON.stringify(nhsManual));
       }
+      if (nhsPeriodStart) {
+        formData.append("nhs_period_start", nhsPeriodStart);
+      }
+      if (nhsPeriodEnd) {
+        formData.append("nhs_period_end", nhsPeriodEnd);
+      }
 
       const res = await fetch("/api/nhs-statement", {
         method: "POST",
@@ -317,6 +325,8 @@ export default function PeriodDetailPage() {
         setShowNhsUpload(false);
         setNhsText("");
         setNhsManual({});
+        setNhsPeriodStart("");
+        setNhsPeriodEnd("");
         await loadData();
       } else {
         showToast(data.error || "Failed to process NHS statement", "error");
@@ -413,6 +423,33 @@ export default function PeriodDetailPage() {
 
             {showNhsUpload && (
               <div className="mt-4 pt-4 border-t border-blue-200 space-y-4">
+                {/* NHS Period Dates */}
+                <div>
+                  <label className="block text-xs font-medium text-blue-800 mb-2">NHS Period Dates</label>
+                  <div className="flex items-center gap-3">
+                    <div>
+                      <label className="block text-[10px] text-text-muted mb-1">Period Start</label>
+                      <input
+                        type="date"
+                        value={nhsPeriodStart}
+                        onChange={(e) => setNhsPeriodStart(e.target.value)}
+                        className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                    </div>
+                    <span className="text-text-muted mt-4">to</span>
+                    <div>
+                      <label className="block text-[10px] text-text-muted mb-1">Period End</label>
+                      <input
+                        type="date"
+                        value={nhsPeriodEnd}
+                        onChange={(e) => setNhsPeriodEnd(e.target.value)}
+                        className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-blue-600 mt-1">NHS periods often differ from private periods (e.g., 1st-31st vs 15th-14th)</p>
+                </div>
+
                 {/* Manual UDA Entry */}
                 <div>
                   <label className="block text-xs font-medium text-blue-800 mb-2">Enter UDAs Manually</label>
@@ -1150,6 +1187,42 @@ export default function PeriodDetailPage() {
                         let discrepancies: Discrepancy[] = JSON.parse(entry.discrepancies_json || "[]");
                         const unresolvedCount = discrepancies.filter(d => !d.resolved).length;
                         if (discrepancies.length === 0) return null;
+
+                        // Function to add a discrepancy to the patient breakdown
+                        const addToBreakdown = (d: Discrepancy, discIdx: number) => {
+                          // Get the amount - for in_log_not_system, use logAmount; otherwise use invoicedAmount
+                          const amount = (d as Discrepancy & { logAmount?: number }).logAmount || d.invoicedAmount || 0;
+                          if (amount <= 0) return;
+
+                          // Add to patients list
+                          const newPatient: PrivatePatient = {
+                            name: d.patientName,
+                            date: d.date,
+                            amount: amount,
+                            finance: false,
+                            amountPaid: amount,
+                            amountOutstanding: 0,
+                            status: "paid",
+                            flagged: false,
+                            resolved: true,
+                            resolvedNote: `Added from ${d.type === "in_log_not_system" ? "dentist log" : "discrepancy review"}`,
+                          };
+                          const updatedPatients = [...patients, newPatient];
+
+                          // Mark discrepancy as resolved
+                          const updatedDiscrepancies = discrepancies.map((disc, j) =>
+                            j === discIdx ? { ...disc, resolved: true } : disc
+                          );
+
+                          // Update entry with both changes
+                          updateEntry(entry.id, {
+                            private_patients_json: JSON.stringify(updatedPatients),
+                            discrepancies_json: JSON.stringify(updatedDiscrepancies),
+                            gross_private: entry.gross_private + amount, // Also add to gross total
+                          });
+                          showToast(`Added ${d.patientName} (${fmt(amount)}) to breakdown`);
+                        };
+
                         return (
                           <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
                             <div className="flex items-center justify-between mb-3">
@@ -1172,8 +1245,11 @@ export default function PeriodDetailPage() {
                               )}
                             </div>
                             <div className="space-y-2 max-h-64 overflow-y-auto">
-                              {discrepancies.filter(d => !d.resolved).map((d, i) => (
-                                <div key={i} className="bg-white rounded p-2 text-xs">
+                              {discrepancies.map((d, discIdx) => {
+                                if (d.resolved) return null;
+                                const logAmount = (d as Discrepancy & { logAmount?: number }).logAmount;
+                                return (
+                                <div key={discIdx} className="bg-white rounded p-2 text-xs">
                                   <div className="flex items-center justify-between">
                                     <span className="font-medium">{d.patientName}</span>
                                     <div className="flex items-center gap-2">
@@ -1190,18 +1266,25 @@ export default function PeriodDetailPage() {
                                          d.type === "in_system_not_log" ? "IN SYSTEM ONLY" :
                                          "MISMATCH"}
                                       </span>
+                                      {!isFinalized && d.type === "in_log_not_system" && logAmount && logAmount > 0 && (
+                                        <button
+                                          onClick={() => addToBreakdown(d, discIdx)}
+                                          className="px-1.5 py-0.5 bg-green-100 hover:bg-green-200 text-green-700 rounded text-[10px] font-medium"
+                                          title="Add this payment to the breakdown total"
+                                        >
+                                          + Add {fmt(logAmount)}
+                                        </button>
+                                      )}
                                       {!isFinalized && (
                                         <button
                                           onClick={() => {
                                             const updated = discrepancies.map((disc, j) =>
-                                              discrepancies.filter(x => !x.resolved).indexOf(disc) === i
-                                                ? { ...disc, resolved: true }
-                                                : disc
+                                              j === discIdx ? { ...disc, resolved: true } : disc
                                             );
                                             updateEntry(entry.id, { discrepancies_json: JSON.stringify(updated) });
                                           }}
                                           className="text-green-500 hover:text-green-600"
-                                          title="Mark as resolved"
+                                          title="Mark as resolved (dismiss)"
                                         >
                                           <CheckCircle2 size={14} />
                                         </button>
@@ -1210,12 +1293,13 @@ export default function PeriodDetailPage() {
                                   </div>
                                   <p className="text-text-muted mt-1">
                                     {d.date}
+                                    {logAmount && logAmount > 0 && ` - Log: ${fmt(logAmount)}`}
                                     {d.invoicedAmount > 0 && ` - System: ${fmt(d.invoicedAmount)}`}
                                     {d.paidAmount > 0 && d.paidAmount !== d.invoicedAmount && `, Paid: ${fmt(d.paidAmount)}`}
                                   </p>
                                   <p className="text-amber-700 mt-0.5">{d.notes}</p>
                                 </div>
-                              ))}
+                              );})}
                               {discrepancies.some(d => d.resolved) && (
                                 <details className="mt-2">
                                   <summary className="text-xs text-text-muted cursor-pointer hover:text-text">

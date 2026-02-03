@@ -22,7 +22,7 @@ interface SheetRow {
 
 // Fetch data from Google Sheets using the public API (for sheets shared with "anyone with link")
 // Or using API key if available
-async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: number): Promise<SheetRow[]> {
+async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: number): Promise<{ rows: SheetRow[]; error?: string }> {
   // Try to use Google Sheets API key if available
   const apiKey = process.env.GOOGLE_SHEETS_API_KEY;
 
@@ -31,6 +31,10 @@ async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: 
   const sheetNames = ["Sheet1", "Takings", "Private Takings", "Log", "Main", "Data"];
 
   let allRows: SheetRow[] = [];
+  let lastError: string | undefined;
+
+  console.log(`[GoogleSheets] Fetching spreadsheet ${spreadsheetId} for ${month}/${year}`);
+  console.log(`[GoogleSheets] API Key configured: ${apiKey ? "Yes" : "No"}`);
 
   for (const sheetName of sheetNames) {
     try {
@@ -44,14 +48,26 @@ async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: 
         url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
       }
 
-      const res = await fetch(url);
+      console.log(`[GoogleSheets] Trying sheet "${sheetName}"...`);
+      const res = await fetch(url, { cache: "no-store" });
 
       if (!res.ok) {
-        console.log(`[GoogleSheets] Sheet "${sheetName}" not found or not accessible`);
+        const status = res.status;
+        console.log(`[GoogleSheets] Sheet "${sheetName}" returned status ${status}`);
+        if (status === 401 || status === 403) {
+          lastError = `Sheet not accessible (${status}). Make sure the Google Sheet is shared with "Anyone with the link can view".`;
+        }
         continue;
       }
 
       const text = await res.text();
+
+      // Check if we got an HTML error page instead of data
+      if (text.includes("<!DOCTYPE html>") || text.includes("<html")) {
+        console.log(`[GoogleSheets] Got HTML response instead of data - sheet may not be publicly shared`);
+        lastError = "Google Sheet is not publicly accessible. Share the sheet with 'Anyone with the link can view'.";
+        continue;
+      }
 
       if (apiKey) {
         // Parse JSON response from official API
@@ -64,16 +80,19 @@ async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: 
       }
 
       if (allRows.length > 0) {
-        console.log(`[GoogleSheets] Found ${allRows.length} rows in sheet "${sheetName}"`);
+        console.log(`[GoogleSheets] Found ${allRows.length} rows in sheet "${sheetName}" for ${month}/${year}`);
         break;
+      } else {
+        console.log(`[GoogleSheets] Sheet "${sheetName}" had no matching rows for ${month}/${year}`);
       }
     } catch (e) {
       console.log(`[GoogleSheets] Error fetching sheet "${sheetName}":`, e);
+      lastError = e instanceof Error ? e.message : "Unknown error fetching sheet";
       continue;
     }
   }
 
-  return allRows;
+  return { rows: allRows, error: allRows.length === 0 ? lastError : undefined };
 }
 
 // Parse sheet values (from API response)
@@ -298,13 +317,14 @@ export async function POST(req: NextRequest) {
     console.log(`[GoogleSheets] Spreadsheet ID: ${spreadsheetId}`);
 
     // Fetch data from Google Sheets
-    const sheetData = await fetchGoogleSheetData(spreadsheetId, period.month, period.year);
+    const { rows: sheetData, error: sheetError } = await fetchGoogleSheetData(spreadsheetId, period.month, period.year);
 
     if (sheetData.length === 0) {
       return NextResponse.json({
-        ok: true,
-        message: `No entries found in ${dentist_name}'s private log for ${period.month}/${period.year}`,
+        ok: false,
+        message: sheetError || `No entries found in ${dentist_name}'s private log for ${period.month}/${period.year}`,
         count: 0,
+        hint: sheetError ? "Make sure the Google Sheet is shared with 'Anyone with the link can view' and contains data for this month." : undefined,
       });
     }
 
