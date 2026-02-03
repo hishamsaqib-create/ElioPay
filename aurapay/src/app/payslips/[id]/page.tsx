@@ -56,6 +56,7 @@ export default function PeriodDetailPage() {
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [emailSending, setEmailSending] = useState<Record<number, boolean>>({});
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+  const [fetchingDentally, setFetchingDentally] = useState(false);
 
   const loadData = useCallback(async () => {
     const [periodsRes, entriesRes] = await Promise.all([
@@ -144,6 +145,27 @@ export default function PeriodDetailPage() {
     setEmailSending((s) => ({ ...s, [entryId]: false }));
   }
 
+  async function fetchFromDentally() {
+    setFetchingDentally(true);
+    try {
+      const res = await fetch("/api/dentally", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ period_id: parseInt(periodId) }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message || "Data fetched from Dentally");
+        await loadData();
+      } else {
+        showToast(data.error || "Failed to fetch from Dentally", "error");
+      }
+    } catch {
+      showToast("Network error fetching from Dentally", "error");
+    }
+    setFetchingDentally(false);
+  }
+
   async function toggleFinalize() {
     if (!period) return;
     const newStatus = period.status === "finalized" ? "draft" : "finalized";
@@ -191,6 +213,16 @@ export default function PeriodDetailPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {!isFinalized && (
+              <button
+                onClick={fetchFromDentally}
+                disabled={fetchingDentally}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition border border-primary-300 text-primary-700 hover:bg-primary-50 disabled:opacity-50"
+              >
+                {fetchingDentally ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+                {fetchingDentally ? "Fetching..." : "Fetch from Dentally"}
+              </button>
+            )}
             <button
               onClick={toggleFinalize}
               className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition border ${
