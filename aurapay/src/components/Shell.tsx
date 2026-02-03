@@ -66,9 +66,9 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 flex items-center justify-center">
               <svg viewBox="0 0 100 100" className="w-8 h-8">
-                <circle cx="50" cy="50" r="46" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-slate-800"/>
-                <path d="M50 22 L32 72 L40 72 L44 60 L56 60 L60 72 L68 72 L50 22 Z M47 52 L50 40 L53 52 Z" fill="currentColor" className="text-slate-800"/>
-                <path d="M36 64 C42 76 58 76 64 64" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="text-slate-800"/>
+                <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-700"/>
+                <path d="M50 25 L35 70 L42 70 L45 60 L55 60 L58 70 L65 70 L50 25 Z M47 53 L50 42 L53 53 Z" fill="currentColor" className="text-slate-700"/>
+                <path d="M40 58 Q50 68 60 58" fill="currentColor" className="text-slate-700"/>
               </svg>
             </div>
             <div>
