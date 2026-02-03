@@ -190,15 +190,44 @@ export async function GET(req: NextRequest) {
 
   y = sectionHeader("Deductions", y);
 
-  const deductionsData: string[][] = [];
-  for (const lb of calc.labBills) {
-    deductionsData.push([`Lab: ${lb.lab_name}`, formatCurrency(lb.amount)]);
+  // Parse lab bills with file URLs
+  interface LabBillWithFile {
+    lab_name: string;
+    amount: number;
+    description?: string;
+    file_url?: string;
   }
-  if (calc.labBillsTotal > 0) deductionsData.push([`Lab Bills (50% of ${formatCurrency(calc.labBillsTotal)})`, formatCurrency(calc.labBillsDeduction)]);
-  if (calc.financeFeesDeduction > 0) deductionsData.push([`Finance Fees (50%)`, formatCurrency(calc.financeFeesDeduction)]);
-  if (calc.therapyDeduction > 0) deductionsData.push([`Therapy (${calc.therapyMinutes} min x ${formatCurrency(calc.therapyRate)}/min)`, formatCurrency(calc.therapyDeduction)]);
+  const labBillsWithFiles: LabBillWithFile[] = entry.lab_bills_json
+    ? JSON.parse(String(entry.lab_bills_json))
+    : [];
+
+  const deductionsData: string[][] = [];
+  const labBillLinks: { row: number; url: string }[] = [];
+  let rowIndex = 0;
+
+  for (const lb of labBillsWithFiles) {
+    const label = lb.file_url ? `Lab: ${lb.lab_name} (view bill)` : `Lab: ${lb.lab_name}`;
+    deductionsData.push([label, formatCurrency(lb.amount)]);
+    if (lb.file_url) {
+      labBillLinks.push({ row: rowIndex, url: lb.file_url });
+    }
+    rowIndex++;
+  }
+  if (calc.labBillsTotal > 0) {
+    deductionsData.push([`Lab Bills (50% of ${formatCurrency(calc.labBillsTotal)})`, formatCurrency(calc.labBillsDeduction)]);
+    rowIndex++;
+  }
+  if (calc.financeFeesDeduction > 0) {
+    deductionsData.push([`Finance Fees (50%)`, formatCurrency(calc.financeFeesDeduction)]);
+    rowIndex++;
+  }
+  if (calc.therapyDeduction > 0) {
+    deductionsData.push([`Therapy (${calc.therapyMinutes} min x ${formatCurrency(calc.therapyRate)}/min)`, formatCurrency(calc.therapyDeduction)]);
+    rowIndex++;
+  }
   for (const adj of calc.adjustments) {
     deductionsData.push([`${adj.type === "deduction" ? "-" : "+"} ${adj.description}`, formatCurrency(adj.amount)]);
+    rowIndex++;
   }
   deductionsData.push(["Total Deductions", formatCurrency(calc.totalDeductions)]);
 
@@ -216,6 +245,18 @@ export async function GET(req: NextRequest) {
         if (data.row.index === deductionsData.length - 1) {
           data.cell.styles.fontStyle = "bold";
           data.cell.styles.fillColor = [254, 242, 242]; // Light red for total
+        }
+        // Style rows with links
+        const linkInfo = labBillLinks.find(l => l.row === data.row.index);
+        if (linkInfo && data.column.index === 0) {
+          data.cell.styles.textColor = [79, 70, 229]; // Indigo for links
+        }
+      },
+      didDrawCell: (data) => {
+        // Add clickable links for lab bills with file URLs
+        const linkInfo = labBillLinks.find(l => l.row === data.row.index);
+        if (linkInfo && data.column.index === 0 && data.cell.section === "body") {
+          doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url: linkInfo.url });
         }
       },
     });
