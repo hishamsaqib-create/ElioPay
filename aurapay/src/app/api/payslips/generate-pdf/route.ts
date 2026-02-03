@@ -19,19 +19,20 @@ export async function GET(req: NextRequest) {
   const entryId = req.nextUrl.searchParams.get("entry_id");
   if (!entryId) return NextResponse.json({ error: "entry_id required" }, { status: 400 });
 
-  const db = await getDb();
-  const result = await db.execute({
-    sql: `SELECT e.*, d.name as dentist_name, d.email as dentist_email,
-            d.split_percentage, d.is_nhs, d.uda_rate, d.performer_number,
-            p.month, p.year
-     FROM payslip_entries e
-     JOIN dentists d ON d.id = e.dentist_id
-     JOIN pay_periods p ON p.id = e.period_id
-     WHERE e.id = ?`,
-    args: [entryId],
-  });
+  try {
+    const db = await getDb();
+    const result = await db.execute({
+      sql: `SELECT e.*, d.name as dentist_name, d.email as dentist_email,
+              d.split_percentage, d.is_nhs, d.uda_rate, d.performer_number,
+              p.month, p.year
+       FROM payslip_entries e
+       JOIN dentists d ON d.id = e.dentist_id
+       JOIN pay_periods p ON p.id = e.period_id
+       WHERE e.id = ?`,
+      args: [entryId],
+    });
 
-  if (result.rows.length === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (result.rows.length === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   type EntryRow = PayslipEntry & {
     dentist_name: string; dentist_email: string | null;
@@ -158,4 +159,11 @@ export async function GET(req: NextRequest) {
   return new NextResponse(pdfBuffer, {
     headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${filename}"` },
   });
+  } catch (error) {
+    console.error("[PDF] Generation error:", error);
+    return NextResponse.json({
+      error: "PDF generation failed",
+      details: error instanceof Error ? error.message : "Unknown error"
+    }, { status: 500 });
+  }
 }
