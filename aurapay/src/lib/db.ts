@@ -69,6 +69,8 @@ async function initializeDb(db: Client) {
       adjustments_json TEXT DEFAULT '[]',
       notes TEXT DEFAULT '',
       private_patients_json TEXT DEFAULT '[]',
+      discrepancies_json TEXT DEFAULT '[]',
+      dentist_log_json TEXT DEFAULT '[]',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(period_id, dentist_id)
@@ -89,6 +91,19 @@ async function initializeDb(db: Client) {
 
   for (const sql of tables) {
     await db.execute(sql);
+  }
+
+  // Run migrations for existing databases
+  const migrations = [
+    "ALTER TABLE payslip_entries ADD COLUMN discrepancies_json TEXT DEFAULT '[]'",
+    "ALTER TABLE payslip_entries ADD COLUMN dentist_log_json TEXT DEFAULT '[]'",
+  ];
+  for (const sql of migrations) {
+    try {
+      await db.execute(sql);
+    } catch {
+      // Column already exists, ignore
+    }
   }
 
   // Seed default users if none exist
@@ -197,8 +212,34 @@ export interface PrivatePatient {
   name: string;
   date: string;
   amount: number;
+  amountPaid?: number;
+  amountOutstanding?: number;
+  status?: "paid" | "partial" | "unpaid";
   finance: boolean;
   finance_term?: number;
+  flagged?: boolean;
+  flagReason?: string;
+  notes?: string;
+}
+
+export interface Discrepancy {
+  type: "invoiced_not_paid" | "partial_payment" | "log_mismatch" | "in_log_not_system" | "in_system_not_log";
+  patientName: string;
+  patientId?: string;
+  invoiceId?: string;
+  invoicedAmount: number;
+  paidAmount: number;
+  logAmount?: number;
+  date: string;
+  notes: string;
+  resolved?: boolean;
+}
+
+export interface DentistLogEntry {
+  patientName: string;
+  date: string;
+  amount: number;
+  treatment?: string;
   notes?: string;
 }
 
@@ -215,6 +256,8 @@ export interface PayslipEntry {
   adjustments_json: string;
   notes: string;
   private_patients_json: string;
+  discrepancies_json: string;
+  dentist_log_json: string;
   created_at: string;
   updated_at: string;
 }

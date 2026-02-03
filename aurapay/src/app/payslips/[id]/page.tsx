@@ -9,7 +9,20 @@ import {
 
 interface LabBill { lab_name: string; amount: number; description?: string; }
 interface Adjustment { description: string; amount: number; type: "addition" | "deduction"; }
-interface PrivatePatient { name: string; date: string; amount: number; finance: boolean; finance_term?: number; notes?: string; }
+interface PrivatePatient {
+  name: string; date: string; amount: number; finance: boolean;
+  amountPaid?: number; amountOutstanding?: number;
+  status?: "paid" | "partial" | "unpaid";
+  flagged?: boolean; flagReason?: string;
+}
+interface Discrepancy {
+  type: "invoiced_not_paid" | "partial_payment" | "log_mismatch" | "in_log_not_system" | "in_system_not_log";
+  patientName: string; invoicedAmount: number; paidAmount: number;
+  date: string; notes: string;
+}
+interface DentistLogEntry {
+  patientName: string; date: string; amount: number; treatment?: string;
+}
 
 interface Calculation {
   grossPrivate: number; splitPercentage: number; netPrivate: number;
@@ -32,6 +45,7 @@ interface Entry {
   gross_private: number; nhs_udas: number; lab_bills_json: string;
   finance_fees: number; therapy_minutes: number; therapy_rate: number;
   adjustments_json: string; notes: string; private_patients_json: string;
+  discrepancies_json?: string; dentist_log_json?: string;
   calculation: Calculation; dentist: Dentist;
   dentist_name: string; dentist_email: string | null;
 }
@@ -58,6 +72,9 @@ export default function PeriodDetailPage() {
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
   const [fetchingDentally, setFetchingDentally] = useState(false);
   const [dentallyResult, setDentallyResult] = useState<Record<string, unknown> | null>(null);
+  const [showLogImport, setShowLogImport] = useState<number | null>(null);
+  const [logCsv, setLogCsv] = useState("");
+  const [importingLog, setImportingLog] = useState(false);
 
   const loadData = useCallback(async () => {
     const [periodsRes, entriesRes] = await Promise.all([
@@ -180,6 +197,33 @@ export default function PeriodDetailPage() {
     showToast(newStatus === "finalized" ? "Period finalized" : "Period reopened");
   }
 
+  async function importDentistLog(entryId: number) {
+    if (!logCsv.trim()) {
+      showToast("Please paste CSV data", "error");
+      return;
+    }
+    setImportingLog(true);
+    try {
+      const res = await fetch("/api/periods/dentist-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entry_id: entryId, csv_data: logCsv }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message || "Log imported successfully");
+        setShowLogImport(null);
+        setLogCsv("");
+        await loadData();
+      } else {
+        showToast(data.error || "Failed to import log", "error");
+      }
+    } catch {
+      showToast("Network error", "error");
+    }
+    setImportingLog(false);
+  }
+
   if (!period) {
     return <Shell><div className="flex items-center justify-center h-64 text-text-muted">Loading...</div></Shell>;
   }
@@ -276,23 +320,35 @@ export default function PeriodDetailPage() {
               if (!debug) return null;
               return (
                 <div className="text-xs text-blue-600 space-y-1">
-                  <p>Total invoices: {String(debug.totalInvoices)}</p>
-                  <p>Skipped unpaid: {String(debug.skippedUnpaid)}</p>
-                  <p>Skipped therapist: {String(debug.skippedTherapist)}</p>
-                  <p>Unmatched practitioner IDs: {JSON.stringify(debug.unmatchedPracIds)}</p>
-                  <p>Sample invoice: {JSON.stringify(debug.sampleInvoice)}</p>
+                  <p>Total invoices: {String(debug.totalInvoices)} | Processed: {String(debug.processedInvoices)}</p>
+                  <p>Flagged for review: <span className="text-amber-600 font-medium">{String(debug.flaggedForReview || 0)}</span></p>
+                  <p>Skipped: {String(debug.skippedTherapist)} therapist, {String(debug.skippedNhs)} NHS</p>
+                  {(debug.unmatchedUserIds as string[])?.length > 0 && (
+                    <p className="text-amber-600">Unmatched IDs: {(debug.unmatchedUserIds as string[]).join(", ")}</p>
+                  )}
                 </div>
               );
             })()}
             {(() => {
-              const summary = dentallyResult.summary as Record<string, { gross: number; patients: number }> | undefined;
+              const summary = dentallyResult.summary as Record<string, { invoiced: number; paid: number; outstanding: number; patients: number; flagged: number }> | undefined;
               if (!summary || Object.keys(summary).length === 0) return null;
               return (
-                <div className="text-xs text-blue-700">
-                  <p className="font-medium mb-1">Summary:</p>
-                  {Object.entries(summary).map(([name, data]) => (
-                    <p key={name}>{name}: {fmt(data.gross)} ({data.patients} patients)</p>
-                  ))}
+                <div className="text-xs text-blue-700 mt-2">
+                  <p className="font-medium mb-2">Summary by Dentist:</p>
+                  <div className="grid gap-2">
+                    {Object.entries(summary).map(([name, data]) => (
+                      <div key={name} className="bg-white/50 rounded p-2">
+                        <p className="font-medium">{name}</p>
+                        <div className="flex gap-4 mt-1 text-[11px]">
+                          <span>Invoiced: {fmt(data.invoiced)}</span>
+                          <span className="text-green-600">Paid: {fmt(data.paid)}</span>
+                          {data.outstanding > 0 && <span className="text-red-600">Outstanding: {fmt(data.outstanding)}</span>}
+                          <span>{data.patients} patients</span>
+                          {data.flagged > 0 && <span className="text-amber-600">{data.flagged} flagged</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               );
             })()}
@@ -577,8 +633,11 @@ export default function PeriodDetailPage() {
                           <label className="text-xs font-semibold text-text uppercase tracking-wide">
                             Private Patients ({patients.length})
                             {patients.length > 0 && (
-                              <span className="ml-2 text-primary-600 font-normal normal-case">
-                                Total: {fmt(patients.reduce((s, p) => s + p.amount, 0))}
+                              <span className="ml-2 font-normal normal-case">
+                                <span className="text-green-600">Paid: {fmt(patients.reduce((s, p) => s + (p.amountPaid ?? p.amount), 0))}</span>
+                                {patients.some(p => p.amountOutstanding && p.amountOutstanding > 0) && (
+                                  <span className="text-red-600 ml-2">Outstanding: {fmt(patients.reduce((s, p) => s + (p.amountOutstanding ?? 0), 0))}</span>
+                                )}
                               </span>
                             )}
                           </label>
@@ -595,7 +654,6 @@ export default function PeriodDetailPage() {
                           <p className="text-xs text-text-subtle italic">No individual patients logged. Click &quot;Fetch from Dentally&quot; to auto-import or add manually.</p>
                         ) : (
                           <div className="space-y-1">
-                            {/* Read-only summary table */}
                             <div className="bg-surface-dim rounded-lg overflow-hidden">
                               <table className="w-full text-xs">
                                 <thead>
@@ -603,25 +661,29 @@ export default function PeriodDetailPage() {
                                     <th className="text-left px-3 py-2 font-medium text-text-muted">Patient</th>
                                     <th className="text-left px-3 py-2 font-medium text-text-muted">Date</th>
                                     <th className="text-right px-3 py-2 font-medium text-text-muted">Amount</th>
+                                    <th className="text-center px-3 py-2 font-medium text-text-muted">Status</th>
                                     <th className="text-center px-3 py-2 font-medium text-text-muted">Finance</th>
                                     {!isFinalized && <th className="w-8"></th>}
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {patients.map((pt, i) => (
-                                    <tr key={i} className="border-b border-border last:border-0">
+                                    <tr key={i} className={`border-b border-border last:border-0 ${pt.flagged ? "bg-amber-50" : ""}`}>
                                       <td className="px-3 py-1.5">
-                                        <input
-                                          placeholder="Name"
-                                          value={pt.name}
-                                          onChange={(e) => {
-                                            const updated = [...patients];
-                                            updated[i] = { ...updated[i], name: e.target.value };
-                                            updatePatients(entry.id, updated);
-                                          }}
-                                          disabled={isFinalized}
-                                          className="w-full bg-transparent text-xs outline-none disabled:text-text-muted"
-                                        />
+                                        <div className="flex items-center gap-1">
+                                          {pt.flagged && <AlertCircle size={12} className="text-amber-500 shrink-0" />}
+                                          <input
+                                            placeholder="Name"
+                                            value={pt.name}
+                                            onChange={(e) => {
+                                              const updated = [...patients];
+                                              updated[i] = { ...updated[i], name: e.target.value };
+                                              updatePatients(entry.id, updated);
+                                            }}
+                                            disabled={isFinalized}
+                                            className="w-full bg-transparent text-xs outline-none disabled:text-text-muted"
+                                          />
+                                        </div>
                                       </td>
                                       <td className="px-3 py-1.5">
                                         <input
@@ -651,8 +713,19 @@ export default function PeriodDetailPage() {
                                         />
                                       </td>
                                       <td className="px-3 py-1.5 text-center">
+                                        {pt.status === "paid" ? (
+                                          <span className="inline-block px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-medium">PAID</span>
+                                        ) : pt.status === "partial" ? (
+                                          <span className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium" title={`Paid: ${fmt(pt.amountPaid || 0)}`}>PARTIAL</span>
+                                        ) : pt.status === "unpaid" ? (
+                                          <span className="inline-block px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium">UNPAID</span>
+                                        ) : (
+                                          <span className="text-text-subtle">-</span>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-center">
                                         {pt.finance ? (
-                                          <span className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">FIN</span>
+                                          <span className="inline-block px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-medium">FIN</span>
                                         ) : (
                                           <span className="text-text-subtle">-</span>
                                         )}
@@ -674,6 +747,12 @@ export default function PeriodDetailPage() {
                                   <tr className="bg-slate-100">
                                     <td className="px-3 py-2 font-semibold text-xs" colSpan={2}>Total ({patients.length} patients)</td>
                                     <td className="px-3 py-2 text-right font-bold text-xs">{fmt(patients.reduce((s, p) => s + p.amount, 0))}</td>
+                                    <td className="px-3 py-2 text-center text-xs">
+                                      <span className="text-green-600">{patients.filter(p => p.status === "paid").length} paid</span>
+                                      {patients.filter(p => p.status !== "paid" && p.status).length > 0 && (
+                                        <span className="text-amber-600 ml-1">{patients.filter(p => p.status !== "paid" && p.status).length} review</span>
+                                      )}
+                                    </td>
                                     <td className="px-3 py-2 text-center text-xs text-text-muted">
                                       {patients.filter(p => p.finance).length > 0 && `${patients.filter(p => p.finance).length} fin`}
                                     </td>
@@ -685,6 +764,108 @@ export default function PeriodDetailPage() {
                           </div>
                         )}
                       </div>
+
+                      {/* Dentist Private Log Import */}
+                      {!isFinalized && (
+                        <div className="border border-dashed border-border rounded-lg p-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <h4 className="text-xs font-semibold text-text uppercase tracking-wide">Dentist Private Log</h4>
+                              <p className="text-xs text-text-muted mt-0.5">Import dentist&apos;s own takings log to cross-reference</p>
+                            </div>
+                            <button
+                              onClick={() => setShowLogImport(showLogImport === entry.id ? null : entry.id)}
+                              className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+                            >
+                              {showLogImport === entry.id ? "Cancel" : "Import Log"}
+                            </button>
+                          </div>
+                          {showLogImport === entry.id && (
+                            <div className="mt-3 space-y-3">
+                              <div>
+                                <label className="block text-xs text-text-muted mb-1">
+                                  Paste CSV data (Patient Name, Date, Amount, Treatment)
+                                </label>
+                                <textarea
+                                  value={logCsv}
+                                  onChange={(e) => setLogCsv(e.target.value)}
+                                  rows={5}
+                                  placeholder="John Smith, 15/01/2025, 250.00, Crown&#10;Jane Doe, 16/01/2025, 95.00, Filling"
+                                  className="w-full px-3 py-2 border border-border rounded-lg text-xs font-mono focus:ring-2 focus:ring-primary-500 outline-none"
+                                />
+                              </div>
+                              <button
+                                onClick={() => importDentistLog(entry.id)}
+                                disabled={importingLog || !logCsv.trim()}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-primary-600 hover:bg-primary-700 text-white text-xs font-semibold rounded-lg transition disabled:opacity-50"
+                              >
+                                {importingLog ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                                Compare with Dentally Data
+                              </button>
+                            </div>
+                          )}
+                          {(() => {
+                            const dentistLog: DentistLogEntry[] = JSON.parse(entry.dentist_log_json || "[]");
+                            if (dentistLog.length === 0) return null;
+                            return (
+                              <div className="mt-3 pt-3 border-t border-border">
+                                <p className="text-xs text-text-muted mb-2">Imported log: {dentistLog.length} entries</p>
+                                <div className="max-h-32 overflow-y-auto text-xs space-y-1">
+                                  {dentistLog.slice(0, 5).map((l, i) => (
+                                    <div key={i} className="flex justify-between text-text-muted">
+                                      <span>{l.patientName}</span>
+                                      <span>{fmt(l.amount)}</span>
+                                    </div>
+                                  ))}
+                                  {dentistLog.length > 5 && <p className="text-text-subtle">...and {dentistLog.length - 5} more</p>}
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+
+                      {/* Discrepancies / Flagged Items */}
+                      {(() => {
+                        const discrepancies: Discrepancy[] = JSON.parse(entry.discrepancies_json || "[]");
+                        if (discrepancies.length === 0) return null;
+                        return (
+                          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                            <div className="flex items-center gap-2 mb-3">
+                              <AlertCircle size={16} className="text-amber-600" />
+                              <h4 className="text-sm font-semibold text-amber-800">Items for Review ({discrepancies.length})</h4>
+                            </div>
+                            <div className="space-y-2 max-h-64 overflow-y-auto">
+                              {discrepancies.map((d, i) => (
+                                <div key={i} className="bg-white rounded p-2 text-xs">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-medium">{d.patientName}</span>
+                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                      d.type === "invoiced_not_paid" ? "bg-red-100 text-red-700" :
+                                      d.type === "partial_payment" ? "bg-amber-100 text-amber-700" :
+                                      d.type === "in_log_not_system" ? "bg-purple-100 text-purple-700" :
+                                      d.type === "in_system_not_log" ? "bg-blue-100 text-blue-700" :
+                                      "bg-slate-100 text-slate-700"
+                                    }`}>
+                                      {d.type === "invoiced_not_paid" ? "NOT PAID" :
+                                       d.type === "partial_payment" ? "PARTIAL" :
+                                       d.type === "in_log_not_system" ? "IN LOG ONLY" :
+                                       d.type === "in_system_not_log" ? "IN SYSTEM ONLY" :
+                                       "MISMATCH"}
+                                    </span>
+                                  </div>
+                                  <p className="text-text-muted mt-1">
+                                    {d.date}
+                                    {d.invoicedAmount > 0 && ` - System: ${fmt(d.invoicedAmount)}`}
+                                    {d.paidAmount > 0 && d.paidAmount !== d.invoicedAmount && `, Paid: ${fmt(d.paidAmount)}`}
+                                  </p>
+                                  <p className="text-amber-700 mt-0.5">{d.notes}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* Notes */}
                       <div>
