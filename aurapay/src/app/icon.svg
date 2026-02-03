@@ -1,5 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <circle cx="50" cy="50" r="45" fill="none" stroke="#1e293b" stroke-width="2"/>
-  <path d="M50 25 L35 70 L42 70 L45 60 L55 60 L58 70 L65 70 L50 25 Z M47 53 L50 42 L53 53 Z" fill="#1e293b"/>
-  <path d="M40 58 Q50 68 60 58" fill="#1e293b" stroke="none"/>
+  <!-- Outer circle -->
+  <circle cx="50" cy="50" r="46" fill="none" stroke="#000000" stroke-width="3"/>
+  <!-- A letter - left stroke -->
+  <line x1="50" y1="12" x2="22" y2="88" stroke="#000000" stroke-width="3" stroke-linecap="round"/>
+  <!-- A letter - right stroke -->
+  <line x1="50" y1="12" x2="78" y2="88" stroke="#000000" stroke-width="3" stroke-linecap="round"/>
+  <!-- Swoosh curve through the A -->
+  <path d="M28 62 Q50 78 72 52" fill="none" stroke="#000000" stroke-width="3" stroke-linecap="round"/>
 </svg>

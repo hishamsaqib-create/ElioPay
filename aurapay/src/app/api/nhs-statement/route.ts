@@ -2,13 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, rowsTo, Dentist } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 
-// NHS dentists and their UDA rates
-const NHS_DENTISTS: Record<string, { performer_number?: string; uda_rate: number }> = {
-  "Peter Throw": { performer_number: "780995", uda_rate: 16 },
-  "Priyanka Kapoor": { performer_number: "112376", uda_rate: 15 },
-  "Moneeb Ahmad": { performer_number: "701874", uda_rate: 15 },
-};
-
 interface UdaExtraction {
   dentistName: string;
   performerNumber?: string;
@@ -17,67 +10,183 @@ interface UdaExtraction {
   nhsIncome: number;
 }
 
-// Parse NHS statement text to extract UDAs
-function parseNhsStatement(text: string): UdaExtraction[] {
+interface NhsPeriodExtraction {
+  periodStart?: string;
+  periodEnd?: string;
+}
+
+// Extract NHS period dates from statement text
+function extractNhsPeriodDates(text: string): NhsPeriodExtraction {
+  const result: NhsPeriodExtraction = {};
+
+  // Common patterns in NHS statements:
+  // "Period: 01/01/2026 - 31/01/2026"
+  // "Statement Period: 1 January 2026 to 31 January 2026"
+  // "From: 01/01/2026 To: 31/01/2026"
+  // "Schedule Period 1st January 2026 - 31st January 2026"
+
+  // Pattern 1: DD/MM/YYYY - DD/MM/YYYY
+  const dateRangePattern1 = /(\d{1,2}\/\d{1,2}\/\d{4})\s*[-–to]+\s*(\d{1,2}\/\d{1,2}\/\d{4})/i;
+  const match1 = text.match(dateRangePattern1);
+  if (match1) {
+    const [, start, end] = match1;
+    result.periodStart = convertToISODate(start);
+    result.periodEnd = convertToISODate(end);
+    return result;
+  }
+
+  // Pattern 2: "1st January 2026" style dates
+  const monthNames = "(?:January|February|March|April|May|June|July|August|September|October|November|December)";
+  const dateRangePattern2 = new RegExp(
+    `(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthNames}\\s+(\\d{4})\\s*[-–to]+\\s*(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthNames}\\s+(\\d{4})`,
+    "i"
+  );
+  const match2 = text.match(dateRangePattern2);
+  if (match2) {
+    result.periodStart = parseEnglishDate(match2[0].split(/[-–to]+/)[0].trim());
+    result.periodEnd = parseEnglishDate(match2[0].split(/[-–to]+/)[1].trim());
+    return result;
+  }
+
+  // Pattern 3: Look for "Period" followed by dates
+  const periodPattern = /period[:\s]+(.+?)(?:\n|$)/i;
+  const periodMatch = text.match(periodPattern);
+  if (periodMatch) {
+    const periodText = periodMatch[1];
+    const dates = periodText.match(/\d{1,2}\/\d{1,2}\/\d{4}/g);
+    if (dates && dates.length >= 2) {
+      result.periodStart = convertToISODate(dates[0]);
+      result.periodEnd = convertToISODate(dates[1]);
+    }
+  }
+
+  return result;
+}
+
+// Convert DD/MM/YYYY to YYYY-MM-DD
+function convertToISODate(dateStr: string): string {
+  const parts = dateStr.split("/");
+  if (parts.length === 3) {
+    const [day, month, year] = parts;
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+  return dateStr;
+}
+
+// Parse English date format "1st January 2026"
+function parseEnglishDate(dateStr: string): string {
+  const months: Record<string, string> = {
+    january: "01", february: "02", march: "03", april: "04",
+    may: "05", june: "06", july: "07", august: "08",
+    september: "09", october: "10", november: "11", december: "12"
+  };
+
+  const match = dateStr.match(/(\d{1,2})(?:st|nd|rd|th)?\s+(\w+)\s+(\d{4})/i);
+  if (match) {
+    const [, day, month, year] = match;
+    const monthNum = months[month.toLowerCase()];
+    if (monthNum) {
+      return `${year}-${monthNum}-${day.padStart(2, "0")}`;
+    }
+  }
+  return dateStr;
+}
+
+// Extract UDAs from NHS statement text for dentists from database
+function extractUdasFromText(text: string, nhsDentists: Dentist[]): UdaExtraction[] {
   const results: UdaExtraction[] = [];
   const lines = text.split("\n");
 
-  // Look for patterns like "Peter Throw" or performer numbers followed by UDA values
-  // NHS statements typically show: Performer Name | Performer Number | UDAs Claimed | UDAs Approved | Value
+  console.log("[NHS] Extracting UDAs from text, searching for dentists:", nhsDentists.map(d => d.name));
 
-  for (const [dentistName, config] of Object.entries(NHS_DENTISTS)) {
-    // Try to find this dentist in the text
+  for (const dentist of nhsDentists) {
+    // Build search patterns for this dentist
     const namePatterns = [
-      dentistName.toLowerCase(),
-      dentistName.split(" ").reverse().join(" ").toLowerCase(), // "Throw Peter"
-      config.performer_number,
-    ].filter(Boolean);
+      dentist.name.toLowerCase(),
+      dentist.name.split(" ").reverse().join(" ").toLowerCase(), // "Throw Peter"
+      dentist.name.split(" ").map(n => n[0]).join("").toLowerCase(), // Initials
+    ];
+
+    if (dentist.performer_number) {
+      namePatterns.push(dentist.performer_number);
+    }
 
     let foundUdas = 0;
+    let foundLine = "";
 
+    // Search line by line
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].toLowerCase();
       const originalLine = lines[i];
 
       // Check if this line contains the dentist
-      const hasMatch = namePatterns.some(pattern => pattern && line.includes(pattern.toLowerCase()));
+      const hasMatch = namePatterns.some(pattern => pattern && line.includes(pattern));
 
       if (hasMatch) {
-        // Try to extract UDA numbers from this line and surrounding lines
-        // Look for patterns like: 123.45 UDAs, 123 UDA, UDA: 123, etc.
+        console.log(`[NHS] Found match for ${dentist.name} on line: ${originalLine.substring(0, 100)}`);
 
-        // Check this line and next few lines for numbers
+        // Look at this line and following lines for UDA values
         const searchLines = [originalLine];
-        if (i + 1 < lines.length) searchLines.push(lines[i + 1]);
-        if (i + 2 < lines.length) searchLines.push(lines[i + 2]);
+        for (let j = 1; j <= 3 && i + j < lines.length; j++) {
+          searchLines.push(lines[i + j]);
+        }
 
         const searchText = searchLines.join(" ");
 
-        // Extract numbers that could be UDAs (typically between 0 and 5000)
-        const numbers = searchText.match(/\d+(?:\.\d+)?/g);
-        if (numbers) {
-          for (const numStr of numbers) {
-            const num = parseFloat(numStr);
-            // UDAs are typically between 1 and 5000, and often have decimal places
-            if (num >= 1 && num <= 5000 && !searchText.includes(`£${numStr}`)) {
-              // Check if this looks like a UDA value (not a date, not currency)
-              const context = searchText.slice(Math.max(0, searchText.indexOf(numStr) - 10), searchText.indexOf(numStr) + numStr.length + 10);
-              if (!context.includes("/") && !context.includes("£")) {
-                foundUdas = Math.max(foundUdas, num);
+        // Try different patterns to find UDA values
+
+        // Pattern 1: Look for "UDA" near a number
+        const udaPattern = /(\d+(?:\.\d+)?)\s*(?:UDA|uda)/i;
+        const udaMatch = searchText.match(udaPattern);
+        if (udaMatch) {
+          const num = parseFloat(udaMatch[1]);
+          if (num >= 0.1 && num <= 5000) {
+            foundUdas = num;
+            foundLine = searchText;
+          }
+        }
+
+        // Pattern 2: Look for numbers after performer number (table format)
+        if (!foundUdas && dentist.performer_number) {
+          const perfPattern = new RegExp(dentist.performer_number + "[\\s,]+(\\d+(?:\\.\\d+)?)", "i");
+          const perfMatch = searchText.match(perfPattern);
+          if (perfMatch) {
+            const num = parseFloat(perfMatch[1]);
+            if (num >= 0.1 && num <= 5000) {
+              foundUdas = num;
+              foundLine = searchText;
+            }
+          }
+        }
+
+        // Pattern 3: Look for decimal numbers in a reasonable range on the same line
+        if (!foundUdas) {
+          const numbers = searchText.match(/\d+\.\d{1,2}/g);
+          if (numbers) {
+            for (const numStr of numbers) {
+              const num = parseFloat(numStr);
+              // UDAs are typically between 0.1 and 500 for a month
+              if (num >= 0.1 && num <= 500 && !searchText.includes(`£${numStr}`)) {
+                foundUdas = num;
+                foundLine = searchText;
+                break;
               }
             }
           }
         }
+
+        if (foundUdas > 0) break;
       }
     }
 
     if (foundUdas > 0) {
+      console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name}`);
       results.push({
-        dentistName,
-        performerNumber: config.performer_number,
+        dentistName: dentist.name,
+        performerNumber: dentist.performer_number || undefined,
         udas: foundUdas,
-        udaRate: config.uda_rate,
-        nhsIncome: Math.round(foundUdas * config.uda_rate * 100) / 100,
+        udaRate: dentist.uda_rate,
+        nhsIncome: Math.round(foundUdas * dentist.uda_rate * 100) / 100,
       });
     }
   }
@@ -85,74 +194,20 @@ function parseNhsStatement(text: string): UdaExtraction[] {
   return results;
 }
 
-// Try different extraction patterns for NHS statement
-function extractUdasFromText(text: string): UdaExtraction[] {
-  const results: UdaExtraction[] = [];
-
-  // Pattern 1: Table format with columns
-  // Look for rows with performer info and UDA values
-
-  // Pattern 2: Look for specific section headers
-  const sectionPatterns = [
-    /performer.*?uda/i,
-    /nhs.*?activity/i,
-    /uda.*?claim/i,
-    /dental.*?activity/i,
-  ];
-
-  // Pattern 3: Look for UDA totals per performer
-  // Example: "Dr Peter Throw - 156.75 UDAs"
-
-  for (const [dentistName, config] of Object.entries(NHS_DENTISTS)) {
-    // Create regex patterns for this dentist
-    const nameRegex = new RegExp(
-      dentistName.replace(/\s+/g, "\\s*") + "[^\\d]*(\\d+(?:\\.\\d+)?)",
-      "i"
-    );
-
-    const performerRegex = config.performer_number
-      ? new RegExp(config.performer_number + "[^\\d]*(\\d+(?:\\.\\d+)?)", "i")
-      : null;
-
-    let udas = 0;
-
-    // Try to match by name
-    const nameMatch = text.match(nameRegex);
-    if (nameMatch && nameMatch[1]) {
-      const num = parseFloat(nameMatch[1]);
-      if (num >= 0.1 && num <= 5000) {
-        udas = num;
-      }
-    }
-
-    // Try to match by performer number
-    if (!udas && performerRegex) {
-      const perfMatch = text.match(performerRegex);
-      if (perfMatch && perfMatch[1]) {
-        const num = parseFloat(perfMatch[1]);
-        if (num >= 0.1 && num <= 5000) {
-          udas = num;
-        }
-      }
-    }
-
-    if (udas > 0) {
-      results.push({
-        dentistName,
-        performerNumber: config.performer_number,
-        udas,
-        udaRate: config.uda_rate,
-        nhsIncome: Math.round(udas * config.uda_rate * 100) / 100,
-      });
-    }
+// Parse PDF and extract text
+async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  try {
+    // pdf-parse v2 uses PDFParse class with LoadParameters
+    const { PDFParse } = await import("pdf-parse");
+    const pdfParser = new PDFParse({ data: new Uint8Array(buffer) });
+    const textResult = await pdfParser.getText();
+    const fullText = textResult.pages.map(p => p.text).join("\n");
+    console.log(`[NHS] Extracted ${fullText.length} characters from PDF`);
+    return fullText;
+  } catch (error) {
+    console.error("[NHS] PDF parsing error:", error);
+    throw new Error("Failed to parse PDF file");
   }
-
-  // Also try the line-by-line parsing
-  if (results.length === 0) {
-    return parseNhsStatement(text);
-  }
-
-  return results;
 }
 
 export async function POST(req: NextRequest) {
@@ -161,10 +216,11 @@ export async function POST(req: NextRequest) {
 
   const formData = await req.formData();
   const period_id_raw = formData.get("period_id");
+  const pdf_file = formData.get("pdf_file") as File | null;
   const statement_text = formData.get("statement_text") as string;
-  const manual_udas = formData.get("manual_udas") as string; // JSON: { "dentist_name": uda_value }
-  const nhs_period_start = formData.get("nhs_period_start") as string;
-  const nhs_period_end = formData.get("nhs_period_end") as string;
+  const manual_udas = formData.get("manual_udas") as string;
+  let nhs_period_start = formData.get("nhs_period_start") as string;
+  let nhs_period_end = formData.get("nhs_period_end") as string;
 
   if (!period_id_raw) {
     return NextResponse.json({ error: "period_id is required" }, { status: 400 });
@@ -177,28 +233,48 @@ export async function POST(req: NextRequest) {
 
   const db = await getDb();
 
-  // Update NHS period dates on the pay_period if provided
-  if (nhs_period_start || nhs_period_end) {
-    await db.execute({
-      sql: `UPDATE pay_periods SET nhs_period_start = ?, nhs_period_end = ? WHERE id = ?`,
-      args: [nhs_period_start || null, nhs_period_end || null, period_id],
-    });
-  }
-
   // Get NHS dentists from database
   const dentistsResult = await db.execute("SELECT * FROM dentists WHERE is_nhs = 1 AND active = 1");
   const nhsDentists = rowsTo<Dentist>(dentistsResult.rows);
 
   let extractions: UdaExtraction[] = [];
+  let extractedText = "";
 
-  // If manual UDAs provided, use those
+  // If PDF file provided, extract text from it
+  if (pdf_file && pdf_file.size > 0) {
+    console.log(`[NHS] Processing PDF file: ${pdf_file.name}, size: ${pdf_file.size} bytes`);
+    try {
+      const buffer = Buffer.from(await pdf_file.arrayBuffer());
+      extractedText = await extractTextFromPdf(buffer);
+
+      // Try to extract period dates from the PDF
+      if (!nhs_period_start || !nhs_period_end) {
+        const periodDates = extractNhsPeriodDates(extractedText);
+        if (periodDates.periodStart) nhs_period_start = periodDates.periodStart;
+        if (periodDates.periodEnd) nhs_period_end = periodDates.periodEnd;
+        console.log(`[NHS] Extracted period dates: ${nhs_period_start} to ${nhs_period_end}`);
+      }
+
+      // Extract UDAs from the PDF text
+      extractions = extractUdasFromText(extractedText, nhsDentists);
+    } catch (error) {
+      console.error("[NHS] PDF processing error:", error);
+      return NextResponse.json({
+        error: "Failed to process PDF file",
+        details: error instanceof Error ? error.message : "Unknown error"
+      }, { status: 400 });
+    }
+  }
+
+  // If manual UDAs provided, use those (override PDF extractions)
   if (manual_udas) {
     try {
       const manualData = JSON.parse(manual_udas);
+      const manualExtractions: UdaExtraction[] = [];
       for (const dentist of nhsDentists) {
         const udas = manualData[dentist.name];
         if (udas !== undefined && udas > 0) {
-          extractions.push({
+          manualExtractions.push({
             dentistName: dentist.name,
             performerNumber: dentist.performer_number || undefined,
             udas: parseFloat(udas),
@@ -207,31 +283,61 @@ export async function POST(req: NextRequest) {
           });
         }
       }
+      // Manual entries override PDF extractions for the same dentist
+      for (const manual of manualExtractions) {
+        const idx = extractions.findIndex(e => e.dentistName === manual.dentistName);
+        if (idx >= 0) {
+          extractions[idx] = manual;
+        } else {
+          extractions.push(manual);
+        }
+      }
     } catch (e) {
       console.error("[NHS] Failed to parse manual UDAs:", e);
     }
   }
 
-  // If statement text provided, try to extract UDAs
+  // If statement text provided and no extractions yet, try to extract from text
   if (statement_text && extractions.length === 0) {
-    extractions = extractUdasFromText(statement_text);
+    extractions = extractUdasFromText(statement_text, nhsDentists);
+    // Also try to extract period dates
+    if (!nhs_period_start || !nhs_period_end) {
+      const periodDates = extractNhsPeriodDates(statement_text);
+      if (periodDates.periodStart) nhs_period_start = periodDates.periodStart;
+      if (periodDates.periodEnd) nhs_period_end = periodDates.periodEnd;
+    }
   }
 
-  // Update payslip entries with UDA values
+  // Update NHS period dates on the pay_period if provided
+  if (nhs_period_start || nhs_period_end) {
+    await db.execute({
+      sql: `UPDATE pay_periods SET nhs_period_start = ?, nhs_period_end = ? WHERE id = ?`,
+      args: [nhs_period_start || null, nhs_period_end || null, period_id],
+    });
+    console.log(`[NHS] Updated period dates: ${nhs_period_start} to ${nhs_period_end}`);
+  }
+
+  // Update payslip entries with UDA values and store NHS period info
   const updates: string[] = [];
 
   for (const extraction of extractions) {
-    // Find the dentist
     const dentist = nhsDentists.find(d =>
       d.name.toLowerCase() === extraction.dentistName.toLowerCase() ||
       (d.performer_number && d.performer_number === extraction.performerNumber)
     );
 
     if (dentist) {
-      // Update the payslip entry
+      // Store NHS period info per entry as well
+      const nhsPeriodInfo = JSON.stringify({
+        period_start: nhs_period_start || null,
+        period_end: nhs_period_end || null,
+        udas: extraction.udas,
+        extracted_from: pdf_file ? "pdf" : statement_text ? "text" : "manual",
+      });
+
       await db.execute({
-        sql: `UPDATE payslip_entries SET nhs_udas = ? WHERE period_id = ? AND dentist_id = ?`,
-        args: [extraction.udas, period_id, dentist.id],
+        sql: `UPDATE payslip_entries SET nhs_udas = ?, nhs_period_json = ? WHERE period_id = ? AND dentist_id = ?`,
+        args: [extraction.udas, nhsPeriodInfo, period_id, dentist.id],
       });
       updates.push(`${dentist.name}: ${extraction.udas} UDAs = £${extraction.nhsIncome.toFixed(2)}`);
     }
@@ -242,6 +348,11 @@ export async function POST(req: NextRequest) {
     message: `Updated NHS UDAs for ${updates.length} dentist(s)`,
     extractions,
     updates,
+    period: {
+      start: nhs_period_start || null,
+      end: nhs_period_end || null,
+    },
+    extractedText: extractedText.length > 0 ? extractedText.substring(0, 500) + "..." : null,
   });
 }
 
