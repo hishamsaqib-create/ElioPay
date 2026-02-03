@@ -323,9 +323,26 @@ export default function PeriodDetailPage() {
                   <p>Total invoices: {String(debug.totalInvoices)} | Processed: {String(debug.processedInvoices)}</p>
                   <p>Flagged for review: <span className="text-amber-600 font-medium">{String(debug.flaggedForReview || 0)}</span></p>
                   <p>Skipped: {String(debug.skippedTherapist)} therapist, {String(debug.skippedNhs)} NHS</p>
-                  {(debug.unmatchedUserIds as string[])?.length > 0 && (
-                    <p className="text-amber-600">Unmatched IDs: {(debug.unmatchedUserIds as string[]).join(", ")}</p>
-                  )}
+                  {(() => {
+                    const unmatched = debug.unmatchedUserIds as Array<{ id: string; name?: string; role?: string }> | string[];
+                    if (!unmatched || unmatched.length === 0) return null;
+                    // Handle both old format (string[]) and new format (object[])
+                    if (typeof unmatched[0] === "string") {
+                      return <p className="text-amber-600">Unmatched IDs: {(unmatched as string[]).join(", ")}</p>;
+                    }
+                    return (
+                      <div className="text-amber-600">
+                        <p className="font-medium">Unmatched IDs (add these to Dentists page):</p>
+                        {(unmatched as Array<{ id: string; name?: string; role?: string }>).map((u, i) => (
+                          <p key={i} className="ml-2">
+                            <code className="bg-amber-100 px-1 rounded">{u.id}</code>
+                            {u.name && <span className="ml-1">= {u.name}</span>}
+                            {u.role && <span className="text-amber-500 ml-1">({u.role})</span>}
+                          </p>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}

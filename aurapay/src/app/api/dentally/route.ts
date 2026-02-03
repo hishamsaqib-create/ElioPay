@@ -94,16 +94,18 @@ interface Discrepancy {
   notes: string;
 }
 
-async function fetchAllPages(url: string, token: string): Promise<DentallyInvoice[]> {
+async function fetchAllPages(baseUrl: string, token: string): Promise<DentallyInvoice[]> {
   const all: DentallyInvoice[] = [];
-  let nextUrl: string | null = url;
-  let page = 0;
-  const maxPages = 100;
+  let page = 1;
+  const perPage = 100;
+  const maxPages = 50; // Safety limit: 50 pages x 100 = 5000 invoices max
 
-  while (nextUrl && page < maxPages) {
-    console.log(`[Dentally] Fetching page ${page + 1}: ${nextUrl.substring(0, 100)}...`);
+  while (page <= maxPages) {
+    // Build URL with page number
+    const url = `${baseUrl}&page=${page}&per_page=${perPage}`;
+    console.log(`[Dentally] Fetching page ${page}: ${url.substring(0, 120)}...`);
 
-    const fetchRes: Response = await fetch(nextUrl, {
+    const fetchRes: Response = await fetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
@@ -118,15 +120,25 @@ async function fetchAllPages(url: string, token: string): Promise<DentallyInvoic
 
     const data = await fetchRes.json();
     const invoices = data.invoices || data.data || [];
+
+    if (invoices.length === 0) {
+      console.log(`[Dentally] Page ${page}: No more invoices, stopping.`);
+      break;
+    }
+
     all.push(...invoices);
-    console.log(`[Dentally] Page ${page + 1}: Got ${invoices.length} invoices (total: ${all.length})`);
+    console.log(`[Dentally] Page ${page}: Got ${invoices.length} invoices (total: ${all.length})`);
 
-    nextUrl = data.links?.next || null;
+    // If we got fewer than perPage, we've reached the end
+    if (invoices.length < perPage) {
+      console.log(`[Dentally] Page ${page}: Got ${invoices.length} < ${perPage}, last page.`);
+      break;
+    }
+
     page++;
-
-    if (invoices.length === 0) break;
   }
 
+  console.log(`[Dentally] Finished fetching. Total: ${all.length} invoices across ${page} pages.`);
   return all;
 }
 
@@ -146,6 +158,28 @@ async function fetchPatientName(patientId: string | number, token: string): Prom
     console.error(`[Dentally] Failed to fetch patient ${patientId}:`, e);
   }
   return `Patient ${patientId}`;
+}
+
+// Fetch user info from Dentally to identify unknown user IDs
+async function fetchUserInfo(userId: string, token: string): Promise<{ name: string; role?: string } | null> {
+  try {
+    const res = await fetch(`${DENTALLY_API}/users/${userId}`, {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const user = data.user || data;
+      const firstName = user.first_name || "";
+      const lastName = user.last_name || "";
+      return {
+        name: `${firstName} ${lastName}`.trim() || user.email || `User ${userId}`,
+        role: user.role || user.user_type || user.job_title || undefined,
+      };
+    }
+  } catch (e) {
+    console.error(`[Dentally] Failed to fetch user ${userId}:`, e);
+  }
+  return null;
 }
 
 // Determine payment status from invoice
@@ -212,7 +246,8 @@ export async function POST(req: NextRequest) {
 
   try {
     // Fetch invoices from Dentally
-    const url = `${DENTALLY_API}/invoices?created_from=${startDate}&created_to=${endDate}&site_id=${SITE_ID}&per_page=100`;
+    // Note: page and per_page are added by fetchAllPages
+    const url = `${DENTALLY_API}/invoices?created_from=${startDate}&created_to=${endDate}&site_id=${SITE_ID}`;
     const invoices = await fetchAllPages(url, token);
 
     console.log(`[Dentally] Total invoices fetched: ${invoices.length}`);
@@ -413,6 +448,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Look up names for unmatched user IDs
+    const unmatchedWithNames: Array<{ id: string; name?: string; role?: string }> = [];
+    for (const uid of unmatchedUserIds) {
+      const userInfo = await fetchUserInfo(uid, token);
+      unmatchedWithNames.push({
+        id: uid,
+        name: userInfo?.name,
+        role: userInfo?.role,
+      });
+    }
+
     // Build summary
     const summary: Record<string, {
       invoiced: number;
@@ -445,7 +491,7 @@ export async function POST(req: NextRequest) {
         skippedZeroAmount,
         skippedTherapist,
         skippedNhs,
-        unmatchedUserIds: Array.from(unmatchedUserIds),
+        unmatchedUserIds: unmatchedWithNames,
         dateRange: { start: startDate, end: endDate },
       },
       summary,
