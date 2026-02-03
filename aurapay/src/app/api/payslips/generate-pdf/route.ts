@@ -45,102 +45,95 @@ export async function GET(req: NextRequest) {
 
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
-  let y = 0;
+  let y = 20;
 
-  // Aura Dental brand colors
-  const teal = { r: 15, g: 118, b: 110 };      // #0F766E - Deep teal
-  const tealLight = { r: 20, g: 184, b: 166 }; // #14B8A6 - Light teal
-  const gold = { r: 212, g: 175, b: 55 };      // #D4AF37 - Gold
-  const charcoal = { r: 31, g: 41, b: 55 };    // #1F2937 - Dark charcoal
-  const slate = { r: 71, g: 85, b: 105 };      // #475569 - Slate
+  // Clean, modern color palette
+  const navy = { r: 17, g: 24, b: 39 };        // #111827 - Dark navy
+  const accent = { r: 79, g: 70, b: 229 };     // #4F46E5 - Indigo accent
+  const gray = { r: 107, g: 114, b: 128 };     // #6B7280 - Gray text
+  const lightGray = { r: 243, g: 244, b: 246 }; // #F3F4F6 - Light background
 
-  // Elegant header with gradient effect (simulated with two rectangles)
-  doc.setFillColor(teal.r, teal.g, teal.b);
-  doc.rect(0, 0, pageWidth, 50, "F");
-
-  // Subtle gold accent line at bottom of header
-  doc.setFillColor(gold.r, gold.g, gold.b);
-  doc.rect(0, 50, pageWidth, 2, "F");
-
-  // Logo area - "AURA" text with elegant styling
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(28);
+  // Clean header - Logo on left
+  doc.setFontSize(24);
   doc.setFont("helvetica", "bold");
-  doc.text("AURA", 15, 24);
-  doc.setFontSize(9);
+  doc.setTextColor(navy.r, navy.g, navy.b);
+  doc.text("AURA", 15, y);
+  doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
-  doc.setTextColor(tealLight.r, tealLight.g, tealLight.b);
-  doc.text("DENTAL CLINIC", 15, 32);
+  doc.setTextColor(gray.r, gray.g, gray.b);
+  doc.text("DENTAL CLINIC", 15, y + 6);
 
-  // Payslip title with gold accent
-  doc.setTextColor(gold.r, gold.g, gold.b);
+  // Period info - right aligned
   doc.setFontSize(10);
-  doc.setFont("helvetica", "bold");
-  doc.text("PAYSLIP", 15, 44);
-  doc.setTextColor(255, 255, 255);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.text(`${getMonthName(entry.month)} ${entry.year}`, 42, 44);
-
-  // Dentist info on right side
-  doc.setTextColor(255, 255, 255);
+  doc.setTextColor(gray.r, gray.g, gray.b);
+  doc.text("PAYSLIP", pageWidth - 15, y - 5, { align: "right" });
   doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
-  doc.text(entry.dentist_name, pageWidth - 15, 22, { align: "right" });
+  doc.setTextColor(navy.r, navy.g, navy.b);
+  doc.text(`${getMonthName(entry.month)} ${entry.year}`, pageWidth - 15, y + 3, { align: "right" });
+
+  // Thin accent line
+  y += 15;
+  doc.setDrawColor(accent.r, accent.g, accent.b);
+  doc.setLineWidth(0.5);
+  doc.line(15, y, pageWidth - 15, y);
+
+  // Dentist info section
+  y += 12;
   doc.setFontSize(9);
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(tealLight.r, tealLight.g, tealLight.b);
-  if (entry.performer_number) {
-    doc.text(`Performer: ${entry.performer_number}`, pageWidth - 15, 32, { align: "right" });
-  }
-  doc.text(`Split: ${entry.split_percentage}%`, pageWidth - 15, 40, { align: "right" });
+  doc.setTextColor(gray.r, gray.g, gray.b);
+  doc.text("EMPLOYEE", 15, y);
+  doc.text("DETAILS", pageWidth / 2 + 10, y);
 
-  y = 62;
-
-  // Net Pay card with elegant styling
-  doc.setFillColor(charcoal.r, charcoal.g, charcoal.b);
-  doc.roundedRect(15, y, pageWidth - 30, 28, 4, 4, "F");
-
-  // Gold accent on left edge of net pay card
-  doc.setFillColor(gold.r, gold.g, gold.b);
-  doc.roundedRect(15, y, 4, 28, 2, 2, "F");
-  doc.rect(17, y, 2, 28, "F"); // overlap to make left side rounded, right side straight
-
-  doc.setTextColor(180, 180, 180);
-  doc.setFontSize(9);
-  doc.setFont("helvetica", "normal");
-  doc.text("NET PAY", 28, y + 12);
-  doc.setTextColor(gold.r, gold.g, gold.b);
-  doc.setFontSize(22);
+  y += 8;
+  doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
-  doc.text(formatCurrency(calc.netPay), pageWidth - 25, y + 19, { align: "right" });
+  doc.setTextColor(navy.r, navy.g, navy.b);
+  doc.text(entry.dentist_name, 15, y);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(gray.r, gray.g, gray.b);
+  if (entry.performer_number) {
+    doc.text(`Performer: ${entry.performer_number}`, pageWidth / 2 + 10, y);
+  }
+  y += 6;
+  doc.text(`Split: ${entry.split_percentage}%`, pageWidth / 2 + 10, y);
 
-  // NHS Period Banner (for NHS dentists)
+  // NET PAY - Large, clean display
+  y += 20;
+  doc.setFillColor(navy.r, navy.g, navy.b);
+  doc.roundedRect(15, y, pageWidth - 30, 35, 3, 3, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text("NET PAY", 25, y + 14);
+  doc.setFontSize(28);
+  doc.setFont("helvetica", "bold");
+  doc.text(formatCurrency(calc.netPay), pageWidth - 25, y + 25, { align: "right" });
+
+  y += 45;
+
+  // NHS Period (if applicable)
   if (dentist.is_nhs && entry.nhs_period_start && entry.nhs_period_end) {
-    y += 36;
-    doc.setFillColor(teal.r, teal.g, teal.b);
-    doc.roundedRect(15, y, pageWidth - 30, 12, 2, 2, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(8);
-    doc.setFont("helvetica", "bold");
     const nhsStart = new Date(entry.nhs_period_start + "T00:00:00");
     const nhsEnd = new Date(entry.nhs_period_end + "T00:00:00");
     const formatDate = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-    doc.text(`NHS Period: ${formatDate(nhsStart)} - ${formatDate(nhsEnd)}`, pageWidth / 2, y + 8, { align: "center" });
-    y += 18;
-  } else {
-    y += 38;
+    doc.setFontSize(8);
+    doc.setTextColor(gray.r, gray.g, gray.b);
+    doc.text(`NHS Period: ${formatDate(nhsStart)} - ${formatDate(nhsEnd)}`, pageWidth / 2, y, { align: "center" });
+    y += 10;
   }
 
-  // Section header styling function
+  // Section styling
   const sectionHeader = (title: string, yPos: number) => {
-    doc.setFillColor(teal.r, teal.g, teal.b);
-    doc.rect(15, yPos, 3, 14, "F");
-    doc.setTextColor(charcoal.r, charcoal.g, charcoal.b);
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
-    doc.text(title, 22, yPos + 10);
-    return yPos + 16;
+    doc.setTextColor(navy.r, navy.g, navy.b);
+    doc.text(title.toUpperCase(), 15, yPos);
+    doc.setDrawColor(230, 230, 230);
+    doc.setLineWidth(0.3);
+    doc.line(15, yPos + 3, pageWidth - 15, yPos + 3);
+    return yPos + 10;
   };
 
   y = sectionHeader("Earnings", y);
@@ -155,19 +148,22 @@ export async function GET(req: NextRequest) {
   earningsData.push(["Total Earnings", formatCurrency(calc.totalEarnings)]);
 
   autoTable(doc, {
-    startY: y, head: [["Description", "Amount"]], body: earningsData, theme: "plain",
-    headStyles: { fillColor: [teal.r, teal.g, teal.b], textColor: [255, 255, 255], fontSize: 8, fontStyle: "bold" },
-    styles: { fontSize: 9, cellPadding: 4, textColor: [charcoal.r, charcoal.g, charcoal.b] },
-    columnStyles: { 1: { halign: "right" } }, margin: { left: 15, right: 15 },
-    alternateRowStyles: { fillColor: [248, 250, 252] },
+    startY: y,
+    head: [["Description", "Amount"]],
+    body: earningsData,
+    theme: "plain",
+    headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 8, fontStyle: "bold" },
+    styles: { fontSize: 9, cellPadding: 4, textColor: [navy.r, navy.g, navy.b] },
+    columnStyles: { 1: { halign: "right" } },
+    margin: { left: 15, right: 15 },
     didParseCell: (data) => {
       if (data.row.index === earningsData.length - 1) {
         data.cell.styles.fontStyle = "bold";
-        data.cell.styles.fillColor = [240, 253, 250];
+        data.cell.styles.fillColor = [240, 253, 244]; // Light green for total
       }
     },
   });
-  y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 12;
+  y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 15;
 
   y = sectionHeader("Deductions", y);
 
@@ -185,19 +181,22 @@ export async function GET(req: NextRequest) {
 
   if (deductionsData.length > 1) {
     autoTable(doc, {
-      startY: y, head: [["Description", "Amount"]], body: deductionsData, theme: "plain",
-      headStyles: { fillColor: [slate.r, slate.g, slate.b], textColor: [255, 255, 255], fontSize: 8, fontStyle: "bold" },
-      styles: { fontSize: 9, cellPadding: 4, textColor: [charcoal.r, charcoal.g, charcoal.b] },
-      columnStyles: { 1: { halign: "right" } }, margin: { left: 15, right: 15 },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
+      startY: y,
+      head: [["Description", "Amount"]],
+      body: deductionsData,
+      theme: "plain",
+      headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 8, fontStyle: "bold" },
+      styles: { fontSize: 9, cellPadding: 4, textColor: [navy.r, navy.g, navy.b] },
+      columnStyles: { 1: { halign: "right" } },
+      margin: { left: 15, right: 15 },
       didParseCell: (data) => {
         if (data.row.index === deductionsData.length - 1) {
           data.cell.styles.fontStyle = "bold";
-          data.cell.styles.fillColor = [254, 242, 242];
+          data.cell.styles.fillColor = [254, 242, 242]; // Light red for total
         }
       },
     });
-    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 12;
+    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 15;
   }
 
   // Parse therapy breakdown
@@ -235,19 +234,18 @@ export async function GET(req: NextRequest) {
       head: [["Patient", "Date", "Therapist", "Mins", "Cost"]],
       body: therapyData,
       theme: "plain",
-      headStyles: { fillColor: [tealLight.r, tealLight.g, tealLight.b], textColor: [255, 255, 255], fontSize: 7, fontStyle: "bold" },
-      styles: { fontSize: 8, cellPadding: 2.5, textColor: [charcoal.r, charcoal.g, charcoal.b] },
+      headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 7, fontStyle: "bold" },
+      styles: { fontSize: 8, cellPadding: 2.5, textColor: [navy.r, navy.g, navy.b] },
       columnStyles: { 3: { halign: "right" }, 4: { halign: "right" } },
       margin: { left: 15, right: 15 },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
       didParseCell: (data) => {
         if (data.row.index === therapyData.length - 1) {
           data.cell.styles.fontStyle = "bold";
-          data.cell.styles.fillColor = [240, 253, 250];
+          data.cell.styles.fillColor = [240, 253, 244];
         }
       },
     });
-    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 12;
+    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 15;
   }
 
   // Parse analytics
@@ -278,23 +276,23 @@ export async function GET(req: NextRequest) {
 
     autoTable(doc, {
       startY: y, head: [["Metric", "Value"]], body: analyticsData, theme: "plain",
-      headStyles: { fillColor: [teal.r, teal.g, teal.b], textColor: [255, 255, 255], fontSize: 8, fontStyle: "bold" },
-      styles: { fontSize: 9, cellPadding: 3.5, textColor: [charcoal.r, charcoal.g, charcoal.b] },
+      headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 8, fontStyle: "bold" },
+      styles: { fontSize: 9, cellPadding: 3.5, textColor: [navy.r, navy.g, navy.b] },
       columnStyles: { 1: { halign: "right" } }, margin: { left: 15, right: 15 },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
     });
-    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 12;
+    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 15;
 
     // Top Performers
     if (analytics.topPatientsByHourlyRate.length > 0 || analytics.topTreatmentsByHourlyRate.length > 0) {
       if (y > 220) { doc.addPage(); y = 20; }
-      doc.setFillColor(gold.r, gold.g, gold.b);
-      doc.rect(15, y, 3, 12, "F");
-      doc.setTextColor(charcoal.r, charcoal.g, charcoal.b);
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
-      doc.text("Top Performers", 22, y + 8);
-      y += 14;
+      doc.setTextColor(navy.r, navy.g, navy.b);
+      doc.text("TOP PERFORMERS", 15, y);
+      doc.setDrawColor(230, 230, 230);
+      doc.setLineWidth(0.3);
+      doc.line(15, y + 3, pageWidth - 15, y + 3);
+      y += 12;
 
       // Side by side tables
       const leftWidth = (pageWidth - 40) / 2;
@@ -302,15 +300,15 @@ export async function GET(req: NextRequest) {
       if (analytics.topPatientsByHourlyRate.length > 0) {
         doc.setFontSize(8);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(slate.r, slate.g, slate.b);
+        doc.setTextColor(gray.r, gray.g, gray.b);
         doc.text("By Patient (£/hour)", 15, y);
         autoTable(doc, {
           startY: y + 2,
           head: [["Patient", "£/hr"]],
           body: analytics.topPatientsByHourlyRate.slice(0, 5).map(p => [p.name.substring(0, 20), formatCurrency(p.hourlyRate)]),
           theme: "plain",
-          headStyles: { fillColor: [240, 253, 250], textColor: [teal.r, teal.g, teal.b], fontSize: 7, fontStyle: "bold" },
-          styles: { fontSize: 7, cellPadding: 1.5, textColor: [charcoal.r, charcoal.g, charcoal.b] },
+          headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 7, fontStyle: "bold" },
+          styles: { fontSize: 7, cellPadding: 1.5, textColor: [navy.r, navy.g, navy.b] },
           columnStyles: { 1: { halign: "right" } },
           margin: { left: 15, right: pageWidth - 15 - leftWidth },
           tableWidth: leftWidth,
@@ -320,21 +318,21 @@ export async function GET(req: NextRequest) {
       if (analytics.topTreatmentsByHourlyRate.length > 0) {
         doc.setFontSize(8);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(slate.r, slate.g, slate.b);
+        doc.setTextColor(gray.r, gray.g, gray.b);
         doc.text("By Treatment (£/hour)", 15 + leftWidth + 10, y);
         autoTable(doc, {
           startY: y + 2,
           head: [["Treatment", "£/hr"]],
           body: analytics.topTreatmentsByHourlyRate.slice(0, 5).map(t => [t.treatment.substring(0, 20), formatCurrency(t.hourlyRate)]),
           theme: "plain",
-          headStyles: { fillColor: [240, 253, 250], textColor: [teal.r, teal.g, teal.b], fontSize: 7, fontStyle: "bold" },
-          styles: { fontSize: 7, cellPadding: 1.5, textColor: [charcoal.r, charcoal.g, charcoal.b] },
+          headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 7, fontStyle: "bold" },
+          styles: { fontSize: 7, cellPadding: 1.5, textColor: [navy.r, navy.g, navy.b] },
           columnStyles: { 1: { halign: "right" } },
           margin: { left: 15 + leftWidth + 10, right: 15 },
           tableWidth: leftWidth,
         });
       }
-      y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 12;
+      y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 15;
     }
   }
 
@@ -360,47 +358,36 @@ export async function GET(req: NextRequest) {
           p.finance ? "Y" : ""
         ]),
         theme: "plain",
-        headStyles: { fillColor: [teal.r, teal.g, teal.b], textColor: [255, 255, 255], fontSize: 7, fontStyle: "bold" },
-        styles: { fontSize: 7, cellPadding: 2, textColor: [charcoal.r, charcoal.g, charcoal.b] },
+        headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 7, fontStyle: "bold" },
+        styles: { fontSize: 7, cellPadding: 2, textColor: [navy.r, navy.g, navy.b] },
         columnStyles: { 2: { halign: "right" }, 3: { halign: "center" }, 4: { halign: "right" } },
         margin: { left: 15, right: 15 },
-        alternateRowStyles: { fillColor: [248, 250, 252] },
       });
     } else {
       autoTable(doc, {
         startY: y, head: [["Patient", "Date", "Amount", "Finance"]],
         body: patients.map((p) => [p.name, p.date, formatCurrency(p.amount), p.finance ? "Yes" : ""]),
         theme: "plain",
-        headStyles: { fillColor: [teal.r, teal.g, teal.b], textColor: [255, 255, 255], fontSize: 8, fontStyle: "bold" },
-        styles: { fontSize: 8, cellPadding: 2.5, textColor: [charcoal.r, charcoal.g, charcoal.b] },
+        headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 8, fontStyle: "bold" },
+        styles: { fontSize: 8, cellPadding: 2.5, textColor: [navy.r, navy.g, navy.b] },
         columnStyles: { 2: { halign: "right" } },
         margin: { left: 15, right: 15 },
-        alternateRowStyles: { fillColor: [248, 250, 252] },
       });
     }
   }
 
-  // Elegant footer with teal accent
+  // Clean, minimal footer
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
-    const footerY = doc.internal.pageSize.getHeight() - 15;
-
-    // Subtle teal line above footer
-    doc.setDrawColor(teal.r, teal.g, teal.b);
-    doc.setLineWidth(0.5);
-    doc.line(15, footerY, pageWidth - 15, footerY);
+    const footerY = doc.internal.pageSize.getHeight() - 12;
 
     doc.setFontSize(7);
-    doc.setTextColor(slate.r, slate.g, slate.b);
-    doc.text("Generated by", 15, footerY + 6);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(teal.r, teal.g, teal.b);
-    doc.text("AURA", 38, footerY + 6);
+    doc.setTextColor(gray.r, gray.g, gray.b);
+    doc.text("AURA DENTAL CLINIC", 15, footerY);
     doc.setFont("helvetica", "normal");
-    doc.setTextColor(slate.r, slate.g, slate.b);
-    doc.text("| aurapay.cloud", 50, footerY + 6);
-    doc.text(`Page ${i} of ${pageCount}`, pageWidth - 15, footerY + 6, { align: "right" });
+    doc.text("aurapay.cloud", pageWidth / 2, footerY, { align: "center" });
+    doc.text(`${i} / ${pageCount}`, pageWidth - 15, footerY, { align: "right" });
   }
 
   const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
