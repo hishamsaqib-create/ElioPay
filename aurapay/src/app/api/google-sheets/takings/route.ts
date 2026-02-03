@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, rowTo } from "@/lib/db";
 import { getSession } from "@/lib/auth";
+import { google } from "googleapis";
+import * as fs from "fs";
+import * as path from "path";
 
 // Private takings log spreadsheet IDs for each dentist
 const PRIVATE_TAKINGS_LOGS: Record<string, string> = {
@@ -13,6 +16,9 @@ const PRIVATE_TAKINGS_LOGS: Record<string, string> = {
   // Hisham Saqib - no takings log (owner)
 };
 
+// Service account email for sharing instructions
+const SERVICE_ACCOUNT_EMAIL = "payslip-generator@aura-payslip-generator.iam.gserviceaccount.com";
+
 interface SheetRow {
   patientName: string;
   date: string;
@@ -20,79 +26,109 @@ interface SheetRow {
   treatment?: string;
 }
 
-// Fetch data from Google Sheets using the public API (for sheets shared with "anyone with link")
-// Or using API key if available
+// Get authenticated Google Sheets client using service account
+async function getGoogleSheetsClient() {
+  try {
+    // Try to load service account credentials
+    const credPath = path.join(process.cwd(), "google-service-account.json");
+    if (fs.existsSync(credPath)) {
+      const credentials = JSON.parse(fs.readFileSync(credPath, "utf8"));
+      const auth = new google.auth.GoogleAuth({
+        credentials,
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+      });
+      return google.sheets({ version: "v4", auth });
+    }
+  } catch (e) {
+    console.log("[GoogleSheets] Service account not configured:", e);
+  }
+  return null;
+}
+
+// Fetch data from Google Sheets using service account or fallback to public access
 async function fetchGoogleSheetData(spreadsheetId: string, month: number, year: number): Promise<{ rows: SheetRow[]; error?: string }> {
-  // Try to use Google Sheets API key if available
-  const apiKey = process.env.GOOGLE_SHEETS_API_KEY;
-
-  // Use the public CSV export URL (works for sheets shared with "anyone with link")
-  // Try multiple common sheet names/structures
   const sheetNames = ["Sheet1", "Takings", "Private Takings", "Log", "Main", "Data"];
-
   let allRows: SheetRow[] = [];
   let lastError: string | undefined;
 
   console.log(`[GoogleSheets] Fetching spreadsheet ${spreadsheetId} for ${month}/${year}`);
-  console.log(`[GoogleSheets] API Key configured: ${apiKey ? "Yes" : "No"}`);
 
+  // Try service account authentication first
+  const sheets = await getGoogleSheetsClient();
+
+  if (sheets) {
+    console.log("[GoogleSheets] Using service account authentication");
+
+    for (const sheetName of sheetNames) {
+      try {
+        console.log(`[GoogleSheets] Trying sheet "${sheetName}"...`);
+        const response = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: sheetName,
+        });
+
+        const values = response.data.values || [];
+        if (values.length > 0) {
+          allRows = parseSheetValues(values as string[][], month, year);
+          if (allRows.length > 0) {
+            console.log(`[GoogleSheets] Found ${allRows.length} rows in sheet "${sheetName}" for ${month}/${year}`);
+            break;
+          }
+        }
+      } catch (e: unknown) {
+        const error = e as { code?: number; message?: string };
+        if (error.code === 404) {
+          console.log(`[GoogleSheets] Sheet "${sheetName}" not found, trying next...`);
+          continue;
+        }
+        if (error.code === 403) {
+          lastError = `Sheet not shared with service account. Share the Google Sheet with: ${SERVICE_ACCOUNT_EMAIL}`;
+          console.log(`[GoogleSheets] Permission denied for sheet "${sheetName}"`);
+          continue;
+        }
+        console.log(`[GoogleSheets] Error fetching sheet "${sheetName}":`, error.message);
+        lastError = error.message || "Unknown error";
+      }
+    }
+
+    if (allRows.length > 0) {
+      return { rows: allRows };
+    }
+  } else {
+    console.log("[GoogleSheets] No service account, trying public access...");
+  }
+
+  // Fallback to public CSV export (for publicly shared sheets)
   for (const sheetName of sheetNames) {
     try {
-      let url: string;
+      const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+      console.log(`[GoogleSheets] Trying public access for sheet "${sheetName}"...`);
 
-      if (apiKey) {
-        // Use official API with key
-        url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName)}?key=${apiKey}`;
-      } else {
-        // Use public CSV export (requires sheet to be shared publicly)
-        url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
-      }
-
-      console.log(`[GoogleSheets] Trying sheet "${sheetName}"...`);
       const res = await fetch(url, { cache: "no-store" });
-
       if (!res.ok) {
-        const status = res.status;
-        console.log(`[GoogleSheets] Sheet "${sheetName}" returned status ${status}`);
-        if (status === 401 || status === 403) {
-          lastError = `Sheet not accessible (${status}). Make sure the Google Sheet is shared with "Anyone with the link can view".`;
-        }
         continue;
       }
 
       const text = await res.text();
-
-      // Check if we got an HTML error page instead of data
       if (text.includes("<!DOCTYPE html>") || text.includes("<html")) {
-        console.log(`[GoogleSheets] Got HTML response instead of data - sheet may not be publicly shared`);
-        lastError = "Google Sheet is not publicly accessible. Share the sheet with 'Anyone with the link can view'.";
+        lastError = `Sheet not accessible. Share with: ${SERVICE_ACCOUNT_EMAIL}`;
         continue;
       }
 
-      if (apiKey) {
-        // Parse JSON response from official API
-        const data = JSON.parse(text);
-        const values = data.values || [];
-        allRows = parseSheetValues(values, month, year);
-      } else {
-        // Parse CSV response
-        allRows = parseCsvData(text, month, year);
-      }
-
+      allRows = parseCsvData(text, month, year);
       if (allRows.length > 0) {
-        console.log(`[GoogleSheets] Found ${allRows.length} rows in sheet "${sheetName}" for ${month}/${year}`);
+        console.log(`[GoogleSheets] Found ${allRows.length} rows via public access`);
         break;
-      } else {
-        console.log(`[GoogleSheets] Sheet "${sheetName}" had no matching rows for ${month}/${year}`);
       }
     } catch (e) {
-      console.log(`[GoogleSheets] Error fetching sheet "${sheetName}":`, e);
-      lastError = e instanceof Error ? e.message : "Unknown error fetching sheet";
-      continue;
+      console.log(`[GoogleSheets] Public access error:`, e);
     }
   }
 
-  return { rows: allRows, error: allRows.length === 0 ? lastError : undefined };
+  return {
+    rows: allRows,
+    error: allRows.length === 0 ? (lastError || `No data found. Share the sheet with: ${SERVICE_ACCOUNT_EMAIL}`) : undefined
+  };
 }
 
 // Parse sheet values (from API response)
@@ -324,7 +360,8 @@ export async function POST(req: NextRequest) {
         ok: false,
         message: sheetError || `No entries found in ${dentist_name}'s private log for ${period.month}/${period.year}`,
         count: 0,
-        hint: sheetError ? "Make sure the Google Sheet is shared with 'Anyone with the link can view' and contains data for this month." : undefined,
+        hint: `Share the Google Sheet with: ${SERVICE_ACCOUNT_EMAIL}`,
+        serviceAccountEmail: SERVICE_ACCOUNT_EMAIL,
       });
     }
 
