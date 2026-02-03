@@ -194,19 +194,36 @@ function extractUdasFromText(text: string, nhsDentists: Dentist[]): UdaExtractio
   return results;
 }
 
-// Parse PDF and extract text
+// Parse PDF and extract text using pdfjs-dist
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   try {
-    // pdf-parse v2 uses PDFParse class with LoadParameters
-    const { PDFParse } = await import("pdf-parse");
-    const pdfParser = new PDFParse({ data: new Uint8Array(buffer) });
-    const textResult = await pdfParser.getText();
-    const fullText = textResult.pages.map(p => p.text).join("\n");
+    // Dynamic import for pdfjs-dist (works in serverless)
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+    // Load the PDF document
+    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+    const pdf = await loadingTask.promise;
+
+    console.log(`[NHS] PDF loaded: ${pdf.numPages} pages`);
+
+    // Extract text from all pages
+    const textParts: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pageText = textContent.items
+        .map((item: any) => item.str || "")
+        .join(" ");
+      textParts.push(pageText);
+    }
+
+    const fullText = textParts.join("\n");
     console.log(`[NHS] Extracted ${fullText.length} characters from PDF`);
     return fullText;
   } catch (error) {
     console.error("[NHS] PDF parsing error:", error);
-    throw new Error("Failed to parse PDF file");
+    throw new Error("Failed to parse PDF file: " + (error instanceof Error ? error.message : "Unknown error"));
   }
 }
 
