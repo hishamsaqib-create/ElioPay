@@ -65,10 +65,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         <div className="h-16 flex items-center px-6 border-b border-border">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-sm">A</span>
+              <span className="text-amber-300 font-bold text-sm">£</span>
             </div>
             <div>
-              <h1 className="text-base font-bold text-text leading-none">AuraPay</h1>
+              <h1 className="text-base font-bold text-text leading-none">AuraPay<sup className="text-[8px] font-medium ml-0.5 text-text-subtle">TM</sup></h1>
               <p className="text-[10px] text-text-subtle leading-none mt-0.5">Aura Dental Clinic</p>
             </div>
           </div>

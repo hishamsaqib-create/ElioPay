@@ -155,6 +155,7 @@ export default function PeriodDetailPage() {
       });
       const data = await res.json();
       if (res.ok) {
+        console.log("Dentally fetch debug:", data.debug);
         showToast(data.message || "Data fetched from Dentally");
         await loadData();
       } else {

@@ -1,20 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { getDb, rowTo } from "@/lib/db";
+import { getDb, rowTo, rowsTo } from "@/lib/db";
 import { signToken } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
-  const { email, password } = await req.json();
+  const { password } = await req.json();
   const db = await getDb();
-  const result = await db.execute({ sql: "SELECT * FROM users WHERE email = ?", args: [email] });
 
-  if (result.rows.length === 0) {
-    return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
-  }
-  const user = rowTo<{ id: number; email: string; password_hash: string; name: string; role: string }>(result.rows[0]);
+  // Try all users, find one whose password matches
+  const result = await db.execute("SELECT * FROM users");
+  const users = rowsTo<{ id: number; email: string; password_hash: string; name: string; role: string }>(result.rows);
 
-  if (!bcrypt.compareSync(password, user.password_hash)) {
-    return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+  const user = users.find((u) => bcrypt.compareSync(password, u.password_hash));
+  if (!user) {
+    return NextResponse.json({ error: "Invalid password" }, { status: 401 });
   }
 
   const token = signToken({ id: user.id, email: user.email, name: user.name, role: user.role });

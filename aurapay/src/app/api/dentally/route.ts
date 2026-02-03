@@ -106,17 +106,23 @@ export async function POST(req: NextRequest) {
 
     // Group private income by dentist
     const dentistTotals = new Map<number, { gross: number; patients: { name: string; date: string; amount: number; finance: boolean }[] }>();
+    const unmatchedPracIds = new Set<string>();
+    let skippedUnpaid = 0;
+    let skippedTherapist = 0;
 
     for (const inv of invoices) {
       // Skip unpaid or zero balance
-      if (!inv.paid || inv.balance > 0 || inv.amount <= 0) continue;
+      if (!inv.paid || inv.balance > 0 || inv.amount <= 0) { skippedUnpaid++; continue; }
+
+      // Extract practitioner ID - handle various Dentally response formats
+      const pracId = String(inv.practitioner_id || "");
 
       // Skip therapists
-      if (THERAPIST_IDS.has(String(inv.practitioner_id))) continue;
+      if (THERAPIST_IDS.has(pracId)) { skippedTherapist++; continue; }
 
       // Find dentist
-      const dentist = dentistByPracId.get(String(inv.practitioner_id));
-      if (!dentist) continue;
+      const dentist = dentistByPracId.get(pracId);
+      if (!dentist) { unmatchedPracIds.add(pracId); continue; }
 
       // Calculate private amount (exclude NHS and CBCT items)
       let privateAmount = 0;
@@ -194,6 +200,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       message: `Fetched ${invoices.length} invoices, updated ${updated} dentists`,
+      debug: {
+        totalInvoices: invoices.length,
+        skippedUnpaid,
+        skippedTherapist,
+        unmatchedPracIds: Array.from(unmatchedPracIds),
+        knownPracIds: dentists.map((d) => ({ name: d.name, practitioner_id: d.practitioner_id })),
+        sampleInvoice: invoices[0] ? { practitioner_id: invoices[0].practitioner_id, amount: invoices[0].amount, paid: invoices[0].paid } : null,
+      },
       summary: Object.fromEntries(
         Array.from(dentistTotals.entries()).map(([id, data]) => {
           const d = dentists.find((d) => d.id === id);
