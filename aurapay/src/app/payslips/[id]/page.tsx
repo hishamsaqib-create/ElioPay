@@ -66,6 +66,8 @@ interface Entry {
 
 interface Period {
   id: number; month: number; year: number; status: string;
+  nhs_period_start?: string | null;
+  nhs_period_end?: string | null;
 }
 
 const fmt = (n: number) =>
@@ -96,6 +98,8 @@ export default function PeriodDetailPage() {
   const [nhsPeriodStart, setNhsPeriodStart] = useState("");
   const [nhsPeriodEnd, setNhsPeriodEnd] = useState("");
   const [processingNhs, setProcessingNhs] = useState(false);
+  const [nhsPdfFile, setNhsPdfFile] = useState<File | null>(null);
+  const [nhsResult, setNhsResult] = useState<{ extractions?: Array<{ dentistName: string; udas: number; nhsIncome: number }>; extractedText?: string; period?: { start: string | null; end: string | null } } | null>(null);
 
   // Undo history - stores previous entry states
   const [undoHistory, setUndoHistory] = useState<Map<number, Entry[]>>(new Map());
@@ -328,9 +332,13 @@ export default function PeriodDetailPage() {
 
   async function submitNhsStatement() {
     setProcessingNhs(true);
+    setNhsResult(null);
     try {
       const formData = new FormData();
       formData.append("period_id", periodId);
+      if (nhsPdfFile) {
+        formData.append("pdf_file", nhsPdfFile);
+      }
       if (nhsText.trim()) {
         formData.append("statement_text", nhsText);
       }
@@ -351,11 +359,13 @@ export default function PeriodDetailPage() {
       const data = await res.json();
       if (res.ok) {
         showToast(data.message || "NHS UDAs updated");
-        setShowNhsUpload(false);
+        setNhsResult(data);
+        // Auto-fill period dates if extracted from PDF
+        if (data.period?.start) setNhsPeriodStart(data.period.start);
+        if (data.period?.end) setNhsPeriodEnd(data.period.end);
+        setNhsPdfFile(null);
         setNhsText("");
         setNhsManual({});
-        setNhsPeriodStart("");
-        setNhsPeriodEnd("");
         await loadData();
       } else {
         showToast(data.error || "Failed to process NHS statement", "error");
@@ -438,7 +448,7 @@ export default function PeriodDetailPage() {
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-blue-800">NHS Statement</h3>
-                  <p className="text-xs text-blue-600">Upload or enter NHS UDAs for {nhsDentists.map(e => e.dentist_name).join(", ")}</p>
+                  <p className="text-xs text-blue-600">Upload PDF or enter NHS UDAs for {nhsDentists.map(e => e.dentist_name).join(", ")}</p>
                 </div>
               </div>
               <button
@@ -446,15 +456,56 @@ export default function PeriodDetailPage() {
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-700 hover:text-blue-800 bg-blue-100 hover:bg-blue-200 rounded-lg transition"
               >
                 {showNhsUpload ? <X size={14} /> : <Plus size={14} />}
-                {showNhsUpload ? "Close" : "Enter UDAs"}
+                {showNhsUpload ? "Close" : "Upload Statement"}
               </button>
             </div>
 
             {showNhsUpload && (
               <div className="mt-4 pt-4 border-t border-blue-200 space-y-4">
+                {/* PDF Upload */}
+                <div>
+                  <label className="block text-xs font-medium text-blue-800 mb-2">Upload NHS Statement PDF</label>
+                  <div className="flex items-center gap-3">
+                    <label className="flex-1 cursor-pointer">
+                      <div className={`flex items-center justify-center gap-2 px-4 py-6 border-2 border-dashed rounded-lg transition ${
+                        nhsPdfFile ? "border-green-400 bg-green-50" : "border-blue-300 hover:border-blue-400 hover:bg-blue-100"
+                      }`}>
+                        {nhsPdfFile ? (
+                          <>
+                            <CheckCircle2 size={20} className="text-green-600" />
+                            <span className="text-sm font-medium text-green-700">{nhsPdfFile.name}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.preventDefault(); setNhsPdfFile(null); }}
+                              className="ml-2 text-red-500 hover:text-red-600"
+                            >
+                              <X size={16} />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <Download size={20} className="text-blue-500" />
+                            <span className="text-sm text-blue-700">Click to select NHS Statement PDF</span>
+                          </>
+                        )}
+                      </div>
+                      <input
+                        type="file"
+                        accept=".pdf,application/pdf"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) setNhsPdfFile(file);
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  <p className="text-[10px] text-blue-600 mt-1">Upload your NHS FP17 statement PDF to auto-extract UDAs and period dates</p>
+                </div>
+
                 {/* NHS Period Dates */}
                 <div>
-                  <label className="block text-xs font-medium text-blue-800 mb-2">NHS Period Dates</label>
+                  <label className="block text-xs font-medium text-blue-800 mb-2">NHS Period Dates {nhsPdfFile && <span className="text-green-600 font-normal">(will auto-fill from PDF)</span>}</label>
                   <div className="flex items-center gap-3">
                     <div>
                       <label className="block text-[10px] text-text-muted mb-1">Period Start</label>
@@ -481,7 +532,7 @@ export default function PeriodDetailPage() {
 
                 {/* Manual UDA Entry */}
                 <div>
-                  <label className="block text-xs font-medium text-blue-800 mb-2">Enter UDAs Manually</label>
+                  <label className="block text-xs font-medium text-blue-800 mb-2">Or Enter UDAs Manually</label>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {nhsDentists.map(entry => (
                       <div key={entry.id} className="bg-white rounded-lg p-3 border border-blue-100">
@@ -508,28 +559,47 @@ export default function PeriodDetailPage() {
                 </div>
 
                 {/* Or paste statement text */}
-                <div>
-                  <label className="block text-xs font-medium text-blue-800 mb-1">
-                    Or Paste NHS Statement Text
-                    <span className="text-blue-600 font-normal ml-1">(optional - will try to auto-extract UDAs)</span>
-                  </label>
-                  <textarea
-                    value={nhsText}
-                    onChange={(e) => setNhsText(e.target.value)}
-                    rows={4}
-                    placeholder="Paste the text content from your NHS statement here..."
-                    className="w-full px-3 py-2 border border-border rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
-                </div>
+                <details className="text-xs">
+                  <summary className="text-blue-700 cursor-pointer hover:text-blue-800 font-medium">Or paste statement text...</summary>
+                  <div className="mt-2">
+                    <textarea
+                      value={nhsText}
+                      onChange={(e) => setNhsText(e.target.value)}
+                      rows={4}
+                      placeholder="Paste the text content from your NHS statement here..."
+                      className="w-full px-3 py-2 border border-border rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                  </div>
+                </details>
+
+                {/* Results */}
+                {nhsResult && nhsResult.extractions && nhsResult.extractions.length > 0 && (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                    <h4 className="text-xs font-semibold text-green-800 mb-2">Extracted from PDF:</h4>
+                    <div className="space-y-1">
+                      {nhsResult.extractions.map((e, i) => (
+                        <div key={i} className="flex justify-between text-xs">
+                          <span className="text-green-700">{e.dentistName}</span>
+                          <span className="font-medium text-green-800">{e.udas} UDAs = £{e.nhsIncome.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {nhsResult.period?.start && nhsResult.period?.end && (
+                      <p className="text-[10px] text-green-600 mt-2">
+                        Period: {nhsResult.period.start} to {nhsResult.period.end}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <div className="flex justify-end">
                   <button
                     onClick={submitNhsStatement}
-                    disabled={processingNhs || (Object.keys(nhsManual).length === 0 && !nhsText.trim())}
+                    disabled={processingNhs || (!nhsPdfFile && Object.keys(nhsManual).length === 0 && !nhsText.trim())}
                     className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50"
                   >
                     {processingNhs ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                    Update NHS UDAs
+                    {nhsPdfFile ? "Process PDF & Update UDAs" : "Update NHS UDAs"}
                   </button>
                 </div>
               </div>
@@ -674,6 +744,22 @@ export default function PeriodDetailPage() {
                 {/* Expanded detail */}
                 {expanded && (
                   <div className="border-t-2 border-primary-200 bg-gradient-to-b from-slate-50 to-white px-5 py-5 space-y-6">
+                    {/* NHS Period Banner */}
+                    {entry.dentist.is_nhs && period.nhs_period_start && period.nhs_period_end && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 flex items-center gap-3">
+                        <FileText size={16} className="text-blue-500" />
+                        <div>
+                          <span className="text-xs font-medium text-blue-800">NHS Period: </span>
+                          <span className="text-xs text-blue-700">
+                            {new Date(period.nhs_period_start + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                            {" - "}
+                            {new Date(period.nhs_period_end + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                          </span>
+                          <span className="text-[10px] text-blue-500 ml-2">({c.nhsUdas} UDAs @ £{c.udaRate}/UDA)</span>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Undo button */}
                     {!isFinalized && (undoHistory.get(entry.id)?.length || 0) > 0 && (
                       <div className="flex justify-end">

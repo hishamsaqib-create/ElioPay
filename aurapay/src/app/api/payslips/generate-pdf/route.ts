@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
     const result = await db.execute({
       sql: `SELECT e.*, d.name as dentist_name, d.email as dentist_email,
               d.split_percentage, d.is_nhs, d.uda_rate, d.performer_number,
-              p.month, p.year
+              p.month, p.year, p.nhs_period_start, p.nhs_period_end
        FROM payslip_entries e
        JOIN dentists d ON d.id = e.dentist_id
        JOIN pay_periods p ON p.id = e.period_id
@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
     dentist_name: string; dentist_email: string | null;
     split_percentage: number; is_nhs: number; uda_rate: number;
     performer_number: string | null; month: number; year: number;
+    nhs_period_start: string | null; nhs_period_end: string | null;
   };
   const entry = rowTo<EntryRow>(result.rows[0]);
 
@@ -74,7 +75,23 @@ export async function GET(req: NextRequest) {
   doc.setFont("helvetica", "bold");
   doc.text(formatCurrency(calc.netPay), pageWidth - 25, y + 15, { align: "right" });
 
-  y += 32;
+  // NHS Period Banner (for NHS dentists)
+  if (dentist.is_nhs && entry.nhs_period_start && entry.nhs_period_end) {
+    y += 30;
+    doc.setFillColor(59, 130, 246); // Blue
+    doc.roundedRect(15, y, pageWidth - 30, 12, 2, 2, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    const nhsStart = new Date(entry.nhs_period_start + "T00:00:00");
+    const nhsEnd = new Date(entry.nhs_period_end + "T00:00:00");
+    const formatDate = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    doc.text(`NHS Period: ${formatDate(nhsStart)} - ${formatDate(nhsEnd)}`, pageWidth / 2, y + 8, { align: "center" });
+    y += 15;
+  } else {
+    y += 32;
+  }
+
   doc.setTextColor(50, 50, 50);
   doc.setFontSize(13);
   doc.setFont("helvetica", "bold");
