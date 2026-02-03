@@ -20,18 +20,23 @@ function extractNhsPeriodDates(text: string): NhsPeriodExtraction {
   const result: NhsPeriodExtraction = {};
 
   // Common patterns in NHS statements:
+  // "Activity for January (18/12/2025 - 20/01/2026)"
   // "Period: 01/01/2026 - 31/01/2026"
   // "Statement Period: 1 January 2026 to 31 January 2026"
   // "From: 01/01/2026 To: 31/01/2026"
   // "Schedule Period 1st January 2026 - 31st January 2026"
 
-  // Pattern 1: DD/MM/YYYY - DD/MM/YYYY
-  const dateRangePattern1 = /(\d{1,2}\/\d{1,2}\/\d{4})\s*[-–to]+\s*(\d{1,2}\/\d{1,2}\/\d{4})/i;
+  console.log("[NHS] Extracting period dates from text preview:", text.substring(0, 500));
+
+  // Pattern 1: DD/MM/YYYY - DD/MM/YYYY (possibly in parentheses)
+  // Matches: "(18/12/2025 - 20/01/2026)" or "18/12/2025 - 20/01/2026"
+  const dateRangePattern1 = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s*[-–]\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i;
   const match1 = text.match(dateRangePattern1);
   if (match1) {
     const [, start, end] = match1;
     result.periodStart = convertToISODate(start);
     result.periodEnd = convertToISODate(end);
+    console.log(`[NHS] Found period dates (pattern 1): ${start} to ${end} -> ${result.periodStart} to ${result.periodEnd}`);
     return result;
   }
 
@@ -63,11 +68,17 @@ function extractNhsPeriodDates(text: string): NhsPeriodExtraction {
   return result;
 }
 
-// Convert DD/MM/YYYY to YYYY-MM-DD
+// Convert DD/MM/YYYY or DD/MM/YY to YYYY-MM-DD
 function convertToISODate(dateStr: string): string {
   const parts = dateStr.split("/");
   if (parts.length === 3) {
-    const [day, month, year] = parts;
+    const [day, month, yearStr] = parts;
+    // Handle 2-digit years (assume 20xx for years 00-99)
+    let year = yearStr;
+    if (yearStr.length === 2) {
+      const yearNum = parseInt(yearStr, 10);
+      year = yearNum >= 50 ? `19${yearStr}` : `20${yearStr}`;
+    }
     return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
   }
   return dateStr;
@@ -92,84 +103,87 @@ function parseEnglishDate(dateStr: string): string {
   return dateStr;
 }
 
-// Extract UDAs from NHS statement text for dentists from database
+// Extract UDAs from NHS Activity Statement text
+// Format: "Units of Dental Activity per Clinician" section with performer numbers
+// Each clinician has: "PERFORMER_NUM NAME" followed by "Current Financial Year YYYY/YY: VALUE"
 function extractUdasFromText(text: string, nhsDentists: Dentist[]): UdaExtraction[] {
   const results: UdaExtraction[] = [];
-  const lines = text.split("\n");
+  const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
 
-  console.log("[NHS] Extracting UDAs from text, searching for dentists:", nhsDentists.map(d => d.name));
+  console.log("[NHS] Extracting UDAs from text, searching for dentists:", nhsDentists.map(d => `${d.name} (${d.performer_number})`));
+  console.log("[NHS] Text preview (first 1000 chars):", text.substring(0, 1000));
 
+  // Method 1: Parse NHS Activity Statement format (performer number based)
+  // Look for sections like:
+  // "701874 M AHMAD"
+  // "Current Financial Year 2025/26    232.40"
   for (const dentist of nhsDentists) {
-    // Build search patterns for this dentist
-    const namePatterns = [
-      dentist.name.toLowerCase(),
-      dentist.name.split(" ").reverse().join(" ").toLowerCase(), // "Throw Peter"
-      dentist.name.split(" ").map(n => n[0]).join("").toLowerCase(), // Initials
-    ];
-
-    if (dentist.performer_number) {
-      namePatterns.push(dentist.performer_number);
-    }
+    if (!dentist.performer_number) continue;
 
     let foundUdas = 0;
-    let foundLine = "";
+    const perfNum = dentist.performer_number;
 
-    // Search line by line
+    // Find the line containing this performer number
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].toLowerCase();
-      const originalLine = lines[i];
+      const line = lines[i];
 
-      // Check if this line contains the dentist
-      const hasMatch = namePatterns.some(pattern => pattern && line.includes(pattern));
+      // Check if line starts with or contains the performer number
+      if (line.includes(perfNum)) {
+        console.log(`[NHS] Found performer ${perfNum} (${dentist.name}) on line ${i}: "${line}"`);
 
-      if (hasMatch) {
-        console.log(`[NHS] Found match for ${dentist.name} on line: ${originalLine.substring(0, 100)}`);
+        // Look at subsequent lines for "Current Financial Year" value
+        for (let j = 1; j <= 5 && i + j < lines.length; j++) {
+          const nextLine = lines[i + j];
 
-        // Look at this line and following lines for UDA values
-        const searchLines = [originalLine];
-        for (let j = 1; j <= 3 && i + j < lines.length; j++) {
-          searchLines.push(lines[i + j]);
-        }
-
-        const searchText = searchLines.join(" ");
-
-        // Try different patterns to find UDA values
-
-        // Pattern 1: Look for "UDA" near a number
-        const udaPattern = /(\d+(?:\.\d+)?)\s*(?:UDA|uda)/i;
-        const udaMatch = searchText.match(udaPattern);
-        if (udaMatch) {
-          const num = parseFloat(udaMatch[1]);
-          if (num >= 0.1 && num <= 5000) {
-            foundUdas = num;
-            foundLine = searchText;
+          // Check if we hit another performer number (next clinician section)
+          if (/^\d{5,6}\s+[A-Z]/.test(nextLine)) {
+            console.log(`[NHS] Hit next clinician at line ${i + j}, stopping search for ${dentist.name}`);
+            break;
           }
-        }
 
-        // Pattern 2: Look for numbers after performer number (table format)
-        if (!foundUdas && dentist.performer_number) {
-          const perfPattern = new RegExp(dentist.performer_number + "[\\s,]+(\\d+(?:\\.\\d+)?)", "i");
-          const perfMatch = searchText.match(perfPattern);
-          if (perfMatch) {
-            const num = parseFloat(perfMatch[1]);
-            if (num >= 0.1 && num <= 5000) {
-              foundUdas = num;
-              foundLine = searchText;
-            }
-          }
-        }
+          // Look for "Current Financial Year" line with the UDA value
+          if (/current\s+financial\s+year/i.test(nextLine)) {
+            console.log(`[NHS] Found Current Financial Year line: "${nextLine}"`);
 
-        // Pattern 3: Look for decimal numbers in a reasonable range on the same line
-        if (!foundUdas) {
-          const numbers = searchText.match(/\d+\.\d{1,2}/g);
-          if (numbers) {
-            for (const numStr of numbers) {
+            // Case 1: Value is on the same line (format: "Current Financial Year 2025/26    232.40")
+            // Look for a decimal number that's NOT part of the year pattern (2025/26)
+            const sameLineMatch = nextLine.match(/\s(\d{1,3}(?:,\d{3})*\.\d{1,2})\s*$/);
+            if (sameLineMatch) {
+              const numStr = sameLineMatch[1].replace(/,/g, "");
               const num = parseFloat(numStr);
-              // UDAs are typically between 0.1 and 500 for a month
-              if (num >= 0.1 && num <= 500 && !searchText.includes(`£${numStr}`)) {
+              if (num >= 0 && num <= 10000) {
                 foundUdas = num;
-                foundLine = searchText;
+                console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name} from same line: "${nextLine}"`);
                 break;
+              }
+            }
+
+            // Case 2: Value is on the NEXT line (PDF text might split lines)
+            if (!foundUdas && i + j + 1 < lines.length) {
+              const valueLine = lines[i + j + 1];
+              // Value line should be just a number (possibly with commas)
+              const nextLineMatch = valueLine.match(/^(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+\.\d{1,2})$/);
+              if (nextLineMatch) {
+                const numStr = nextLineMatch[1].replace(/,/g, "");
+                const num = parseFloat(numStr);
+                if (num >= 0 && num <= 10000) {
+                  foundUdas = num;
+                  console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name} from next line: "${valueLine}"`);
+                  break;
+                }
+              }
+            }
+
+            // Case 3: Fallback - find any decimal number on the line
+            if (!foundUdas) {
+              const anyNumberMatch = nextLine.match(/(\d+\.\d{1,2})/);
+              if (anyNumberMatch) {
+                const num = parseFloat(anyNumberMatch[1]);
+                if (num >= 0.1 && num <= 10000) {
+                  foundUdas = num;
+                  console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name} (fallback) from: "${nextLine}"`);
+                  break;
+                }
               }
             }
           }
@@ -180,7 +194,67 @@ function extractUdasFromText(text: string, nhsDentists: Dentist[]): UdaExtractio
     }
 
     if (foundUdas > 0) {
-      console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name}`);
+      results.push({
+        dentistName: dentist.name,
+        performerNumber: perfNum,
+        udas: foundUdas,
+        udaRate: dentist.uda_rate,
+        nhsIncome: Math.round(foundUdas * dentist.uda_rate * 100) / 100,
+      });
+    } else {
+      console.log(`[NHS] No UDAs found for ${dentist.name} (${perfNum})`);
+    }
+  }
+
+  // Method 2: Fallback - search by name patterns if performer number not found
+  for (const dentist of nhsDentists) {
+    // Skip if already found via performer number
+    if (results.some(r => r.dentistName === dentist.name)) continue;
+
+    const nameParts = dentist.name.toLowerCase().split(" ");
+    const lastName = nameParts[nameParts.length - 1];
+    const firstInitial = nameParts[0][0];
+
+    // Search patterns: "KAPOOR", "M AHMAD", "PE THROW"
+    const patterns = [
+      lastName.toUpperCase(),
+      `${firstInitial} ${lastName}`.toUpperCase(),
+      `${firstInitial.toUpperCase()}${firstInitial.toUpperCase()} ${lastName.toUpperCase()}`, // PE THROW pattern
+    ];
+
+    let foundUdas = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].toUpperCase();
+
+      // Check if line contains any name pattern (typically after a performer number)
+      const hasNameMatch = patterns.some(p => line.includes(p));
+      const hasPerformerFormat = /^\d{5,6}\s+/.test(line);
+
+      if (hasNameMatch && hasPerformerFormat) {
+        console.log(`[NHS] Found name match for ${dentist.name} on line: "${lines[i]}"`);
+
+        // Look for Current Financial Year value in subsequent lines
+        for (let j = 1; j <= 5 && i + j < lines.length; j++) {
+          const nextLine = lines[i + j];
+
+          if (/^\d{5,6}\s+[A-Z]/.test(nextLine)) break;
+
+          if (/current\s+financial\s+year/i.test(nextLine)) {
+            const numberMatch = nextLine.match(/(\d+\.\d{1,2})\s*$/);
+            if (numberMatch) {
+              foundUdas = parseFloat(numberMatch[1]);
+              console.log(`[NHS] Extracted ${foundUdas} UDAs for ${dentist.name} (by name)`);
+              break;
+            }
+          }
+        }
+
+        if (foundUdas > 0) break;
+      }
+    }
+
+    if (foundUdas > 0) {
       results.push({
         dentistName: dentist.name,
         performerNumber: dentist.performer_number || undefined,
@@ -191,6 +265,7 @@ function extractUdasFromText(text: string, nhsDentists: Dentist[]): UdaExtractio
     }
   }
 
+  console.log(`[NHS] Total extractions: ${results.length}`, results);
   return results;
 }
 
