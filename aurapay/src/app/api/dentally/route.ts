@@ -99,7 +99,21 @@ interface DentallyInvoice {
   payment_explanation?: { links?: { payments?: string } };
 }
 
-// Patient record with payment status
+// Dentally appointment interface
+interface DentallyAppointment {
+  id: number | string;
+  patient_id: number | string;
+  user_id?: number | string;
+  practitioner_id?: number | string;
+  starts_at?: string;
+  finish_at?: string;
+  duration?: number; // Duration in minutes
+  treatment_description?: string;
+  reason?: string;
+  state?: string;
+}
+
+// Patient record with payment status and duration
 interface PatientRecord {
   name: string;
   date: string;
@@ -112,6 +126,21 @@ interface PatientRecord {
   patientId: string;
   flagged?: boolean;
   flagReason?: string;
+  durationMins?: number;
+  treatment?: string;
+  hourlyRate?: number; // £/hour for this appointment
+}
+
+// Analytics data per dentist
+interface DentistAnalytics {
+  totalChairMins: number;
+  totalPatients: number;
+  grossPerHour: number;
+  netPerHour: number;
+  avgAppointmentMins: number;
+  utilizationPercent: number; // Based on assumed available hours
+  topPatientsByHourlyRate: Array<{ name: string; amount: number; durationMins: number; hourlyRate: number }>;
+  topTreatmentsByHourlyRate: Array<{ treatment: string; totalAmount: number; totalMins: number; hourlyRate: number; count: number }>;
 }
 
 // Discrepancy record
@@ -172,6 +201,176 @@ async function fetchAllPages(baseUrl: string, token: string): Promise<DentallyIn
 
   console.log(`[Dentally] Finished fetching. Total: ${all.length} invoices across ${page} pages.`);
   return all;
+}
+
+// Fetch appointments from Dentally
+async function fetchAppointments(startDate: string, endDate: string, token: string): Promise<DentallyAppointment[]> {
+  const all: DentallyAppointment[] = [];
+  let page = 1;
+  const perPage = 100;
+  const maxPages = 50;
+
+  console.log(`[Dentally] Fetching appointments from ${startDate} to ${endDate}`);
+
+  while (page <= maxPages) {
+    // Dentally appointments API - try different parameter names
+    const url = `${DENTALLY_API}/appointments?site_id=${SITE_ID}&start_date=${startDate}&end_date=${endDate}&page=${page}&per_page=${perPage}`;
+    console.log(`[Dentally] Appointments page ${page}: ${url.substring(0, 100)}...`);
+
+    try {
+      const fetchRes = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+      });
+
+      if (!fetchRes.ok) {
+        // Try alternative API path if first fails
+        if (page === 1) {
+          console.log(`[Dentally] Appointments API returned ${fetchRes.status}, trying alternative path...`);
+          // Try /calendar/appointments endpoint
+          const altUrl = `${DENTALLY_API}/calendar/appointments?site_id=${SITE_ID}&from=${startDate}&to=${endDate}`;
+          const altRes = await fetch(altUrl, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+          });
+          if (altRes.ok) {
+            const altData = await altRes.json();
+            const appointments = altData.appointments || altData.data || [];
+            all.push(...appointments);
+            console.log(`[Dentally] Got ${appointments.length} appointments from alternative endpoint`);
+          }
+        }
+        break;
+      }
+
+      const data = await fetchRes.json();
+      const appointments = data.appointments || data.data || [];
+
+      if (appointments.length === 0) break;
+
+      all.push(...appointments);
+      console.log(`[Dentally] Page ${page}: Got ${appointments.length} appointments (total: ${all.length})`);
+
+      if (appointments.length < perPage) break;
+      page++;
+    } catch (e) {
+      console.error(`[Dentally] Error fetching appointments:`, e);
+      break;
+    }
+  }
+
+  console.log(`[Dentally] Total appointments fetched: ${all.length}`);
+  return all;
+}
+
+// Calculate appointment duration in minutes
+function getAppointmentDuration(apt: DentallyAppointment): number {
+  // If duration is provided directly
+  if (apt.duration && apt.duration > 0) return apt.duration;
+
+  // Calculate from starts_at and finish_at
+  if (apt.starts_at && apt.finish_at) {
+    const start = new Date(apt.starts_at);
+    const end = new Date(apt.finish_at);
+    const mins = Math.round((end.getTime() - start.getTime()) / 60000);
+    if (mins > 0 && mins < 480) return mins; // Sanity check: max 8 hours
+  }
+
+  return 0; // Unknown duration
+}
+
+// Build appointment lookup map by patient_id and date
+function buildAppointmentMap(appointments: DentallyAppointment[]): Map<string, DentallyAppointment[]> {
+  const map = new Map<string, DentallyAppointment[]>();
+
+  for (const apt of appointments) {
+    const patientId = String(apt.patient_id);
+    const dateStr = apt.starts_at?.substring(0, 10) || "";
+    if (!patientId || !dateStr) continue;
+
+    const key = `${patientId}_${dateStr}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(apt);
+  }
+
+  return map;
+}
+
+// Calculate analytics for a dentist
+function calculateDentistAnalytics(
+  patients: PatientRecord[],
+  splitPercentage: number,
+  weeklyHours: number = 40
+): DentistAnalytics {
+  const patientsWithDuration = patients.filter(p => p.durationMins && p.durationMins > 0);
+  const totalChairMins = patientsWithDuration.reduce((sum, p) => sum + (p.durationMins || 0), 0);
+  const totalAmount = patients.reduce((sum, p) => sum + p.amount, 0);
+
+  // Calculate hourly rates
+  const totalHours = totalChairMins / 60;
+  const grossPerHour = totalHours > 0 ? totalAmount / totalHours : 0;
+  const netPerHour = totalHours > 0 ? (totalAmount * (splitPercentage / 100)) / totalHours : 0;
+
+  // Average appointment length
+  const avgAppointmentMins = patientsWithDuration.length > 0
+    ? totalChairMins / patientsWithDuration.length
+    : 0;
+
+  // Utilization: assume ~4.3 weeks per month, calculate available hours
+  const monthlyAvailableHours = weeklyHours * 4.3;
+  const utilizationPercent = monthlyAvailableHours > 0 ? (totalHours / monthlyAvailableHours) * 100 : 0;
+
+  // Top patients by hourly rate (only those with duration data)
+  const topPatientsByHourlyRate = patientsWithDuration
+    .map(p => ({
+      name: p.name,
+      amount: p.amount,
+      durationMins: p.durationMins || 0,
+      hourlyRate: p.hourlyRate || 0,
+    }))
+    .filter(p => p.hourlyRate > 0)
+    .sort((a, b) => b.hourlyRate - a.hourlyRate)
+    .slice(0, 10);
+
+  // Top treatments by hourly rate
+  const treatmentMap = new Map<string, { totalAmount: number; totalMins: number; count: number }>();
+  for (const p of patientsWithDuration) {
+    if (!p.treatment || !p.durationMins) continue;
+    const treatment = p.treatment.toLowerCase().trim();
+    const existing = treatmentMap.get(treatment) || { totalAmount: 0, totalMins: 0, count: 0 };
+    existing.totalAmount += p.amount;
+    existing.totalMins += p.durationMins;
+    existing.count++;
+    treatmentMap.set(treatment, existing);
+  }
+
+  const topTreatmentsByHourlyRate = Array.from(treatmentMap.entries())
+    .map(([treatment, data]) => ({
+      treatment,
+      totalAmount: data.totalAmount,
+      totalMins: data.totalMins,
+      hourlyRate: data.totalMins > 0 ? (data.totalAmount / (data.totalMins / 60)) : 0,
+      count: data.count,
+    }))
+    .sort((a, b) => b.hourlyRate - a.hourlyRate)
+    .slice(0, 10);
+
+  return {
+    totalChairMins,
+    totalPatients: patients.length,
+    grossPerHour: Math.round(grossPerHour * 100) / 100,
+    netPerHour: Math.round(netPerHour * 100) / 100,
+    avgAppointmentMins: Math.round(avgAppointmentMins),
+    utilizationPercent: Math.round(utilizationPercent * 10) / 10,
+    topPatientsByHourlyRate,
+    topTreatmentsByHourlyRate,
+  };
 }
 
 // Batch fetch patient names for efficiency
@@ -363,6 +562,11 @@ export async function POST(req: NextRequest) {
     const invoices = allInvoices.filter(inv => isInvoiceInDateRange(inv, startDate, endDate));
     console.log(`[Dentally] Invoices after client-side verification: ${invoices.length}`);
 
+    // Fetch appointments for duration data
+    const appointments = await fetchAppointments(startDate, endDate, token);
+    const appointmentMap = buildAppointmentMap(appointments);
+    console.log(`[Dentally] Built appointment map with ${appointmentMap.size} patient-date combinations`);
+
     // Track data per dentist
     type DentistData = {
       patients: PatientRecord[];
@@ -371,6 +575,7 @@ export async function POST(req: NextRequest) {
       totalPaid: number;
       totalOutstanding: number;
       financeCount: number;
+      analytics?: DentistAnalytics;
     };
 
     const dentistTotals = new Map<number, DentistData>();
@@ -473,6 +678,31 @@ export async function POST(req: NextRequest) {
           data.financeCount++;
         }
 
+        // Look up appointment for duration and treatment
+        const aptKey = `${patientId}_${invoiceDate}`;
+        const patientAppointments = appointmentMap.get(aptKey) || [];
+        let durationMins = 0;
+        let treatment = "";
+
+        if (patientAppointments.length > 0) {
+          // Sum all appointments for this patient on this date
+          for (const apt of patientAppointments) {
+            durationMins += getAppointmentDuration(apt);
+            if (!treatment && (apt.treatment_description || apt.reason)) {
+              treatment = apt.treatment_description || apt.reason || "";
+            }
+          }
+        }
+
+        // Also try to get treatment from invoice items
+        if (!treatment && inv.invoice_items && inv.invoice_items.length > 0) {
+          const mainItem = inv.invoice_items.find(item => !isNhsItem(item) && !isCbctItem(item));
+          if (mainItem?.name) treatment = mainItem.name;
+        }
+
+        // Calculate hourly rate if we have duration
+        const hourlyRate = durationMins > 0 ? (privateAmount / (durationMins / 60)) : 0;
+
         // Create patient record
         const patientRecord: PatientRecord = {
           name: patientName,
@@ -484,6 +714,9 @@ export async function POST(req: NextRequest) {
           finance: isFinance,
           invoiceId: String(inv.id),
           patientId,
+          durationMins: durationMins > 0 ? durationMins : undefined,
+          treatment: treatment || undefined,
+          hourlyRate: hourlyRate > 0 ? Math.round(hourlyRate * 100) / 100 : undefined,
         };
 
         // Flag if not fully paid OR if finance (for review)
@@ -521,6 +754,13 @@ export async function POST(req: NextRequest) {
 
       // Sort patients by date
       data.patients.sort((a, b) => a.date.localeCompare(b.date));
+
+      // Calculate analytics for this dentist
+      const dentist = dentists.find(d => d.id === dentistId);
+      if (dentist) {
+        const weeklyHours = (dentist as Dentist & { weekly_hours?: number }).weekly_hours || 40;
+        data.analytics = calculateDentistAnalytics(data.patients, dentist.split_percentage, weeklyHours);
+      }
     }
 
     console.log(`[Dentally] Processed ${processedCount} invoices, ${flaggedCount} flagged for review, ${financeCount} finance payments`);
@@ -533,13 +773,16 @@ export async function POST(req: NextRequest) {
         args: [period_id, dentistId],
       });
 
-      // Prepare patient data for storage (include payment status)
-      const patientsForStorage = data.patients.map(({ name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason, invoiceId, patientId }) => ({
-        name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason, invoiceId, patientId
+      // Prepare patient data for storage (include payment status, duration, treatment, hourly rate)
+      const patientsForStorage = data.patients.map(({ name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason, invoiceId, patientId, durationMins, treatment, hourlyRate }) => ({
+        name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason, invoiceId, patientId, durationMins, treatment, hourlyRate
       }));
 
       // Store discrepancies as JSON
       const discrepanciesJson = JSON.stringify(data.discrepancies);
+
+      // Store analytics as JSON
+      const analyticsJson = JSON.stringify(data.analytics || {});
 
       if (entryResult.rows.length > 0) {
         await db.execute({
@@ -547,19 +790,22 @@ export async function POST(req: NextRequest) {
             gross_private = ?,
             private_patients_json = ?,
             discrepancies_json = ?,
+            analytics_json = ?,
             updated_at = datetime('now')
           WHERE period_id = ? AND dentist_id = ?`,
           args: [
             Math.round(data.totalPaid * 100) / 100, // Only count PAID amount as gross
             JSON.stringify(patientsForStorage),
             discrepanciesJson,
+            analyticsJson,
             period_id,
             dentistId,
           ],
         });
         updated++;
         const dentistName = dentists.find(d => d.id === dentistId)?.name;
-        console.log(`[Dentally] Updated ${dentistName}: £${data.totalPaid.toFixed(2)} paid, £${data.totalOutstanding.toFixed(2)} outstanding (${data.patients.length} patients, ${data.discrepancies.length} flagged, ${data.financeCount} finance)`);
+        const analytics = data.analytics;
+        console.log(`[Dentally] Updated ${dentistName}: £${data.totalPaid.toFixed(2)} paid, ${data.patients.length} patients, ${analytics?.totalChairMins || 0} mins chair time, £${analytics?.grossPerHour || 0}/hr gross`);
       }
     }
 
@@ -587,7 +833,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Build summary
+    // Build summary with analytics
     const summary: Record<string, {
       invoiced: number;
       paid: number;
@@ -595,6 +841,10 @@ export async function POST(req: NextRequest) {
       patients: number;
       flagged: number;
       finance: number;
+      chairMins: number;
+      grossPerHour: number;
+      netPerHour: number;
+      utilization: number;
     }> = {};
 
     for (const [dentistId, data] of dentistTotals) {
@@ -607,6 +857,10 @@ export async function POST(req: NextRequest) {
           patients: data.patients.length,
           flagged: data.discrepancies.length,
           finance: data.financeCount,
+          chairMins: data.analytics?.totalChairMins || 0,
+          grossPerHour: data.analytics?.grossPerHour || 0,
+          netPerHour: data.analytics?.netPerHour || 0,
+          utilization: data.analytics?.utilizationPercent || 0,
         };
       }
     }

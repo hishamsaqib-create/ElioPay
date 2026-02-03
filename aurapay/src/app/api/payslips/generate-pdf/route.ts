@@ -123,19 +123,127 @@ export async function GET(req: NextRequest) {
     y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
   }
 
-  const patients = JSON.parse(String(entry.private_patients_json) || "[]");
+  // Parse analytics
+  interface Analytics {
+    totalChairMins: number;
+    grossPerHour: number;
+    netPerHour: number;
+    utilizationPercent: number;
+    avgAppointmentMins: number;
+    topPatientsByHourlyRate: Array<{ name: string; amount: number; durationMins: number; hourlyRate: number }>;
+    topTreatmentsByHourlyRate: Array<{ treatment: string; totalAmount: number; totalMins: number; hourlyRate: number; count: number }>;
+  }
+  const analytics: Analytics | null = entry.analytics_json ? JSON.parse(String(entry.analytics_json)) : null;
+
+  // Performance Analytics Section
+  if (analytics && analytics.totalChairMins > 0) {
+    if (y > 200) { doc.addPage(); y = 20; }
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Performance Analytics", 15, y);
+    y += 3;
+
+    const totalHours = (analytics.totalChairMins / 60).toFixed(1);
+    const analyticsData: string[][] = [
+      ["Chair Time", `${totalHours} hours (${analytics.totalChairMins} mins)`],
+      ["Gross £/Hour", formatCurrency(analytics.grossPerHour)],
+      ["Net £/Hour", formatCurrency(analytics.netPerHour)],
+      ["Utilization", `${analytics.utilizationPercent}%`],
+      ["Avg Appointment", `${analytics.avgAppointmentMins} mins`],
+    ];
+
+    autoTable(doc, {
+      startY: y, head: [["Metric", "Value"]], body: analyticsData, theme: "striped",
+      headStyles: { fillColor: [99, 102, 241], fontSize: 9 }, styles: { fontSize: 9, cellPadding: 3 },
+      columnStyles: { 1: { halign: "right" } }, margin: { left: 15, right: 15 },
+    });
+    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
+
+    // Top Performers
+    if (analytics.topPatientsByHourlyRate.length > 0 || analytics.topTreatmentsByHourlyRate.length > 0) {
+      if (y > 220) { doc.addPage(); y = 20; }
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text("Top Performers", 15, y);
+      y += 5;
+
+      // Side by side tables
+      const leftWidth = (pageWidth - 40) / 2;
+
+      if (analytics.topPatientsByHourlyRate.length > 0) {
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.text("By Patient (£/hour)", 15, y);
+        autoTable(doc, {
+          startY: y + 2,
+          head: [["Patient", "£/hr"]],
+          body: analytics.topPatientsByHourlyRate.slice(0, 5).map(p => [p.name.substring(0, 20), formatCurrency(p.hourlyRate)]),
+          theme: "plain",
+          headStyles: { fillColor: [229, 231, 235], textColor: [55, 65, 81], fontSize: 7 },
+          styles: { fontSize: 7, cellPadding: 1.5 },
+          columnStyles: { 1: { halign: "right" } },
+          margin: { left: 15, right: pageWidth - 15 - leftWidth },
+          tableWidth: leftWidth,
+        });
+      }
+
+      if (analytics.topTreatmentsByHourlyRate.length > 0) {
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.text("By Treatment (£/hour)", 15 + leftWidth + 10, y);
+        autoTable(doc, {
+          startY: y + 2,
+          head: [["Treatment", "£/hr"]],
+          body: analytics.topTreatmentsByHourlyRate.slice(0, 5).map(t => [t.treatment.substring(0, 20), formatCurrency(t.hourlyRate)]),
+          theme: "plain",
+          headStyles: { fillColor: [229, 231, 235], textColor: [55, 65, 81], fontSize: 7 },
+          styles: { fontSize: 7, cellPadding: 1.5 },
+          columnStyles: { 1: { halign: "right" } },
+          margin: { left: 15 + leftWidth + 10, right: 15 },
+          tableWidth: leftWidth,
+        });
+      }
+      y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
+    }
+  }
+
+  // Patient breakdown with duration and hourly rate
+  interface PatientData { name: string; date: string; amount: number; finance: boolean; durationMins?: number; hourlyRate?: number }
+  const patients: PatientData[] = JSON.parse(String(entry.private_patients_json) || "[]");
   if (patients.length > 0) {
-    if (y > 230) { doc.addPage(); y = 20; }
+    if (y > 200) { doc.addPage(); y = 20; }
     doc.setFontSize(13);
     doc.setFont("helvetica", "bold");
     doc.text("Private Patient Breakdown", 15, y);
     y += 3;
-    autoTable(doc, {
-      startY: y, head: [["Patient", "Date", "Amount", "Finance"]],
-      body: patients.map((p: { name: string; date: string; amount: number; finance: boolean }) => [p.name, p.date, formatCurrency(p.amount), p.finance ? "Yes" : ""]),
-      theme: "striped", headStyles: { fillColor: [66, 99, 235], fontSize: 8 },
-      styles: { fontSize: 8, cellPadding: 2 }, columnStyles: { 2: { halign: "right" } }, margin: { left: 15, right: 15 },
-    });
+
+    // Check if we have duration data
+    const hasDurationData = patients.some(p => p.durationMins && p.durationMins > 0);
+
+    if (hasDurationData) {
+      autoTable(doc, {
+        startY: y, head: [["Patient", "Date", "Amount", "Mins", "£/hr", "Fin"]],
+        body: patients.map((p) => [
+          p.name,
+          p.date,
+          formatCurrency(p.amount),
+          p.durationMins ? String(p.durationMins) : "-",
+          p.hourlyRate ? formatCurrency(p.hourlyRate) : "-",
+          p.finance ? "Y" : ""
+        ]),
+        theme: "striped", headStyles: { fillColor: [66, 99, 235], fontSize: 7 },
+        styles: { fontSize: 7, cellPadding: 1.5 },
+        columnStyles: { 2: { halign: "right" }, 3: { halign: "center" }, 4: { halign: "right" } },
+        margin: { left: 15, right: 15 },
+      });
+    } else {
+      autoTable(doc, {
+        startY: y, head: [["Patient", "Date", "Amount", "Finance"]],
+        body: patients.map((p) => [p.name, p.date, formatCurrency(p.amount), p.finance ? "Yes" : ""]),
+        theme: "striped", headStyles: { fillColor: [66, 99, 235], fontSize: 8 },
+        styles: { fontSize: 8, cellPadding: 2 }, columnStyles: { 2: { halign: "right" } }, margin: { left: 15, right: 15 },
+      });
+    }
   }
 
   const pageCount = doc.getNumberOfPages();

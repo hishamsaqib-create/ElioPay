@@ -16,6 +16,18 @@ interface PrivatePatient {
   flagged?: boolean; flagReason?: string;
   financeFee?: number; invoiceId?: string; patientId?: string;
   resolved?: boolean; resolvedNote?: string;
+  durationMins?: number; treatment?: string; hourlyRate?: number;
+}
+
+interface Analytics {
+  totalChairMins: number;
+  totalPatients: number;
+  grossPerHour: number;
+  netPerHour: number;
+  avgAppointmentMins: number;
+  utilizationPercent: number;
+  topPatientsByHourlyRate: Array<{ name: string; amount: number; durationMins: number; hourlyRate: number }>;
+  topTreatmentsByHourlyRate: Array<{ treatment: string; totalAmount: number; totalMins: number; hourlyRate: number; count: number }>;
 }
 interface Discrepancy {
   type: "invoiced_not_paid" | "partial_payment" | "log_mismatch" | "in_log_not_system" | "in_system_not_log";
@@ -47,7 +59,7 @@ interface Entry {
   gross_private: number; nhs_udas: number; lab_bills_json: string;
   finance_fees: number; therapy_minutes: number; therapy_rate: number;
   adjustments_json: string; notes: string; private_patients_json: string;
-  discrepancies_json?: string; dentist_log_json?: string;
+  discrepancies_json?: string; dentist_log_json?: string; analytics_json?: string;
   calculation: Calculation; dentist: Dentist;
   dentist_name: string; dentist_email: string | null;
 }
@@ -695,6 +707,98 @@ export default function PeriodDetailPage() {
                       </div>
                     </div>
 
+                    {/* Performance Analytics */}
+                    {(() => {
+                      const analytics: Analytics | null = entry.analytics_json ? JSON.parse(entry.analytics_json) : null;
+                      if (!analytics || analytics.totalChairMins === 0) return null;
+
+                      const totalHours = analytics.totalChairMins / 60;
+                      const patientsWithDuration = patients.filter(p => p.durationMins && p.durationMins > 0);
+
+                      return (
+                        <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-4 space-y-4">
+                          <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                            </svg>
+                            Performance Analytics
+                          </h4>
+
+                          {/* Key Metrics */}
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                            <div className="bg-white/70 rounded-lg p-3 text-center">
+                              <p className="text-[10px] text-indigo-600 font-medium uppercase">Chair Time</p>
+                              <p className="text-lg font-bold text-indigo-900">{totalHours.toFixed(1)}h</p>
+                              <p className="text-[10px] text-text-muted">{analytics.totalChairMins} mins</p>
+                            </div>
+                            <div className="bg-white/70 rounded-lg p-3 text-center">
+                              <p className="text-[10px] text-indigo-600 font-medium uppercase">Utilization</p>
+                              <p className="text-lg font-bold text-indigo-900">{analytics.utilizationPercent}%</p>
+                              <p className="text-[10px] text-text-muted">of available</p>
+                            </div>
+                            <div className="bg-white/70 rounded-lg p-3 text-center">
+                              <p className="text-[10px] text-green-600 font-medium uppercase">Gross £/Hour</p>
+                              <p className="text-lg font-bold text-green-700">{fmt(analytics.grossPerHour)}</p>
+                              <p className="text-[10px] text-text-muted">per hour</p>
+                            </div>
+                            <div className="bg-white/70 rounded-lg p-3 text-center">
+                              <p className="text-[10px] text-emerald-600 font-medium uppercase">Net £/Hour</p>
+                              <p className="text-lg font-bold text-emerald-700">{fmt(analytics.netPerHour)}</p>
+                              <p className="text-[10px] text-text-muted">{c.splitPercentage}% split</p>
+                            </div>
+                            <div className="bg-white/70 rounded-lg p-3 text-center">
+                              <p className="text-[10px] text-indigo-600 font-medium uppercase">Avg Appt</p>
+                              <p className="text-lg font-bold text-indigo-900">{analytics.avgAppointmentMins}m</p>
+                              <p className="text-[10px] text-text-muted">{patientsWithDuration.length} appts</p>
+                            </div>
+                          </div>
+
+                          {/* Top Performers */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {/* Top Patients by £/hour */}
+                            {analytics.topPatientsByHourlyRate.length > 0 && (
+                              <div className="bg-white/60 rounded-lg p-3">
+                                <h5 className="text-xs font-semibold text-indigo-700 mb-2 flex items-center gap-1">
+                                  <span className="text-yellow-500">★</span> Top Patients by £/hour
+                                </h5>
+                                <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                                  {analytics.topPatientsByHourlyRate.slice(0, 5).map((p, i) => (
+                                    <div key={i} className="flex items-center justify-between text-xs">
+                                      <span className="text-text truncate max-w-[120px]">{p.name}</span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-text-muted">{p.durationMins}m</span>
+                                        <span className="font-semibold text-green-700">{fmt(p.hourlyRate)}/h</span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Top Treatments by £/hour */}
+                            {analytics.topTreatmentsByHourlyRate.length > 0 && (
+                              <div className="bg-white/60 rounded-lg p-3">
+                                <h5 className="text-xs font-semibold text-indigo-700 mb-2 flex items-center gap-1">
+                                  <span className="text-yellow-500">★</span> Top Treatments by £/hour
+                                </h5>
+                                <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                                  {analytics.topTreatmentsByHourlyRate.slice(0, 5).map((t, i) => (
+                                    <div key={i} className="flex items-center justify-between text-xs">
+                                      <span className="text-text truncate max-w-[120px] capitalize">{t.treatment}</span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-text-muted">×{t.count}</span>
+                                        <span className="font-semibold text-green-700">{fmt(t.hourlyRate)}/h</span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* Editable fields */}
                     <div className="space-y-5">
                       {/* Gross Private & NHS */}
@@ -933,13 +1037,15 @@ export default function PeriodDetailPage() {
                           <p className="text-xs text-text-subtle italic">No individual patients logged. Click &quot;Fetch from Dentally&quot; to auto-import or add manually.</p>
                         ) : (
                           <div className="space-y-1">
-                            <div className="bg-surface-dim rounded-lg overflow-hidden">
+                            <div className="bg-surface-dim rounded-lg overflow-hidden overflow-x-auto">
                               <table className="w-full text-xs">
                                 <thead>
                                   <tr className="border-b border-border">
                                     <th className="text-left px-3 py-2 font-medium text-text-muted">Patient</th>
                                     <th className="text-left px-3 py-2 font-medium text-text-muted">Date</th>
                                     <th className="text-right px-3 py-2 font-medium text-text-muted">Amount</th>
+                                    <th className="text-center px-2 py-2 font-medium text-text-muted">Mins</th>
+                                    <th className="text-right px-2 py-2 font-medium text-text-muted">£/hr</th>
                                     <th className="text-center px-3 py-2 font-medium text-text-muted">Status</th>
                                     <th className="text-center px-3 py-2 font-medium text-text-muted">Finance</th>
                                     <th className="text-right px-3 py-2 font-medium text-text-muted">Fee</th>
@@ -995,6 +1101,16 @@ export default function PeriodDetailPage() {
                                           disabled={isFinalized}
                                           className="w-20 bg-transparent text-xs text-right outline-none disabled:text-text-muted"
                                         />
+                                      </td>
+                                      <td className="px-2 py-1.5 text-center text-text-muted">
+                                        {pt.durationMins ? `${pt.durationMins}` : "-"}
+                                      </td>
+                                      <td className="px-2 py-1.5 text-right">
+                                        {pt.hourlyRate ? (
+                                          <span className={`font-medium ${pt.hourlyRate >= 300 ? "text-green-600" : pt.hourlyRate >= 200 ? "text-blue-600" : "text-text-muted"}`}>
+                                            £{pt.hourlyRate.toFixed(0)}
+                                          </span>
+                                        ) : "-"}
                                       </td>
                                       <td className="px-3 py-1.5 text-center">
                                         {!isFinalized ? (
@@ -1108,6 +1224,16 @@ export default function PeriodDetailPage() {
                                   <tr className="bg-slate-100">
                                     <td className="px-3 py-2 font-semibold text-xs" colSpan={2}>Total ({patients.length} patients)</td>
                                     <td className="px-3 py-2 text-right font-bold text-xs">{fmt(patients.reduce((s, p) => s + p.amount, 0))}</td>
+                                    <td className="px-2 py-2 text-center text-xs text-text-muted">
+                                      {patients.filter(p => p.durationMins).reduce((s, p) => s + (p.durationMins || 0), 0)}m
+                                    </td>
+                                    <td className="px-2 py-2 text-right text-xs text-green-600 font-medium">
+                                      {(() => {
+                                        const totalMins = patients.filter(p => p.durationMins).reduce((s, p) => s + (p.durationMins || 0), 0);
+                                        const totalAmt = patients.reduce((s, p) => s + p.amount, 0);
+                                        return totalMins > 0 ? `£${Math.round(totalAmt / (totalMins / 60))}` : "-";
+                                      })()}
+                                    </td>
                                     <td className="px-3 py-2 text-center text-xs">
                                       <span className="text-green-600">{patients.filter(p => p.status === "paid").length} paid</span>
                                       {patients.filter(p => p.status !== "paid" && p.status).length > 0 && (

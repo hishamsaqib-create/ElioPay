@@ -100,6 +100,8 @@ async function initializeDb(db: Client) {
     "ALTER TABLE pay_periods ADD COLUMN nhs_period_start TEXT",
     "ALTER TABLE pay_periods ADD COLUMN nhs_period_end TEXT",
     "ALTER TABLE payslip_entries ADD COLUMN nhs_period_json TEXT DEFAULT '{}'",
+    "ALTER TABLE payslip_entries ADD COLUMN analytics_json TEXT DEFAULT '{}'",
+    "ALTER TABLE dentists ADD COLUMN weekly_hours REAL DEFAULT 40",
   ];
   for (const sql of migrations) {
     try {
@@ -289,6 +291,7 @@ export interface PayslipEntry {
   private_patients_json: string;
   discrepancies_json: string;
   dentist_log_json: string;
+  analytics_json: string;
   created_at: string;
   updated_at: string;
 }
