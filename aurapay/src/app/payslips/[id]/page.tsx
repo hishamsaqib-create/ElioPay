@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import Shell from "@/components/Shell";
 import {
   Download, Mail, ChevronDown, ChevronUp, Save, CheckCircle2,
-  Plus, Trash2, Lock, Unlock, AlertCircle, Loader2, Undo2, FileSpreadsheet
+  Plus, Trash2, Lock, Unlock, AlertCircle, Loader2, Undo2, FileSpreadsheet, FileText, X
 } from "lucide-react";
 
 interface LabBill { lab_name: string; amount: number; description?: string; }
@@ -78,6 +78,10 @@ export default function PeriodDetailPage() {
   const [logCsv, setLogCsv] = useState("");
   const [importingLog, setImportingLog] = useState(false);
   const [fetchingSheets, setFetchingSheets] = useState(false);
+  const [showNhsUpload, setShowNhsUpload] = useState(false);
+  const [nhsText, setNhsText] = useState("");
+  const [nhsManual, setNhsManual] = useState<Record<string, string>>({});
+  const [processingNhs, setProcessingNhs] = useState(false);
 
   // Undo history - stores previous entry states
   const [undoHistory, setUndoHistory] = useState<Map<number, Entry[]>>(new Map());
@@ -291,6 +295,41 @@ export default function PeriodDetailPage() {
     setFetchingSheets(false);
   }
 
+  async function submitNhsStatement() {
+    setProcessingNhs(true);
+    try {
+      const formData = new FormData();
+      formData.append("period_id", periodId);
+      if (nhsText.trim()) {
+        formData.append("statement_text", nhsText);
+      }
+      if (Object.keys(nhsManual).length > 0) {
+        formData.append("manual_udas", JSON.stringify(nhsManual));
+      }
+
+      const res = await fetch("/api/nhs-statement", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message || "NHS UDAs updated");
+        setShowNhsUpload(false);
+        setNhsText("");
+        setNhsManual({});
+        await loadData();
+      } else {
+        showToast(data.error || "Failed to process NHS statement", "error");
+      }
+    } catch {
+      showToast("Network error", "error");
+    }
+    setProcessingNhs(false);
+  }
+
+  // Get NHS dentists from entries
+  const nhsDentists = entries.filter(e => e.dentist.is_nhs);
+
   if (!period) {
     return <Shell><div className="flex items-center justify-center h-64 text-text-muted">Loading...</div></Shell>;
   }
@@ -349,6 +388,88 @@ export default function PeriodDetailPage() {
             </button>
           </div>
         </div>
+
+        {/* NHS Statement Upload (only show if there are NHS dentists) */}
+        {nhsDentists.length > 0 && !isFinalized && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                  <FileText size={20} className="text-blue-600" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-blue-800">NHS Statement</h3>
+                  <p className="text-xs text-blue-600">Upload or enter NHS UDAs for {nhsDentists.map(e => e.dentist_name).join(", ")}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowNhsUpload(!showNhsUpload)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-700 hover:text-blue-800 bg-blue-100 hover:bg-blue-200 rounded-lg transition"
+              >
+                {showNhsUpload ? <X size={14} /> : <Plus size={14} />}
+                {showNhsUpload ? "Close" : "Enter UDAs"}
+              </button>
+            </div>
+
+            {showNhsUpload && (
+              <div className="mt-4 pt-4 border-t border-blue-200 space-y-4">
+                {/* Manual UDA Entry */}
+                <div>
+                  <label className="block text-xs font-medium text-blue-800 mb-2">Enter UDAs Manually</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {nhsDentists.map(entry => (
+                      <div key={entry.id} className="bg-white rounded-lg p-3 border border-blue-100">
+                        <label className="block text-xs font-medium text-text mb-1">
+                          {entry.dentist_name}
+                          <span className="text-text-muted ml-1">(£{entry.dentist.uda_rate}/UDA)</span>
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="0"
+                          value={nhsManual[entry.dentist_name] || ""}
+                          onChange={(e) => setNhsManual({ ...nhsManual, [entry.dentist_name]: e.target.value })}
+                          className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                        />
+                        {nhsManual[entry.dentist_name] && parseFloat(nhsManual[entry.dentist_name]) > 0 && (
+                          <p className="text-xs text-green-600 mt-1">
+                            = £{(parseFloat(nhsManual[entry.dentist_name]) * entry.dentist.uda_rate).toFixed(2)}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Or paste statement text */}
+                <div>
+                  <label className="block text-xs font-medium text-blue-800 mb-1">
+                    Or Paste NHS Statement Text
+                    <span className="text-blue-600 font-normal ml-1">(optional - will try to auto-extract UDAs)</span>
+                  </label>
+                  <textarea
+                    value={nhsText}
+                    onChange={(e) => setNhsText(e.target.value)}
+                    rows={4}
+                    placeholder="Paste the text content from your NHS statement here..."
+                    className="w-full px-3 py-2 border border-border rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    onClick={submitNhsStatement}
+                    disabled={processingNhs || (Object.keys(nhsManual).length === 0 && !nhsText.trim())}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50"
+                  >
+                    {processingNhs ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    Update NHS UDAs
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Total banner */}
         <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-xl p-6 text-white">
