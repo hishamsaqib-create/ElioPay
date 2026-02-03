@@ -115,10 +115,11 @@ export async function POST(req: NextRequest) {
       if (!inv.paid || inv.balance > 0 || inv.amount <= 0) { skippedUnpaid++; continue; }
 
       // Extract practitioner ID - handle various Dentally response formats
+      const invAny = inv as unknown as Record<string, unknown>;
       const pracId = String(
         inv.practitioner_id ||
-        (inv as Record<string, unknown>).practitioner ||
-        (inv as Record<string, unknown>).user_id ||
+        invAny.practitioner ||
+        invAny.user_id ||
         ""
       );
 

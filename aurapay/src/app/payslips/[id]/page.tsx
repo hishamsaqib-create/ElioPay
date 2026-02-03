@@ -271,23 +271,31 @@ export default function PeriodDetailPage() {
               <button onClick={() => setDentallyResult(null)} className="text-xs text-blue-600 hover:underline">Dismiss</button>
             </div>
             <p className="text-sm text-blue-700">{String(dentallyResult.message || "")}</p>
-            {dentallyResult.debug && (
-              <div className="text-xs text-blue-600 space-y-1">
-                <p>Total invoices: {String((dentallyResult.debug as Record<string, unknown>).totalInvoices)}</p>
-                <p>Skipped unpaid: {String((dentallyResult.debug as Record<string, unknown>).skippedUnpaid)}</p>
-                <p>Skipped therapist: {String((dentallyResult.debug as Record<string, unknown>).skippedTherapist)}</p>
-                <p>Unmatched practitioner IDs: {JSON.stringify((dentallyResult.debug as Record<string, unknown>).unmatchedPracIds)}</p>
-                <p>Sample invoice: {JSON.stringify((dentallyResult.debug as Record<string, unknown>).sampleInvoice)}</p>
-              </div>
-            )}
-            {dentallyResult.summary && Object.keys(dentallyResult.summary as object).length > 0 && (
-              <div className="text-xs text-blue-700">
-                <p className="font-medium mb-1">Summary:</p>
-                {Object.entries(dentallyResult.summary as Record<string, { gross: number; patients: number }>).map(([name, data]) => (
-                  <p key={name}>{name}: {fmt(data.gross)} ({data.patients} patients)</p>
-                ))}
-              </div>
-            )}
+            {(() => {
+              const debug = dentallyResult.debug as Record<string, unknown> | undefined;
+              if (!debug) return null;
+              return (
+                <div className="text-xs text-blue-600 space-y-1">
+                  <p>Total invoices: {String(debug.totalInvoices)}</p>
+                  <p>Skipped unpaid: {String(debug.skippedUnpaid)}</p>
+                  <p>Skipped therapist: {String(debug.skippedTherapist)}</p>
+                  <p>Unmatched practitioner IDs: {JSON.stringify(debug.unmatchedPracIds)}</p>
+                  <p>Sample invoice: {JSON.stringify(debug.sampleInvoice)}</p>
+                </div>
+              );
+            })()}
+            {(() => {
+              const summary = dentallyResult.summary as Record<string, { gross: number; patients: number }> | undefined;
+              if (!summary || Object.keys(summary).length === 0) return null;
+              return (
+                <div className="text-xs text-blue-700">
+                  <p className="font-medium mb-1">Summary:</p>
+                  {Object.entries(summary).map(([name, data]) => (
+                    <p key={name}>{name}: {fmt(data.gross)} ({data.patients} patients)</p>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         )}
 
