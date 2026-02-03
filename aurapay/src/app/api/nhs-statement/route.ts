@@ -242,19 +242,21 @@ function extractUdasFromText(text: string, nhsDentists: Dentist[]): UdaExtractio
   return results;
 }
 
-// Parse PDF and extract text
+// Parse PDF and extract text using unpdf (serverless-friendly)
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   try {
-    // pdf-parse v2 uses PDFParse class with LoadParameters
-    const { PDFParse } = await import("pdf-parse");
-    const pdfParser = new PDFParse({ data: new Uint8Array(buffer) });
-    const textResult = await pdfParser.getText();
-    const fullText = textResult.pages.map(p => p.text).join("\n");
-    console.log(`[NHS] Extracted ${fullText.length} characters from PDF`);
+    // unpdf is designed for serverless/edge environments
+    const { extractText } = await import("unpdf");
+
+    const result = await extractText(new Uint8Array(buffer));
+    // result.text can be string or string[] depending on version
+    const fullText = Array.isArray(result.text) ? result.text.join("\n") : (result.text || "");
+
+    console.log(`[NHS] Extracted ${fullText.length} characters from PDF (${result.totalPages} pages)`);
     return fullText;
   } catch (error) {
     console.error("[NHS] PDF parsing error:", error);
-    throw new Error("Failed to parse PDF file");
+    throw new Error("Failed to parse PDF file: " + (error instanceof Error ? error.message : "Unknown error"));
   }
 }
 

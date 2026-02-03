@@ -54,12 +54,23 @@ interface Dentist {
   performer_number: string | null;
 }
 
+interface TherapyBreakdownItem {
+  patientName: string;
+  patientId: string;
+  date: string;
+  minutes: number;
+  treatment?: string;
+  therapistName?: string;
+  cost: number;
+}
+
 interface Entry {
   id: number; period_id: number; dentist_id: number;
   gross_private: number; nhs_udas: number; lab_bills_json: string;
   finance_fees: number; therapy_minutes: number; therapy_rate: number;
   adjustments_json: string; notes: string; private_patients_json: string;
   discrepancies_json?: string; dentist_log_json?: string; analytics_json?: string;
+  therapy_breakdown_json?: string;
   calculation: Calculation; dentist: Dentist;
   dentist_name: string; dentist_email: string | null;
 }
@@ -961,6 +972,60 @@ export default function PeriodDetailPage() {
                           </div>
                         </div>
                       </div>
+
+                      {/* Therapy Breakdown */}
+                      {(() => {
+                        const therapyBreakdown: TherapyBreakdownItem[] = JSON.parse(entry.therapy_breakdown_json || "[]");
+                        if (therapyBreakdown.length === 0) return null;
+                        const totalMins = therapyBreakdown.reduce((sum, t) => sum + t.minutes, 0);
+                        const totalCost = therapyBreakdown.reduce((sum, t) => sum + t.cost, 0);
+                        return (
+                          <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <h4 className="text-xs font-semibold text-purple-800 flex items-center gap-2">
+                                🦷 Therapy Referrals Breakdown
+                                <span className="text-purple-600 font-normal">({therapyBreakdown.length} appointments)</span>
+                              </h4>
+                              <span className="text-xs font-bold text-purple-700">
+                                {totalMins} mins = {fmt(totalCost)}
+                              </span>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="text-left text-purple-600">
+                                    <th className="py-1 pr-3">Patient</th>
+                                    <th className="py-1 pr-3">Date</th>
+                                    <th className="py-1 pr-3">Therapist</th>
+                                    <th className="py-1 pr-3 text-right">Mins</th>
+                                    <th className="py-1 text-right">Cost</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="text-purple-800">
+                                  {therapyBreakdown.map((t, i) => (
+                                    <tr key={i} className="border-t border-purple-100">
+                                      <td className="py-1.5 pr-3 font-medium">{t.patientName}</td>
+                                      <td className="py-1.5 pr-3 text-purple-600">
+                                        {new Date(t.date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                                      </td>
+                                      <td className="py-1.5 pr-3 text-purple-600">{t.therapistName || "Therapist"}</td>
+                                      <td className="py-1.5 pr-3 text-right">{t.minutes}</td>
+                                      <td className="py-1.5 text-right font-medium">{fmt(t.cost)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr className="border-t-2 border-purple-300 font-bold text-purple-900">
+                                    <td colSpan={3} className="py-1.5">Total</td>
+                                    <td className="py-1.5 text-right">{totalMins}</td>
+                                    <td className="py-1.5 text-right">{fmt(totalCost)}</td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* Lab Bills */}
                       <div>
