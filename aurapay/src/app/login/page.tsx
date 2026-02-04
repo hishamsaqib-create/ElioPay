@@ -41,11 +41,13 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-600 via-primary-700 to-primary-900">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="text-5xl mb-3">💷</div>
+          <div className="w-16 h-16 mx-auto mb-3 bg-white/10 rounded-2xl flex items-center justify-center">
+            <span className="text-3xl font-bold text-white">E</span>
+          </div>
           <h1 className="text-4xl font-extrabold text-white tracking-tight">
-            AuraPay<sup className="text-sm font-medium align-super ml-0.5 opacity-60">TM</sup>
+            ElioPay<sup className="text-sm font-medium align-super ml-0.5 opacity-60">™</sup>
           </h1>
-          <p className="text-primary-200 mt-2 text-sm">Aura Dental Clinic</p>
+          <p className="text-primary-200 mt-2 text-sm">Dental Payslip Portal</p>
         </div>
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-2xl p-8 space-y-5">
           <div>

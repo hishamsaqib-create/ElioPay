@@ -4,10 +4,10 @@ import { useParams, useRouter } from "next/navigation";
 import Shell from "@/components/Shell";
 import {
   Download, Mail, ChevronDown, ChevronUp, Save, CheckCircle2,
-  Plus, Trash2, Lock, Unlock, AlertCircle, Loader2, Undo2, FileSpreadsheet, FileText, X
+  Plus, Trash2, Lock, Unlock, AlertCircle, Loader2, Undo2, FileSpreadsheet, FileText, X, Upload, ExternalLink
 } from "lucide-react";
 
-interface LabBill { lab_name: string; amount: number; description?: string; }
+interface LabBill { lab_name: string; amount: number; description?: string; file_url?: string; uploaded_at?: string; }
 interface Adjustment { description: string; amount: number; type: "addition" | "deduction"; }
 interface PrivatePatient {
   name: string; date: string; amount: number; finance: boolean;
@@ -1043,43 +1043,98 @@ export default function PeriodDetailPage() {
                         {labBills.length === 0 ? (
                           <p className="text-xs text-text-subtle italic">No lab bills added</p>
                         ) : (
-                          <div className="space-y-2">
+                          <div className="space-y-3">
                             {labBills.map((lb, i) => (
-                              <div key={i} className="flex items-center gap-2">
-                                <input
-                                  placeholder="Lab name"
-                                  value={lb.lab_name}
-                                  onChange={(e) => {
-                                    const updated = [...labBills];
-                                    updated[i] = { ...updated[i], lab_name: e.target.value };
-                                    updateLabBills(entry.id, updated);
-                                  }}
-                                  disabled={isFinalized}
-                                  className="flex-1 px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted"
-                                />
-                                <div className="relative w-28">
-                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-subtle text-xs">£</span>
+                              <div key={i} className="p-2 bg-surface-muted rounded-lg">
+                                <div className="flex items-center gap-2 mb-2">
                                   <input
-                                    type="number"
-                                    step="0.01"
-                                    value={lb.amount || ""}
+                                    placeholder="Lab name"
+                                    value={lb.lab_name}
                                     onChange={(e) => {
                                       const updated = [...labBills];
-                                      updated[i] = { ...updated[i], amount: parseFloat(e.target.value) || 0 };
+                                      updated[i] = { ...updated[i], lab_name: e.target.value };
                                       updateLabBills(entry.id, updated);
                                     }}
                                     disabled={isFinalized}
-                                    className="w-full pl-6 pr-2 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted"
+                                    className="flex-1 px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted bg-white"
                                   />
+                                  <div className="relative w-28">
+                                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-subtle text-xs">£</span>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      value={lb.amount || ""}
+                                      onChange={(e) => {
+                                        const updated = [...labBills];
+                                        updated[i] = { ...updated[i], amount: parseFloat(e.target.value) || 0 };
+                                        updateLabBills(entry.id, updated);
+                                      }}
+                                      disabled={isFinalized}
+                                      className="w-full pl-6 pr-2 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted bg-white"
+                                    />
+                                  </div>
+                                  {!isFinalized && (
+                                    <button
+                                      onClick={() => updateLabBills(entry.id, labBills.filter((_, j) => j !== i))}
+                                      className="text-text-subtle hover:text-danger transition"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  )}
                                 </div>
-                                {!isFinalized && (
-                                  <button
-                                    onClick={() => updateLabBills(entry.id, labBills.filter((_, j) => j !== i))}
-                                    className="text-text-subtle hover:text-danger transition"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                )}
+                                {/* File upload/view row */}
+                                <div className="flex items-center gap-2 text-xs">
+                                  {lb.file_url ? (
+                                    <a
+                                      href={lb.file_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="flex items-center gap-1 text-primary-600 hover:text-primary-700"
+                                    >
+                                      <ExternalLink size={12} /> View bill
+                                    </a>
+                                  ) : !isFinalized && lb.lab_name && lb.amount > 0 ? (
+                                    <label className="flex items-center gap-1 text-text-muted hover:text-primary-600 cursor-pointer">
+                                      <Upload size={12} />
+                                      <span>Upload bill</span>
+                                      <input
+                                        type="file"
+                                        accept=".pdf,image/*"
+                                        className="hidden"
+                                        onChange={async (e) => {
+                                          const file = e.target.files?.[0];
+                                          if (!file) return;
+                                          const formData = new FormData();
+                                          formData.append("file", file);
+                                          formData.append("entry_id", String(entry.id));
+                                          formData.append("lab_name", lb.lab_name);
+                                          formData.append("amount", String(lb.amount));
+                                          formData.append("description", lb.description || "");
+                                          try {
+                                            const res = await fetch("/api/lab-bills/upload", {
+                                              method: "POST",
+                                              body: formData,
+                                            });
+                                            const data = await res.json();
+                                            if (res.ok) {
+                                              const updated = [...labBills];
+                                              updated[i] = { ...updated[i], file_url: data.lab_bill.file_url };
+                                              updateLabBills(entry.id, updated);
+                                              showToast("Lab bill uploaded");
+                                            } else {
+                                              showToast(data.error || "Upload failed", "error");
+                                            }
+                                          } catch {
+                                            showToast("Upload failed", "error");
+                                          }
+                                          e.target.value = "";
+                                        }}
+                                      />
+                                    </label>
+                                  ) : (
+                                    <span className="text-text-subtle">Enter lab name and amount to upload</span>
+                                  )}
+                                </div>
                               </div>
                             ))}
                             <p className="text-xs text-text-muted">

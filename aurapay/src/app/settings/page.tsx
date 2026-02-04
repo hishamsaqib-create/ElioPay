@@ -1,12 +1,14 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Shell from "@/components/Shell";
-import { Save, Loader2 } from "lucide-react";
+import { Save, Loader2, Upload, X, Building2, Image as ImageIcon } from "lucide-react";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch("/api/settings").then((r) => r.json()).then((d) => setSettings(d.settings || {}));
@@ -28,15 +30,61 @@ export default function SettingsPage() {
     setSettings((s) => ({ ...s, [key]: value }));
   }
 
-  const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith("image/")) {
+      alert("Please upload an image file");
+      return;
+    }
+
+    // Validate file size (max 2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      alert("Image must be less than 2MB");
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch("/api/settings/logo", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        update("clinic_logo_url", data.url);
+      } else {
+        const err = await res.json();
+        alert(err.error || "Failed to upload logo");
+      }
+    } catch {
+      alert("Failed to upload logo");
+    }
+    setUploading(false);
+  }
+
+  function removeLogo() {
+    update("clinic_logo_url", "");
+  }
+
+  const Section = ({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) => (
     <div className="bg-white rounded-xl border border-border p-5 space-y-4">
-      <h2 className="font-semibold text-text">{title}</h2>
+      <div className="flex items-center gap-2">
+        {icon && <span className="text-primary-600">{icon}</span>}
+        <h2 className="font-semibold text-text">{title}</h2>
+      </div>
       {children}
     </div>
   );
 
-  const Field = ({ label, k, type = "text", placeholder = "" }: { label: string; k: string; type?: string; placeholder?: string }) => (
-    <div>
+  const Field = ({ label, k, type = "text", placeholder = "", span = 1 }: { label: string; k: string; type?: string; placeholder?: string; span?: number }) => (
+    <div className={span === 2 ? "col-span-2" : ""}>
       <label className="block text-xs font-medium text-text-muted mb-1">{label}</label>
       <input
         type={type}
@@ -54,7 +102,7 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-text">Settings</h1>
-            <p className="text-sm text-text-muted mt-0.5">Configure AuraPay system settings</p>
+            <p className="text-sm text-text-muted mt-0.5">Configure ElioPay™ system settings</p>
           </div>
           <button
             onClick={save}
@@ -65,9 +113,62 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        <Section title="Practice">
-          <Field label="Practice Name" k="practice_name" placeholder="Aura Dental Clinic" />
-          <Field label="Practice Address" k="practice_address" placeholder="East Avenue, Billingham, TS23 1BY" />
+        {/* Clinic Branding Section */}
+        <Section title="Clinic Branding" icon={<Building2 size={18} />}>
+          <div className="grid grid-cols-2 gap-4">
+            {/* Logo Upload */}
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-text-muted mb-2">Clinic Logo</label>
+              <div className="flex items-center gap-4">
+                {settings.clinic_logo_url ? (
+                  <div className="relative">
+                    <img
+                      src={settings.clinic_logo_url}
+                      alt="Clinic logo"
+                      className="w-20 h-20 object-contain border border-border rounded-lg bg-white"
+                    />
+                    <button
+                      onClick={removeLogo}
+                      className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="w-20 h-20 border-2 border-dashed border-border rounded-lg flex items-center justify-center bg-surface-dim">
+                    <ImageIcon size={24} className="text-text-subtle" />
+                  </div>
+                )}
+                <div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoUpload}
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="flex items-center gap-2 px-3 py-2 border border-border rounded-lg text-sm hover:bg-surface-dim transition disabled:opacity-50"
+                  >
+                    {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                    {uploading ? "Uploading..." : "Upload Logo"}
+                  </button>
+                  <p className="text-[10px] text-text-subtle mt-1">PNG, JPG, or SVG. Max 2MB.</p>
+                </div>
+              </div>
+            </div>
+
+            <Field label="Clinic Name" k="clinic_name" placeholder="Your Dental Clinic" span={2} />
+            <Field label="Address Line 1" k="clinic_address_line1" placeholder="123 High Street" />
+            <Field label="Address Line 2" k="clinic_address_line2" placeholder="Suite 100" />
+            <Field label="City" k="clinic_city" placeholder="London" />
+            <Field label="Postcode" k="clinic_postcode" placeholder="SW1A 1AA" />
+            <Field label="Phone" k="clinic_phone" placeholder="+44 20 1234 5678" />
+            <Field label="Email" k="clinic_email" placeholder="info@clinic.com" />
+            <Field label="Website" k="clinic_website" placeholder="eliopay.co.uk" span={2} />
+          </div>
         </Section>
 
         <Section title="Calculation Rates">
@@ -141,7 +242,7 @@ export default function SettingsPage() {
         <Section title="Dentally Integration">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
-              <Field label="Site ID" k="dentally_site_id" placeholder="212f9c01-f4f2-446d-b7a3-0162b135e9d3" />
+              <Field label="Site ID" k="dentally_site_id" placeholder="212f9c01-f4f2-446d-b7a3-0162b135e9d3" span={2} />
             </div>
             <div className="col-span-2">
               <label className="block text-xs font-medium text-text-muted mb-1">Therapist IDs (comma-separated)</label>
@@ -173,7 +274,7 @@ export default function SettingsPage() {
             <Field label="SMTP Username" k="smtp_user" placeholder="you@gmail.com" />
             <Field label="SMTP Password" k="smtp_pass" type="password" placeholder="App password" />
             <div className="col-span-2">
-              <Field label="From Address" k="email_from" placeholder="payslips@aurapay.cloud" />
+              <Field label="From Address" k="email_from" placeholder="payslips@eliopay.co.uk" span={2} />
             </div>
           </div>
           <p className="text-xs text-text-subtle">

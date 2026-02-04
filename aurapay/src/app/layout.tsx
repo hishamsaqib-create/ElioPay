@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AuraPay | Aura Dental Payslip Portal",
-  description: "Payslip management for Aura Dental Clinic",
-  metadataBase: new URL("https://aurapay.cloud"),
+  title: "ElioPay™ | Dental Payslip Portal",
+  description: "Professional payslip management for dental practices",
+  metadataBase: new URL("https://eliopay.co.uk"),
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },
@@ -12,9 +12,9 @@ export const metadata: Metadata = {
     apple: "/icon.svg",
   },
   openGraph: {
-    title: "AuraPay",
-    description: "Payslip management for Aura Dental Clinic",
-    siteName: "AuraPay",
+    title: "ElioPay™",
+    description: "Professional payslip management for dental practices",
+    siteName: "ElioPay",
     type: "website",
   },
 };

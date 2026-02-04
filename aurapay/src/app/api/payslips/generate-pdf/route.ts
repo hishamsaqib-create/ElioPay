@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, rowTo, PayslipEntry, Dentist } from "@/lib/db";
+import { getDb, rowTo, PayslipEntry, Dentist, getSettings } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { calculatePayslip, formatCurrency, getMonthName } from "@/lib/calculations";
 import { jsPDF } from "jspdf";
@@ -43,6 +43,11 @@ export async function GET(req: NextRequest) {
   };
   const calc = calculatePayslip(entry, dentist);
 
+  // Fetch clinic settings for dynamic branding
+  const settings = await getSettings();
+  const clinicName = settings.get("clinic_name") || "Your Dental Clinic";
+  const clinicWebsite = settings.get("clinic_website") || "eliopay.co.uk";
+
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
   let y = 20;
@@ -53,15 +58,36 @@ export async function GET(req: NextRequest) {
   const gray = { r: 107, g: 114, b: 128 };     // #6B7280 - Gray text
   const lightGray = { r: 243, g: 244, b: 246 }; // #F3F4F6 - Light background
 
-  // Clean header - Logo on left
-  doc.setFontSize(24);
+  // Draw Elio logo (circle with E)
+  const logoX = 15;
+  const logoY = y - 5;
+  const logoSize = 12;
+  const logoCenter = logoSize / 2;
+
+  // Draw circle
+  doc.setDrawColor(navy.r, navy.g, navy.b);
+  doc.setLineWidth(0.6);
+  doc.circle(logoX + logoCenter, logoY + logoCenter, logoCenter, "S");
+
+  // Draw the "E" letter
+  doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(navy.r, navy.g, navy.b);
-  doc.text("AURA", 15, y);
-  doc.setFontSize(8);
+  doc.text("E", logoX + logoCenter - 2.5, logoY + logoCenter + 3);
+
+  // Clean header - Clinic name next to icon
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(navy.r, navy.g, navy.b);
+  // Split clinic name if too long
+  const clinicNameParts = clinicName.split(" ");
+  const firstWord = clinicNameParts[0]?.toUpperCase() || "CLINIC";
+  doc.text(firstWord, logoX + logoSize + 4, y + 2);
+  doc.setFontSize(7);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(gray.r, gray.g, gray.b);
-  doc.text("DENTAL CLINIC", 15, y + 6);
+  const subText = clinicNameParts.slice(1).join(" ").toUpperCase() || "DENTAL";
+  doc.text(subText, logoX + logoSize + 4, y + 7);
 
   // Period info - right aligned
   doc.setFontSize(10);
@@ -82,7 +108,7 @@ export async function GET(req: NextRequest) {
   y += 12;
   doc.setFontSize(9);
   doc.setTextColor(gray.r, gray.g, gray.b);
-  doc.text("EMPLOYEE", 15, y);
+  doc.text("DENTIST", 15, y);
   doc.text("DETAILS", pageWidth / 2 + 10, y);
 
   y += 8;
@@ -167,15 +193,44 @@ export async function GET(req: NextRequest) {
 
   y = sectionHeader("Deductions", y);
 
-  const deductionsData: string[][] = [];
-  for (const lb of calc.labBills) {
-    deductionsData.push([`Lab: ${lb.lab_name}`, formatCurrency(lb.amount)]);
+  // Parse lab bills with file URLs
+  interface LabBillWithFile {
+    lab_name: string;
+    amount: number;
+    description?: string;
+    file_url?: string;
   }
-  if (calc.labBillsTotal > 0) deductionsData.push([`Lab Bills (50% of ${formatCurrency(calc.labBillsTotal)})`, formatCurrency(calc.labBillsDeduction)]);
-  if (calc.financeFeesDeduction > 0) deductionsData.push([`Finance Fees (50%)`, formatCurrency(calc.financeFeesDeduction)]);
-  if (calc.therapyDeduction > 0) deductionsData.push([`Therapy (${calc.therapyMinutes} min x ${formatCurrency(calc.therapyRate)}/min)`, formatCurrency(calc.therapyDeduction)]);
+  const labBillsWithFiles: LabBillWithFile[] = entry.lab_bills_json
+    ? JSON.parse(String(entry.lab_bills_json))
+    : [];
+
+  const deductionsData: string[][] = [];
+  const labBillLinks: { row: number; url: string }[] = [];
+  let rowIndex = 0;
+
+  for (const lb of labBillsWithFiles) {
+    const label = lb.file_url ? `Lab: ${lb.lab_name} (view bill)` : `Lab: ${lb.lab_name}`;
+    deductionsData.push([label, formatCurrency(lb.amount)]);
+    if (lb.file_url) {
+      labBillLinks.push({ row: rowIndex, url: lb.file_url });
+    }
+    rowIndex++;
+  }
+  if (calc.labBillsTotal > 0) {
+    deductionsData.push([`Lab Bills (50% of ${formatCurrency(calc.labBillsTotal)})`, formatCurrency(calc.labBillsDeduction)]);
+    rowIndex++;
+  }
+  if (calc.financeFeesDeduction > 0) {
+    deductionsData.push([`Finance Fees (50%)`, formatCurrency(calc.financeFeesDeduction)]);
+    rowIndex++;
+  }
+  if (calc.therapyDeduction > 0) {
+    deductionsData.push([`Therapy (${calc.therapyMinutes} min x ${formatCurrency(calc.therapyRate)}/min)`, formatCurrency(calc.therapyDeduction)]);
+    rowIndex++;
+  }
   for (const adj of calc.adjustments) {
     deductionsData.push([`${adj.type === "deduction" ? "-" : "+"} ${adj.description}`, formatCurrency(adj.amount)]);
+    rowIndex++;
   }
   deductionsData.push(["Total Deductions", formatCurrency(calc.totalDeductions)]);
 
@@ -193,6 +248,18 @@ export async function GET(req: NextRequest) {
         if (data.row.index === deductionsData.length - 1) {
           data.cell.styles.fontStyle = "bold";
           data.cell.styles.fillColor = [254, 242, 242]; // Light red for total
+        }
+        // Style rows with links
+        const linkInfo = labBillLinks.find(l => l.row === data.row.index);
+        if (linkInfo && data.column.index === 0) {
+          data.cell.styles.textColor = [79, 70, 229]; // Indigo for links
+        }
+      },
+      didDrawCell: (data) => {
+        // Add clickable links for lab bills with file URLs
+        const linkInfo = labBillLinks.find(l => l.row === data.row.index);
+        if (linkInfo && data.column.index === 0 && data.cell.section === "body") {
+          doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url: linkInfo.url });
         }
       },
     });
@@ -384,9 +451,9 @@ export async function GET(req: NextRequest) {
 
     doc.setFontSize(7);
     doc.setTextColor(gray.r, gray.g, gray.b);
-    doc.text("AURA DENTAL CLINIC", 15, footerY);
+    doc.text(clinicName.toUpperCase(), 15, footerY);
     doc.setFont("helvetica", "normal");
-    doc.text("aurapay.cloud", pageWidth / 2, footerY, { align: "center" });
+    doc.text(clinicWebsite, pageWidth / 2, footerY, { align: "center" });
     doc.text(`${i} / ${pageCount}`, pageWidth - 15, footerY, { align: "right" });
   }
 
