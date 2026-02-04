@@ -19,13 +19,16 @@ const CLINICIAN_ROLES = ["dentist", "clinician", "associate", "principal"];
 const DEFAULT_THERAPY_RATE_PER_MINUTE = 0.5833;
 
 // Helper to load clinic settings from database
-async function getClinicSettings(): Promise<{
+async function getClinicSettings(clinicId: number | null | undefined): Promise<{
   siteId: string;
+  apiToken: string;
   therapistIds: Set<string>;
   nhsAmounts: Set<number>;
   therapyRate: number;
 }> {
   const db = await getDb();
+
+  // Get global settings (for therapist_ids, nhs_amounts, therapy_rate)
   const result = await db.execute("SELECT key, value FROM settings");
   const rows = rowsTo<{ key: string; value: string }>(result.rows);
 
@@ -47,8 +50,25 @@ async function getClinicSettings(): Promise<{
   // Parse therapy rate (defaults to £35/hour = £0.5833/min)
   const therapyRate = parseFloat(settings.therapy_rate || "") || DEFAULT_THERAPY_RATE_PER_MINUTE;
 
+  // Get Dentally credentials from clinic if user has one assigned
+  let siteId = settings.dentally_site_id || "";
+  let apiToken = process.env.DENTALLY_API_TOKEN || "";
+
+  if (clinicId) {
+    const clinicResult = await db.execute({
+      sql: "SELECT dentally_site_id, dentally_api_token FROM clinics WHERE id = ?",
+      args: [clinicId],
+    });
+    if (clinicResult.rows.length > 0) {
+      const clinic = rowTo<{ dentally_site_id: string | null; dentally_api_token: string | null }>(clinicResult.rows[0]);
+      if (clinic.dentally_site_id) siteId = clinic.dentally_site_id;
+      if (clinic.dentally_api_token) apiToken = clinic.dentally_api_token;
+    }
+  }
+
   return {
-    siteId: settings.dentally_site_id || "",
+    siteId,
+    apiToken,
     therapistIds,
     nhsAmounts,
     therapyRate,
@@ -729,14 +749,20 @@ export async function POST(req: NextRequest) {
   const { period_id } = await req.json();
   const db = await getDb();
 
-  // Load clinic settings from database
-  const clinicSettings = await getClinicSettings();
-  const { siteId, therapistIds, nhsAmounts, therapyRate } = clinicSettings;
+  // Load clinic settings from database (use user's clinic if assigned)
+  const clinicSettings = await getClinicSettings(user.clinic_id);
+  const { siteId, apiToken, therapistIds, nhsAmounts, therapyRate } = clinicSettings;
 
   // Validate required settings
   if (!siteId) {
     return NextResponse.json({
-      error: "Dentally Site ID not configured. Please set it in Settings > Dentally Integration."
+      error: "Dentally Site ID not configured. Please set it in Admin Zone > Clinics (edit your clinic) or Settings > Dentally Integration."
+    }, { status: 400 });
+  }
+
+  if (!apiToken) {
+    return NextResponse.json({
+      error: "Dentally API Token not configured. Please set it in Admin Zone > Clinics (edit your clinic) or contact your administrator."
     }, { status: 400 });
   }
 
@@ -754,14 +780,23 @@ export async function POST(req: NextRequest) {
 
   console.log(`[Dentally] Fetching invoices for period: ${startDate} to ${endDate} (exclusive)`);
   console.log(`[Dentally] Using Site ID: ${siteId}`);
-  console.log(`[Dentally] Therapist IDs: ${therapistIds.size > 0 ? Array.from(therapistIds).join(", ") : "(none configured)"}`);
+  console.log(`[Dentally] Clinic ID: ${user.clinic_id || "(none - using global settings)"}`);
+  console.log(`[Dentally] Therapist IDs: ${therapistIds.size > 0 ? Array.from(therapistIds).join(", ") : "(none configured - therapy minutes won't be calculated)"}`);
   console.log(`[Dentally] NHS Amounts: ${nhsAmounts.size > 0 ? Array.from(nhsAmounts).join(", ") : "(none configured)"}`);
 
-  const token = process.env.DENTALLY_API_TOKEN;
-  if (!token) return NextResponse.json({ error: "DENTALLY_API_TOKEN not configured" }, { status: 400 });
+  const token = apiToken;
 
-  // Get all active dentists
-  const dentistsResult = await db.execute("SELECT * FROM dentists WHERE active = 1");
+  // Get all active dentists for this clinic
+  let dentistsResult;
+  if (user.clinic_id) {
+    dentistsResult = await db.execute({
+      sql: "SELECT * FROM dentists WHERE active = 1 AND clinic_id = ?",
+      args: [user.clinic_id],
+    });
+  } else {
+    // Super admin without clinic sees all dentists
+    dentistsResult = await db.execute("SELECT * FROM dentists WHERE active = 1");
+  }
   const dentists = rowsTo<Dentist>(dentistsResult.rows);
 
   // Map by user_id
