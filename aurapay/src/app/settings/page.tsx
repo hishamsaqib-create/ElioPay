@@ -261,26 +261,28 @@ export default function SettingsPage() {
 
         <Section title="Dentally Integration">
           <div className="grid grid-cols-2 gap-4">
-            <SettingsField label="Site ID" value={settings.dentally_site_id || ""} onChange={(v) => update("dentally_site_id", v)} placeholder="212f9c01-f4f2-446d-b7a3-0162b135e9d3" span={2} />
+            <SettingsField label="Site ID" value={settings.dentally_site_id || ""} onChange={(v) => update("dentally_site_id", v)} placeholder="Your Dentally Site ID (UUID)" span={2} />
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-text-muted mb-1">Therapist IDs (comma-separated)</label>
+              <label className="block text-xs font-medium text-text-muted mb-1">Therapist/Hygienist IDs (comma-separated)</label>
               <input
                 type="text"
-                value={settings.therapist_ids || "189342,189343,189349,189358,191534,209545,288298"}
+                value={settings.therapist_ids || ""}
                 onChange={(e) => update("therapist_ids", e.target.value)}
+                placeholder="e.g., 189342,189343,189349"
                 className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none font-mono text-xs"
               />
-              <p className="text-[10px] text-text-subtle mt-1">Invoices from these IDs are excluded (therapists/hygienists)</p>
+              <p className="text-[10px] text-text-subtle mt-1">Practitioner IDs from Dentally for therapists/hygienists. Their invoices are excluded from dentist earnings.</p>
             </div>
             <div className="col-span-2">
               <label className="block text-xs font-medium text-text-muted mb-1">NHS Amounts to Exclude (comma-separated)</label>
               <input
                 type="text"
-                value={settings.nhs_amounts || "27.40,75.30,326.70,47.90,299.30,251.40,23.80,65.20,282.80"}
+                value={settings.nhs_amounts || ""}
                 onChange={(e) => update("nhs_amounts", e.target.value)}
+                placeholder="e.g., 27.40,75.30,326.70"
                 className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none font-mono text-xs"
               />
-              <p className="text-[10px] text-text-subtle mt-1">NHS Band charges - items with these exact amounts are excluded</p>
+              <p className="text-[10px] text-text-subtle mt-1">NHS Band charge amounts to exclude (leave empty to rely on keyword detection only)</p>
             </div>
           </div>
         </Section>
