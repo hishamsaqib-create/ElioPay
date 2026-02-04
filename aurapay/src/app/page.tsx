@@ -12,7 +12,7 @@ export default function Home() {
   }, [router]);
   return (
     <div className="min-h-screen flex items-center justify-center bg-primary-600">
-      <div className="text-white text-2xl font-bold animate-pulse">AuraPay</div>
+      <div className="text-white text-2xl font-bold animate-pulse">ElioPay™</div>
     </div>
   );
 }
