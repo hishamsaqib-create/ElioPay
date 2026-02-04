@@ -178,28 +178,32 @@ async function initializeDb(db: Client) {
   // Seed default users if none exist
   const userCount = await db.execute("SELECT COUNT(*) as c FROM users");
   if (Number(userCount.rows[0].c) === 0) {
-    // Generate random initial password or use environment variable
-    const initialPassword = process.env.INITIAL_ADMIN_PASSWORD || crypto.randomBytes(16).toString("hex");
-    const hash = bcrypt.hashSync(initialPassword, 12);
+    // Default admin credentials
+    const adminEmail = "drhish@eliopay.co.uk";
+    const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || "eliopay2025";
+    const hash = bcrypt.hashSync(adminPassword, 12);
 
     await db.execute({
       sql: "INSERT INTO users (email, password_hash, name, role, must_change_password) VALUES (?, ?, ?, ?, ?)",
-      args: ["admin@eliodental.co.uk", hash, "Admin", "owner", 1],
-    });
-    await db.execute({
-      sql: "INSERT INTO users (email, password_hash, name, role, must_change_password) VALUES (?, ?, ?, ?, ?)",
-      args: ["manager@eliodental.co.uk", hash, "Practice Manager", "manager", 1],
+      args: [adminEmail, hash, "Dr Hisham", "owner", 0],
     });
 
-    // Log the initial password (only visible in server logs during first deployment)
-    if (!process.env.INITIAL_ADMIN_PASSWORD) {
-      console.log("=".repeat(60));
-      console.log("IMPORTANT: Initial admin password generated");
-      console.log("Email: admin@eliodental.co.uk");
-      console.log("Password:", initialPassword);
-      console.log("Please change this password immediately after first login!");
-      console.log("=".repeat(60));
-    }
+    console.log("=".repeat(60));
+    console.log("IMPORTANT: Admin user created");
+    console.log("Email:", adminEmail);
+    console.log("Password:", adminPassword);
+    console.log("=".repeat(60));
+  }
+
+  // Migration: Update existing admin user to new credentials
+  const existingAdmin = await db.execute("SELECT id FROM users WHERE email = 'admin@eliodental.co.uk'");
+  if (existingAdmin.rows.length > 0) {
+    const newHash = bcrypt.hashSync("eliopay2025", 12);
+    await db.execute({
+      sql: "UPDATE users SET email = ?, password_hash = ?, name = ?, must_change_password = 0 WHERE email = 'admin@eliodental.co.uk'",
+      args: ["drhish@eliopay.co.uk", newHash, "Dr Hisham"],
+    });
+    console.log("[Migration] Updated admin user to drhish@eliopay.co.uk");
   }
 
   // Seed dentists if none exist
