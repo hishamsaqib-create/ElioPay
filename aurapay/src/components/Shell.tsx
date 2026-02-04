@@ -50,6 +50,38 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     });
   }, [router]);
 
+  // Update favicon dynamically when logo changes
+  useEffect(() => {
+    const logoUrl = clinicSettings.clinic_logo_url;
+    if (logoUrl) {
+      // Update favicon to clinic logo
+      updateFavicon(logoUrl);
+    } else {
+      // Reset to default favicon
+      updateFavicon("/icon.svg");
+    }
+  }, [clinicSettings.clinic_logo_url]);
+
+  function updateFavicon(url: string) {
+    // Update or create link elements for favicon
+    let link: HTMLLinkElement | null = document.querySelector("link[rel~='icon']");
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      document.head.appendChild(link);
+    }
+    link.href = url;
+
+    // Also update apple-touch-icon
+    let appleLink: HTMLLinkElement | null = document.querySelector("link[rel='apple-touch-icon']");
+    if (!appleLink) {
+      appleLink = document.createElement("link");
+      appleLink.rel = "apple-touch-icon";
+      document.head.appendChild(appleLink);
+    }
+    appleLink.href = url;
+  }
+
   async function logout() {
     await fetch("/api/auth", { method: "DELETE" });
     router.replace("/login");
