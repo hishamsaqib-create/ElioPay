@@ -3,10 +3,8 @@ import { getDb, rowTo, rowsTo, Dentist } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 
 const DENTALLY_API = "https://api.dentally.co/v1";
-const SITE_ID = "212f9c01-f4f2-446d-b7a3-0162b135e9d3";
 
-// NHS band amounts to exclude (as numbers for comparison)
-const NHS_AMOUNTS = new Set([27.40, 75.30, 326.70, 47.90, 299.30, 251.40, 23.80, 65.20, 282.80]);
+// NHS keywords (these are universal)
 const NHS_KEYWORDS = [
   "band 1", "band 2", "band 3", "nhs exam", "nhs scale", "nhs polish",
   "nhs fluoride", "nhs fissure", "urgent dental", "nhs extraction",
@@ -17,20 +15,45 @@ const CBCT_KEYWORDS = ["cbct", "ct scan", "cone beam"];
 // Roles that count as clinicians/dentists (case-insensitive match)
 const CLINICIAN_ROLES = ["dentist", "clinician", "associate", "principal"];
 
-// Therapist/Hygienist IDs to track for therapy breakdown
-// These are practitioner_ids from Dentally (excludes dentists)
-const THERAPIST_IDS = new Set([
-  "189342", // Colin Pritchard (Therapist)
-  "189343", // Taryn Dawson (Therapist)
-  "189349", // Karen Wraight (Hygienist)
-  "189358", // Student Student (Therapist)
-  "191534", // Kim Harrison (Therapist)
-  "209545", // Uche Okeke (Therapist)
-  "288298", // Taryn Dawson (Therapist - alternate)
-]);
+// Default therapy rate per minute (£35/hour = £0.5833/min)
+const DEFAULT_THERAPY_RATE_PER_MINUTE = 0.5833;
 
-// Therapy rate per minute (£35/hour = £0.5833/min)
-const THERAPY_RATE_PER_MINUTE = 0.5833;
+// Helper to load clinic settings from database
+async function getClinicSettings(): Promise<{
+  siteId: string;
+  therapistIds: Set<string>;
+  nhsAmounts: Set<number>;
+  therapyRate: number;
+}> {
+  const db = await getDb();
+  const result = await db.execute("SELECT key, value FROM settings");
+  const rows = rowsTo<{ key: string; value: string }>(result.rows);
+
+  const settings: Record<string, string> = {};
+  for (const r of rows) settings[r.key] = r.value;
+
+  // Parse therapist IDs (comma-separated string)
+  const therapistIdsStr = settings.therapist_ids || "";
+  const therapistIds = new Set(
+    therapistIdsStr.split(",").map(s => s.trim()).filter(s => s.length > 0)
+  );
+
+  // Parse NHS amounts (comma-separated string)
+  const nhsAmountsStr = settings.nhs_amounts || "";
+  const nhsAmounts = new Set(
+    nhsAmountsStr.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n) && n > 0)
+  );
+
+  // Parse therapy rate (defaults to £35/hour = £0.5833/min)
+  const therapyRate = parseFloat(settings.therapy_rate || "") || DEFAULT_THERAPY_RATE_PER_MINUTE;
+
+  return {
+    siteId: settings.dentally_site_id || "",
+    therapistIds,
+    nhsAmounts,
+    therapyRate,
+  };
+}
 
 // Therapy breakdown appointment record
 interface TherapyBreakdownItem {
@@ -56,19 +79,19 @@ function parseAmount(val: unknown): number {
   return 0;
 }
 
-function isNhsAmount(amount: number): boolean {
-  for (const nhsAmt of NHS_AMOUNTS) {
+function isNhsAmount(amount: number, nhsAmounts: Set<number>): boolean {
+  for (const nhsAmt of nhsAmounts) {
     if (Math.abs(amount - nhsAmt) < 0.01) return true;
   }
   return false;
 }
 
-function isNhsItem(item: { name?: string; amount?: unknown; nhs_charge?: boolean }): boolean {
+function isNhsItem(item: { name?: string; amount?: unknown; nhs_charge?: boolean }, nhsAmounts: Set<number>): boolean {
   if (item.nhs_charge) return true;
   const lower = (item.name || "").toLowerCase();
   if (NHS_KEYWORDS.some((k) => lower.includes(k))) return true;
   const amt = parseAmount(item.amount);
-  if (isNhsAmount(amt)) return true;
+  if (isNhsAmount(amt, nhsAmounts)) return true;
   return false;
 }
 
@@ -230,7 +253,7 @@ async function fetchAllPages(baseUrl: string, token: string): Promise<DentallyIn
 }
 
 // Fetch appointments from Dentally
-async function fetchAppointments(startDate: string, endDate: string, token: string): Promise<DentallyAppointment[]> {
+async function fetchAppointments(startDate: string, endDate: string, token: string, siteId: string): Promise<DentallyAppointment[]> {
   const all: DentallyAppointment[] = [];
   let page = 1;
   const perPage = 100;
@@ -240,7 +263,7 @@ async function fetchAppointments(startDate: string, endDate: string, token: stri
 
   while (page <= maxPages) {
     // Dentally appointments API - try different parameter names
-    const url = `${DENTALLY_API}/appointments?site_id=${SITE_ID}&start_date=${startDate}&end_date=${endDate}&page=${page}&per_page=${perPage}`;
+    const url = `${DENTALLY_API}/appointments?site_id=${siteId}&start_date=${startDate}&end_date=${endDate}&page=${page}&per_page=${perPage}`;
     console.log(`[Dentally] Appointments page ${page}: ${url.substring(0, 100)}...`);
 
     try {
@@ -257,7 +280,7 @@ async function fetchAppointments(startDate: string, endDate: string, token: stri
         if (page === 1) {
           console.log(`[Dentally] Appointments API returned ${fetchRes.status}, trying alternative path...`);
           // Try /calendar/appointments endpoint
-          const altUrl = `${DENTALLY_API}/calendar/appointments?site_id=${SITE_ID}&from=${startDate}&to=${endDate}`;
+          const altUrl = `${DENTALLY_API}/calendar/appointments?site_id=${siteId}&from=${startDate}&to=${endDate}`;
           const altRes = await fetch(altUrl, {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -403,11 +426,12 @@ function calculateDentistAnalytics(
 async function fetchPatientAppointments(
   patientId: string,
   beforeDate: string,
-  token: string
+  token: string,
+  siteId: string
 ): Promise<DentallyAppointment[]> {
   try {
     // Fetch appointments for this patient before the given date
-    const url = `${DENTALLY_API}/appointments?site_id=${SITE_ID}&patient_id=${patientId}&end_date=${beforeDate}&per_page=50`;
+    const url = `${DENTALLY_API}/appointments?site_id=${siteId}&patient_id=${patientId}&end_date=${beforeDate}&per_page=50`;
     const res = await fetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -432,10 +456,12 @@ async function findReferringDentist(
   patientId: string,
   therapyDate: string,
   token: string,
+  siteId: string,
+  therapistIds: Set<string>,
   dentistByUserId: Map<string, Dentist>,
   allUsers: Map<string, { name: string; role?: string; isClinician: boolean }>
 ): Promise<Dentist | null> {
-  const appointments = await fetchPatientAppointments(patientId, therapyDate, token);
+  const appointments = await fetchPatientAppointments(patientId, therapyDate, token, siteId);
 
   if (!appointments || appointments.length === 0) return null;
 
@@ -451,7 +477,7 @@ async function findReferringDentist(
     const practitionerId = String(apt.practitioner_id || apt.user_id || "");
 
     // Skip if it's a therapist/hygienist
-    if (THERAPIST_IDS.has(practitionerId)) continue;
+    if (therapistIds.has(practitionerId)) continue;
 
     // Check if this is a known dentist
     const dentist = dentistByUserId.get(practitionerId);
@@ -474,6 +500,9 @@ async function calculateTherapyBreakdown(
   startDate: string,
   endDate: string,
   token: string,
+  siteId: string,
+  therapistIds: Set<string>,
+  therapyRate: number,
   dentistByUserId: Map<string, Dentist>,
   dentists: Dentist[],
   allUsers: Map<string, { name: string; role?: string; isClinician: boolean }>,
@@ -489,7 +518,7 @@ async function calculateTherapyBreakdown(
   // Filter appointments to therapist appointments in the date range
   const therapistAppointments = appointments.filter(apt => {
     const practId = String(apt.practitioner_id || apt.user_id || "");
-    if (!THERAPIST_IDS.has(practId)) return false;
+    if (!therapistIds.has(practId)) return false;
 
     const aptDate = apt.starts_at?.substring(0, 10) || "";
     return aptDate >= startDate && aptDate < endDate;
@@ -499,7 +528,7 @@ async function calculateTherapyBreakdown(
 
   // Get therapist names
   const therapistNames = new Map<string, string>();
-  for (const uid of THERAPIST_IDS) {
+  for (const uid of therapistIds) {
     const userInfo = allUsers.get(uid);
     if (userInfo) therapistNames.set(uid, userInfo.name);
   }
@@ -521,6 +550,8 @@ async function calculateTherapyBreakdown(
       patientId,
       aptDate,
       token,
+      siteId,
+      therapistIds,
       dentistByUserId,
       allUsers
     );
@@ -528,7 +559,7 @@ async function calculateTherapyBreakdown(
     const patientName = patientNames.get(patientId) || `Patient ${patientId}`;
     const therapistName = therapistNames.get(practId) || "Therapist";
     const treatment = apt.treatment_description || apt.reason || "";
-    const cost = Math.round(duration * THERAPY_RATE_PER_MINUTE * 100) / 100;
+    const cost = Math.round(duration * therapyRate * 100) / 100;
 
     const item: TherapyBreakdownItem = {
       patientName,
@@ -631,12 +662,12 @@ interface DentallyUser {
   job_title?: string;
 }
 
-async function fetchAllUsers(token: string): Promise<Map<string, { name: string; role?: string; isClinician: boolean }>> {
+async function fetchAllUsers(token: string, siteId: string): Promise<Map<string, { name: string; role?: string; isClinician: boolean }>> {
   const userMap = new Map<string, { name: string; role?: string; isClinician: boolean }>();
 
   try {
     // Fetch users for the site
-    const res = await fetch(`${DENTALLY_API}/users?site_id=${SITE_ID}&per_page=100`, {
+    const res = await fetch(`${DENTALLY_API}/users?site_id=${siteId}&per_page=100`, {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     });
 
@@ -698,6 +729,17 @@ export async function POST(req: NextRequest) {
   const { period_id } = await req.json();
   const db = await getDb();
 
+  // Load clinic settings from database
+  const clinicSettings = await getClinicSettings();
+  const { siteId, therapistIds, nhsAmounts, therapyRate } = clinicSettings;
+
+  // Validate required settings
+  if (!siteId) {
+    return NextResponse.json({
+      error: "Dentally Site ID not configured. Please set it in Settings > Dentally Integration."
+    }, { status: 400 });
+  }
+
   // Get the period
   const periodResult = await db.execute({ sql: "SELECT * FROM pay_periods WHERE id = ?", args: [period_id] });
   if (periodResult.rows.length === 0) return NextResponse.json({ error: "Period not found" }, { status: 404 });
@@ -711,6 +753,9 @@ export async function POST(req: NextRequest) {
   const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
 
   console.log(`[Dentally] Fetching invoices for period: ${startDate} to ${endDate} (exclusive)`);
+  console.log(`[Dentally] Using Site ID: ${siteId}`);
+  console.log(`[Dentally] Therapist IDs: ${therapistIds.size > 0 ? Array.from(therapistIds).join(", ") : "(none configured)"}`);
+  console.log(`[Dentally] NHS Amounts: ${nhsAmounts.size > 0 ? Array.from(nhsAmounts).join(", ") : "(none configured)"}`);
 
   const token = process.env.DENTALLY_API_TOKEN;
   if (!token) return NextResponse.json({ error: "DENTALLY_API_TOKEN not configured" }, { status: 400 });
@@ -730,12 +775,12 @@ export async function POST(req: NextRequest) {
 
   try {
     // Fetch all users first to identify clinicians by role
-    const allUsers = await fetchAllUsers(token);
+    const allUsers = await fetchAllUsers(token, siteId);
 
     // Fetch invoices from Dentally WITH date filtering
     // Use dated_on_from and dated_on_to to filter by invoice date (not created_at)
     // This significantly reduces the number of invoices fetched
-    const url = `${DENTALLY_API}/invoices?site_id=${SITE_ID}&dated_on_from=${startDate}&dated_on_to=${endDate}`;
+    const url = `${DENTALLY_API}/invoices?site_id=${siteId}&dated_on_from=${startDate}&dated_on_to=${endDate}`;
     console.log(`[Dentally] Fetching invoices with date filter: ${startDate} to ${endDate}`);
     const allInvoices = await fetchAllPages(url, token);
 
@@ -746,7 +791,7 @@ export async function POST(req: NextRequest) {
     console.log(`[Dentally] Invoices after client-side verification: ${invoices.length}`);
 
     // Fetch appointments for duration data
-    const appointments = await fetchAppointments(startDate, endDate, token);
+    const appointments = await fetchAppointments(startDate, endDate, token, siteId);
     const appointmentMap = buildAppointmentMap(appointments);
     console.log(`[Dentally] Built appointment map with ${appointmentMap.size} patient-date combinations`);
 
@@ -808,12 +853,12 @@ export async function POST(req: NextRequest) {
         for (const item of items) {
           const itemAmount = parseAmount(item.amount);
           if (itemAmount <= 0) continue;
-          if (isNhsItem(item)) { skippedNhs++; continue; }
+          if (isNhsItem(item, nhsAmounts)) { skippedNhs++; continue; }
           if (isCbctItem(item)) continue;
           privateAmount += itemAmount;
         }
       } else {
-        if (!isNhsAmount(totalAmount)) {
+        if (!isNhsAmount(totalAmount, nhsAmounts)) {
           privateAmount = totalAmount;
         } else {
           skippedNhs++;
@@ -879,7 +924,7 @@ export async function POST(req: NextRequest) {
 
         // Also try to get treatment from invoice items
         if (!treatment && inv.invoice_items && inv.invoice_items.length > 0) {
-          const mainItem = inv.invoice_items.find(item => !isNhsItem(item) && !isCbctItem(item));
+          const mainItem = inv.invoice_items.find(item => !isNhsItem(item, nhsAmounts) && !isCbctItem(item));
           if (mainItem?.name) treatment = mainItem.name;
         }
 
@@ -955,6 +1000,9 @@ export async function POST(req: NextRequest) {
       startDate,
       endDate,
       token,
+      siteId,
+      therapistIds,
+      therapyRate,
       dentistByUserId,
       dentists,
       allUsers,
@@ -1010,7 +1058,7 @@ export async function POST(req: NextRequest) {
         updated++;
         const dentistName = dentists.find(d => d.id === dentistId)?.name;
         const analytics = data.analytics;
-        const therapyCost = Math.round(totalTherapyMinutes * THERAPY_RATE_PER_MINUTE * 100) / 100;
+        const therapyCost = Math.round(totalTherapyMinutes * therapyRate * 100) / 100;
         console.log(`[Dentally] Updated ${dentistName}: £${data.totalPaid.toFixed(2)} paid, ${data.patients.length} patients, ${analytics?.totalChairMins || 0} mins chair time, ${totalTherapyMinutes} therapy mins (£${therapyCost})`);
       }
     }

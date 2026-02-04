@@ -74,12 +74,31 @@ export async function getDb(): Promise<Client> {
 async function initializeDb(db: Client) {
   // Create tables one at a time (libsql doesn't support multi-statement exec reliably)
   const tables = [
+    `CREATE TABLE IF NOT EXISTS clinics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      slug TEXT UNIQUE NOT NULL,
+      email TEXT,
+      phone TEXT,
+      address_line1 TEXT,
+      address_line2 TEXT,
+      city TEXT,
+      postcode TEXT,
+      website TEXT,
+      logo_url TEXT,
+      dentally_site_id TEXT,
+      dentally_api_token TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
     `CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'manager',
+      clinic_id INTEGER REFERENCES clinics(id),
+      is_super_admin INTEGER NOT NULL DEFAULT 0,
       must_change_password INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now'))
     )`,
@@ -164,6 +183,9 @@ async function initializeDb(db: Client) {
     "ALTER TABLE dentists ADD COLUMN weekly_hours REAL DEFAULT 40",
     "ALTER TABLE payslip_entries ADD COLUMN therapy_breakdown_json TEXT DEFAULT '[]'",
     "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN clinic_id INTEGER REFERENCES clinics(id)",
+    "ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE dentists ADD COLUMN clinic_id INTEGER REFERENCES clinics(id)",
     "UPDATE dentists SET is_nhs = 1, uda_rate = 35.45, performer_number = '110271' WHERE name = 'Hisham Saqib'",
   ];
 
@@ -178,29 +200,39 @@ async function initializeDb(db: Client) {
   // Seed default users if none exist
   const userCount = await db.execute("SELECT COUNT(*) as c FROM users");
   if (Number(userCount.rows[0].c) === 0) {
-    // Generate random initial password or use environment variable
-    const initialPassword = process.env.INITIAL_ADMIN_PASSWORD || crypto.randomBytes(16).toString("hex");
-    const hash = bcrypt.hashSync(initialPassword, 12);
+    // Default admin credentials - super admin for platform owner
+    const adminEmail = "drhish@eliopay.co.uk";
+    const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || "eliopay2025";
+    const hash = bcrypt.hashSync(adminPassword, 12);
 
     await db.execute({
-      sql: "INSERT INTO users (email, password_hash, name, role, must_change_password) VALUES (?, ?, ?, ?, ?)",
-      args: ["admin@eliodental.co.uk", hash, "Admin", "owner", 1],
-    });
-    await db.execute({
-      sql: "INSERT INTO users (email, password_hash, name, role, must_change_password) VALUES (?, ?, ?, ?, ?)",
-      args: ["manager@eliodental.co.uk", hash, "Practice Manager", "manager", 1],
+      sql: "INSERT INTO users (email, password_hash, name, role, must_change_password, is_super_admin) VALUES (?, ?, ?, ?, ?, ?)",
+      args: [adminEmail, hash, "Dr Hisham", "owner", 0, 1],
     });
 
-    // Log the initial password (only visible in server logs during first deployment)
-    if (!process.env.INITIAL_ADMIN_PASSWORD) {
-      console.log("=".repeat(60));
-      console.log("IMPORTANT: Initial admin password generated");
-      console.log("Email: admin@eliodental.co.uk");
-      console.log("Password:", initialPassword);
-      console.log("Please change this password immediately after first login!");
-      console.log("=".repeat(60));
-    }
+    console.log("=".repeat(60));
+    console.log("IMPORTANT: Super admin user created");
+    console.log("Email:", adminEmail);
+    console.log("Password:", adminPassword);
+    console.log("=".repeat(60));
   }
+
+  // Migration: Update existing admin user to new credentials and make super admin
+  const existingAdmin = await db.execute("SELECT id FROM users WHERE email = 'admin@eliodental.co.uk'");
+  if (existingAdmin.rows.length > 0) {
+    const newHash = bcrypt.hashSync("eliopay2025", 12);
+    await db.execute({
+      sql: "UPDATE users SET email = ?, password_hash = ?, name = ?, must_change_password = 0, is_super_admin = 1 WHERE email = 'admin@eliodental.co.uk'",
+      args: ["drhish@eliopay.co.uk", newHash, "Dr Hisham"],
+    });
+    console.log("[Migration] Updated admin user to drhish@eliopay.co.uk (super admin)");
+  }
+
+  // Migration: Make drhish@eliopay.co.uk a super admin if they exist but aren't yet
+  await db.execute({
+    sql: "UPDATE users SET is_super_admin = 1 WHERE email = ? AND is_super_admin = 0",
+    args: ["drhish@eliopay.co.uk"],
+  });
 
   // Seed dentists if none exist
   const dentistCount = await db.execute("SELECT COUNT(*) as c FROM dentists");

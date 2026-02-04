@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import {
-  LayoutDashboard, Users, FileText, Settings, LogOut, Menu, X, ChevronRight, User
+  LayoutDashboard, Users, FileText, Settings, LogOut, Menu, X, ChevronRight, User, Shield
 } from "lucide-react";
 
 interface User {
-  id: number; name: string; email: string; role: string;
+  id: number; name: string; email: string; role: string; is_super_admin?: boolean;
 }
 
 interface ClinicSettings {
@@ -21,6 +21,8 @@ const NAV = [
   { href: "/dentists", label: "Dentists", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
+
+const ADMIN_NAV = { href: "/admin", label: "Admin Zone", icon: Shield };
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -61,7 +63,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const currentPage = NAV.find((n) => pathname.startsWith(n.href));
+  const currentPage = pathname.startsWith("/admin") ? ADMIN_NAV : NAV.find((n) => pathname.startsWith(n.href));
   const clinicName = clinicSettings.clinic_name || "Your Clinic";
 
   return (
@@ -115,6 +117,25 @@ export default function Shell({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
+
+          {/* Admin Zone - only for super admins */}
+          {user?.is_super_admin && (
+            <>
+              <div className="my-2 border-t border-border" />
+              <Link
+                href={ADMIN_NAV.href}
+                onClick={() => setSidebarOpen(false)}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+                  pathname.startsWith(ADMIN_NAV.href)
+                    ? "bg-amber-50 text-amber-700"
+                    : "text-amber-600 hover:bg-amber-50 hover:text-amber-700"
+                }`}
+              >
+                <ADMIN_NAV.icon size={18} />
+                {ADMIN_NAV.label}
+              </Link>
+            </>
+          )}
         </nav>
 
         <div className="p-3 border-t border-border">

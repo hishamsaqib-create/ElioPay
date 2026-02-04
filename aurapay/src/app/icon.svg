@@ -1,10 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <!-- Outer circle -->
-  <circle cx="50" cy="50" r="46" fill="none" stroke="#000000" stroke-width="3"/>
-  <!-- A letter - left stroke -->
-  <line x1="50" y1="12" x2="22" y2="88" stroke="#000000" stroke-width="3" stroke-linecap="round"/>
-  <!-- A letter - right stroke -->
-  <line x1="50" y1="12" x2="78" y2="88" stroke="#000000" stroke-width="3" stroke-linecap="round"/>
-  <!-- Swoosh curve through the A -->
-  <path d="M28 62 Q50 78 72 52" fill="none" stroke="#000000" stroke-width="3" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="brandGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1E40AF"/>
+      <stop offset="100%" style="stop-color:#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect x="5" y="5" width="90" height="90" rx="20" ry="20" fill="url(#brandGradient)"/>
+  <!-- Stylized E letter - clean modern design -->
+  <path d="M28 25 L72 25 L72 33 L38 33 L38 46 L68 46 L68 54 L38 54 L38 67 L72 67 L72 75 L28 75 Z" fill="#FFFFFF"/>
 </svg>
