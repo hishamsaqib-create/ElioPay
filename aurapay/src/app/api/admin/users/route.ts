@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
   }
 
   const validRoles = ["owner", "manager", "viewer"];
-  const userRole = validRoles.includes(role || "") ? role : "manager";
+  const userRole: string = (role && validRoles.includes(role)) ? role : "manager";
 
   try {
     const db = await getDb();
