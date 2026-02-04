@@ -21,8 +21,8 @@ export async function POST(req: NextRequest) {
   }
 
   // Use provided credentials or defaults
-  const adminEmail = email || "drhish@eliopay.co.uk";
-  const adminPassword = password || "eliopay2025";
+  const adminEmail = email || "drhish@auradentalclinic.co.uk";
+  const adminPassword = password || "Epsckayu1";
 
   if (adminPassword.length < 8) {
     return NextResponse.json({ error: "Password must be at least 8 characters" }, { status: 400 });
