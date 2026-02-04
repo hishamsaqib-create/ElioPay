@@ -51,12 +51,14 @@ export async function PUT(req: NextRequest) {
       args: [trimmedName, normalizedEmail, user.id],
     });
 
-    // Create new token with updated info
+    // Create new token with updated info (preserve clinic_id and is_super_admin)
     const updatedUser: AuthUser = {
       id: user.id,
       email: normalizedEmail,
       name: trimmedName,
       role: user.role,
+      clinic_id: user.clinic_id,
+      is_super_admin: user.is_super_admin,
     };
 
     const token = signToken(updatedUser);

@@ -315,6 +315,46 @@ async function initializeDb(db: Client) {
       await db.execute({ sql: "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", args: [k, v] });
     }
   }
+
+  // Create Aura Dental Clinic and assign users/dentists to it
+  const existingClinic = await db.execute("SELECT id FROM clinics WHERE slug = 'aura-dental'");
+  if (existingClinic.rows.length === 0) {
+    // Create Aura Dental Clinic
+    await db.execute({
+      sql: `INSERT INTO clinics (name, slug, email, phone, address_line1, city, postcode, active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+      args: [
+        "Aura Dental Clinic",
+        "aura-dental",
+        "info@auradental.co.uk",
+        "",
+        "",
+        "London",
+        "",
+      ],
+    });
+    console.log("[Migration] Created Aura Dental Clinic");
+  }
+
+  // Get the clinic ID
+  const clinicResult = await db.execute("SELECT id FROM clinics WHERE slug = 'aura-dental'");
+  if (clinicResult.rows.length > 0) {
+    const clinicId = Number(clinicResult.rows[0].id);
+
+    // Assign all existing users without a clinic to Aura Dental
+    await db.execute({
+      sql: "UPDATE users SET clinic_id = ? WHERE clinic_id IS NULL",
+      args: [clinicId],
+    });
+
+    // Assign all existing dentists without a clinic to Aura Dental
+    await db.execute({
+      sql: "UPDATE dentists SET clinic_id = ? WHERE clinic_id IS NULL",
+      args: [clinicId],
+    });
+
+    console.log("[Migration] Assigned users and dentists to Aura Dental Clinic");
+  }
 }
 
 // Helper to get settings with caching
