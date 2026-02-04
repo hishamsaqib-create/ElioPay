@@ -23,6 +23,8 @@ export interface AuthUser {
   email: string;
   name: string;
   role: "owner" | "manager" | "viewer";
+  clinic_id?: number | null;
+  is_super_admin?: boolean;
 }
 
 // Role hierarchy for permission checks

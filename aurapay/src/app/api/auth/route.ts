@@ -111,6 +111,8 @@ export async function POST(req: NextRequest) {
       password_hash: string;
       name: string;
       role: string;
+      clinic_id: number | null;
+      is_super_admin: number;
     }>(result.rows[0]);
 
     // Verify password
@@ -126,16 +128,19 @@ export async function POST(req: NextRequest) {
     // Validate role before signing
     const validRoles = ["owner", "manager", "viewer"];
     const role = validRoles.includes(user.role) ? user.role : "viewer";
+    const isSuperAdmin = user.is_super_admin === 1;
 
     const token = signToken({
       id: user.id,
       email: user.email,
       name: user.name,
       role: role as AuthUser["role"],
+      clinic_id: user.clinic_id,
+      is_super_admin: isSuperAdmin,
     });
 
     const res = NextResponse.json({
-      user: { id: user.id, email: user.email, name: user.name, role },
+      user: { id: user.id, email: user.email, name: user.name, role, is_super_admin: isSuperAdmin },
     });
 
     res.cookies.set("eliopay_token", token, {
