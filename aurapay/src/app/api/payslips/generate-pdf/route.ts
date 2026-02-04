@@ -50,116 +50,163 @@ export async function GET(req: NextRequest) {
 
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
-  let y = 20;
+  const pageHeight = doc.internal.pageSize.getHeight();
+  let y = 0;
 
-  // Clean, modern color palette
-  const navy = { r: 17, g: 24, b: 39 };        // #111827 - Dark navy
-  const accent = { r: 79, g: 70, b: 229 };     // #4F46E5 - Indigo accent
-  const gray = { r: 107, g: 114, b: 128 };     // #6B7280 - Gray text
-  const lightGray = { r: 243, g: 244, b: 246 }; // #F3F4F6 - Light background
+  // Professional corporate color palette
+  const darkBlue = { r: 15, g: 23, b: 42 };      // #0F172A - Slate 900
+  const brandBlue = { r: 30, g: 64, b: 175 };    // #1E40AF - Blue 800
+  const accentGold = { r: 180, g: 144, b: 62 };  // #B4903E - Gold accent
+  const textDark = { r: 30, g: 41, b: 59 };      // #1E293B - Slate 800
+  const textMuted = { r: 100, g: 116, b: 139 };  // #64748B - Slate 500
+  const borderLight = { r: 226, g: 232, b: 240 }; // #E2E8F0 - Slate 200
+  const bgLight = { r: 248, g: 250, b: 252 };    // #F8FAFC - Slate 50
 
-  // Draw Elio logo (circle with E)
-  const logoX = 15;
-  const logoY = y - 5;
-  const logoSize = 12;
-  const logoCenter = logoSize / 2;
+  // === HEADER SECTION ===
+  // Top accent bar
+  doc.setFillColor(brandBlue.r, brandBlue.g, brandBlue.b);
+  doc.rect(0, 0, pageWidth, 4, "F");
 
-  // Draw circle
-  doc.setDrawColor(navy.r, navy.g, navy.b);
-  doc.setLineWidth(0.6);
-  doc.circle(logoX + logoCenter, logoY + logoCenter, logoCenter, "S");
+  y = 20;
 
-  // Draw the "E" letter
-  doc.setFontSize(10);
+  // Company branding - left side
+  doc.setFontSize(20);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(navy.r, navy.g, navy.b);
-  doc.text("E", logoX + logoCenter - 2.5, logoY + logoCenter + 3);
+  doc.setTextColor(darkBlue.r, darkBlue.g, darkBlue.b);
+  doc.text(clinicName.toUpperCase(), 20, y);
 
-  // Clean header - Clinic name next to icon
-  doc.setFontSize(16);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(navy.r, navy.g, navy.b);
-  // Split clinic name if too long
-  const clinicNameParts = clinicName.split(" ");
-  const firstWord = clinicNameParts[0]?.toUpperCase() || "CLINIC";
-  doc.text(firstWord, logoX + logoSize + 4, y + 2);
-  doc.setFontSize(7);
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(gray.r, gray.g, gray.b);
-  const subText = clinicNameParts.slice(1).join(" ").toUpperCase() || "DENTAL";
-  doc.text(subText, logoX + logoSize + 4, y + 7);
-
-  // Period info - right aligned
-  doc.setFontSize(10);
-  doc.setTextColor(gray.r, gray.g, gray.b);
-  doc.text("PAYSLIP", pageWidth - 15, y - 5, { align: "right" });
-  doc.setFontSize(14);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(navy.r, navy.g, navy.b);
-  doc.text(`${getMonthName(entry.month)} ${entry.year}`, pageWidth - 15, y + 3, { align: "right" });
-
-  // Thin accent line
-  y += 15;
-  doc.setDrawColor(accent.r, accent.g, accent.b);
-  doc.setLineWidth(0.5);
-  doc.line(15, y, pageWidth - 15, y);
-
-  // Dentist info section
-  y += 12;
+  // Document type badge - right side
+  doc.setFillColor(bgLight.r, bgLight.g, bgLight.b);
+  doc.roundedRect(pageWidth - 60, y - 10, 45, 16, 2, 2, "F");
   doc.setFontSize(9);
-  doc.setTextColor(gray.r, gray.g, gray.b);
-  doc.text("DENTIST", 15, y);
-  doc.text("DETAILS", pageWidth / 2 + 10, y);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(brandBlue.r, brandBlue.g, brandBlue.b);
+  doc.text("PAYSLIP", pageWidth - 37.5, y - 1, { align: "center" });
+
+  // Period below badge
+  y += 8;
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(textMuted.r, textMuted.g, textMuted.b);
+  doc.text(`${getMonthName(entry.month)} ${entry.year}`, pageWidth - 37.5, y, { align: "center" });
+
+  // Divider line
+  y += 10;
+  doc.setDrawColor(borderLight.r, borderLight.g, borderLight.b);
+  doc.setLineWidth(0.5);
+  doc.line(20, y, pageWidth - 20, y);
+
+  // === RECIPIENT INFO SECTION ===
+  y += 15;
+
+  // Left column - Dentist details
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(textMuted.r, textMuted.g, textMuted.b);
+  doc.text("PAYEE DETAILS", 20, y);
 
   y += 8;
-  doc.setFontSize(12);
+  doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(navy.r, navy.g, navy.b);
-  doc.text(entry.dentist_name, 15, y);
+  doc.setTextColor(textDark.r, textDark.g, textDark.b);
+  doc.text(entry.dentist_name, 20, y);
+
+  y += 7;
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(textMuted.r, textMuted.g, textMuted.b);
+  const details: string[] = [];
+  if (entry.performer_number) details.push(`Performer No: ${entry.performer_number}`);
+  details.push(`Revenue Split: ${entry.split_percentage}%`);
+  doc.text(details.join("  |  "), 20, y);
+
+  // Right column - Pay period info box
+  const infoBoxX = pageWidth - 75;
+  const infoBoxY = y - 22;
+  doc.setFillColor(bgLight.r, bgLight.g, bgLight.b);
+  doc.roundedRect(infoBoxX, infoBoxY, 55, 25, 2, 2, "F");
+  doc.setFontSize(7);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(textMuted.r, textMuted.g, textMuted.b);
+  doc.text("PAY PERIOD", infoBoxX + 5, infoBoxY + 7);
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(textDark.r, textDark.g, textDark.b);
+  const periodStart = new Date(entry.year, entry.month - 1, 1);
+  const periodEnd = new Date(entry.year, entry.month, 0);
+  const formatShortDate = (d: Date) => d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+  doc.text(`${formatShortDate(periodStart)} - ${formatShortDate(periodEnd)}`, infoBoxX + 5, infoBoxY + 15);
+  doc.text(String(entry.year), infoBoxX + 5, infoBoxY + 21);
+
+  // === NET PAY HIGHLIGHT BOX ===
+  y += 18;
+  const netPayBoxHeight = 50;
+
+  // Gradient-like effect with two rectangles
+  doc.setFillColor(darkBlue.r, darkBlue.g, darkBlue.b);
+  doc.roundedRect(20, y, pageWidth - 40, netPayBoxHeight, 4, 4, "F");
+
+  // Gold accent line on left
+  doc.setFillColor(accentGold.r, accentGold.g, accentGold.b);
+  doc.rect(20, y, 4, netPayBoxHeight, "F");
+  // Round the corners manually
+  doc.setFillColor(darkBlue.r, darkBlue.g, darkBlue.b);
+  doc.rect(20, y, 4, 4, "F");
+  doc.rect(20, y + netPayBoxHeight - 4, 4, 4, "F");
+
+  // Net pay label
   doc.setFontSize(10);
   doc.setFont("helvetica", "normal");
-  doc.setTextColor(gray.r, gray.g, gray.b);
-  if (entry.performer_number) {
-    doc.text(`Performer: ${entry.performer_number}`, pageWidth / 2 + 10, y);
-  }
-  y += 6;
-  doc.text(`Split: ${entry.split_percentage}%`, pageWidth / 2 + 10, y);
+  doc.setTextColor(180, 180, 180);
+  doc.text("NET PAY", 35, y + 18);
 
-  // NET PAY - Large, clean display
-  y += 20;
-  doc.setFillColor(navy.r, navy.g, navy.b);
-  doc.roundedRect(15, y, pageWidth - 30, 35, 3, 3, "F");
+  // Net pay amount
+  doc.setFontSize(32);
+  doc.setFont("helvetica", "bold");
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(10);
-  doc.setFont("helvetica", "normal");
-  doc.text("NET PAY", 25, y + 14);
-  doc.setFontSize(28);
-  doc.setFont("helvetica", "bold");
-  doc.text(formatCurrency(calc.netPay), pageWidth - 25, y + 25, { align: "right" });
+  doc.text(formatCurrency(calc.netPay), 35, y + 38);
 
-  y += 45;
+  // Pay date on the right
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(180, 180, 180);
+  doc.text("ISSUED", pageWidth - 35, y + 18, { align: "right" });
+  doc.setFontSize(10);
+  doc.setTextColor(255, 255, 255);
+  const today = new Date();
+  doc.text(today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), pageWidth - 35, y + 28, { align: "right" });
+
+  y += netPayBoxHeight + 15;
 
   // NHS Period (if applicable)
   if (dentist.is_nhs && entry.nhs_period_start && entry.nhs_period_end) {
     const nhsStart = new Date(entry.nhs_period_start + "T00:00:00");
     const nhsEnd = new Date(entry.nhs_period_end + "T00:00:00");
     const formatDate = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
+    doc.setFillColor(bgLight.r, bgLight.g, bgLight.b);
+    doc.roundedRect(20, y - 5, pageWidth - 40, 14, 2, 2, "F");
     doc.setFontSize(8);
-    doc.setTextColor(gray.r, gray.g, gray.b);
-    doc.text(`NHS Period: ${formatDate(nhsStart)} - ${formatDate(nhsEnd)}`, pageWidth / 2, y, { align: "center" });
-    y += 10;
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(textMuted.r, textMuted.g, textMuted.b);
+    doc.text(`NHS Schedule Period: ${formatDate(nhsStart)} - ${formatDate(nhsEnd)}`, pageWidth / 2, y + 3, { align: "center" });
+    y += 18;
   }
 
-  // Section styling
+  // Section header styling function
   const sectionHeader = (title: string, yPos: number) => {
-    doc.setFontSize(11);
+    doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(navy.r, navy.g, navy.b);
-    doc.text(title.toUpperCase(), 15, yPos);
-    doc.setDrawColor(230, 230, 230);
-    doc.setLineWidth(0.3);
-    doc.line(15, yPos + 3, pageWidth - 15, yPos + 3);
-    return yPos + 10;
+    doc.setTextColor(textDark.r, textDark.g, textDark.b);
+    doc.text(title.toUpperCase(), 20, yPos);
+
+    // Accent underline
+    const textWidth = doc.getTextWidth(title.toUpperCase());
+    doc.setDrawColor(brandBlue.r, brandBlue.g, brandBlue.b);
+    doc.setLineWidth(1.5);
+    doc.line(20, yPos + 2, 20 + textWidth, yPos + 2);
+
+    return yPos + 12;
   };
 
   y = sectionHeader("Earnings", y);
@@ -178,14 +225,15 @@ export async function GET(req: NextRequest) {
     head: [["Description", "Amount"]],
     body: earningsData,
     theme: "plain",
-    headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 8, fontStyle: "bold" },
-    styles: { fontSize: 9, cellPadding: 4, textColor: [navy.r, navy.g, navy.b] },
-    columnStyles: { 1: { halign: "right" } },
-    margin: { left: 15, right: 15 },
+    headStyles: { fillColor: [bgLight.r, bgLight.g, bgLight.b], textColor: [textMuted.r, textMuted.g, textMuted.b], fontSize: 8, fontStyle: "bold" },
+    styles: { fontSize: 9, cellPadding: 5, textColor: [textDark.r, textDark.g, textDark.b], lineColor: [borderLight.r, borderLight.g, borderLight.b], lineWidth: 0.1 },
+    columnStyles: { 1: { halign: "right", fontStyle: "bold" } },
+    margin: { left: 20, right: 20 },
     didParseCell: (data) => {
       if (data.row.index === earningsData.length - 1) {
         data.cell.styles.fontStyle = "bold";
-        data.cell.styles.fillColor = [240, 253, 244]; // Light green for total
+        data.cell.styles.fillColor = [236, 253, 245]; // Light green for total
+        data.cell.styles.textColor = [22, 101, 52]; // Green text
       }
     },
   });
@@ -240,19 +288,20 @@ export async function GET(req: NextRequest) {
       head: [["Description", "Amount"]],
       body: deductionsData,
       theme: "plain",
-      headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 8, fontStyle: "bold" },
-      styles: { fontSize: 9, cellPadding: 4, textColor: [navy.r, navy.g, navy.b] },
-      columnStyles: { 1: { halign: "right" } },
-      margin: { left: 15, right: 15 },
+      headStyles: { fillColor: [bgLight.r, bgLight.g, bgLight.b], textColor: [textMuted.r, textMuted.g, textMuted.b], fontSize: 8, fontStyle: "bold" },
+      styles: { fontSize: 9, cellPadding: 5, textColor: [textDark.r, textDark.g, textDark.b], lineColor: [borderLight.r, borderLight.g, borderLight.b], lineWidth: 0.1 },
+      columnStyles: { 1: { halign: "right", fontStyle: "bold" } },
+      margin: { left: 20, right: 20 },
       didParseCell: (data) => {
         if (data.row.index === deductionsData.length - 1) {
           data.cell.styles.fontStyle = "bold";
           data.cell.styles.fillColor = [254, 242, 242]; // Light red for total
+          data.cell.styles.textColor = [153, 27, 27]; // Red text
         }
         // Style rows with links
         const linkInfo = labBillLinks.find(l => l.row === data.row.index);
         if (linkInfo && data.column.index === 0) {
-          data.cell.styles.textColor = [79, 70, 229]; // Indigo for links
+          data.cell.styles.textColor = [brandBlue.r, brandBlue.g, brandBlue.b];
         }
       },
       didDrawCell: (data) => {
@@ -301,14 +350,14 @@ export async function GET(req: NextRequest) {
       head: [["Patient", "Date", "Therapist", "Mins", "Cost"]],
       body: therapyData,
       theme: "plain",
-      headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 7, fontStyle: "bold" },
-      styles: { fontSize: 8, cellPadding: 2.5, textColor: [navy.r, navy.g, navy.b] },
+      headStyles: { fillColor: [bgLight.r, bgLight.g, bgLight.b], textColor: [textMuted.r, textMuted.g, textMuted.b], fontSize: 7, fontStyle: "bold" },
+      styles: { fontSize: 8, cellPadding: 3, textColor: [textDark.r, textDark.g, textDark.b], lineColor: [borderLight.r, borderLight.g, borderLight.b], lineWidth: 0.1 },
       columnStyles: { 3: { halign: "right" }, 4: { halign: "right" } },
-      margin: { left: 15, right: 15 },
+      margin: { left: 20, right: 20 },
       didParseCell: (data) => {
         if (data.row.index === therapyData.length - 1) {
           data.cell.styles.fontStyle = "bold";
-          data.cell.styles.fillColor = [240, 253, 244];
+          data.cell.styles.fillColor = [bgLight.r, bgLight.g, bgLight.b];
         }
       },
     });
@@ -343,41 +392,34 @@ export async function GET(req: NextRequest) {
 
     autoTable(doc, {
       startY: y, head: [["Metric", "Value"]], body: analyticsData, theme: "plain",
-      headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 8, fontStyle: "bold" },
-      styles: { fontSize: 9, cellPadding: 3.5, textColor: [navy.r, navy.g, navy.b] },
-      columnStyles: { 1: { halign: "right" } }, margin: { left: 15, right: 15 },
+      headStyles: { fillColor: [bgLight.r, bgLight.g, bgLight.b], textColor: [textMuted.r, textMuted.g, textMuted.b], fontSize: 8, fontStyle: "bold" },
+      styles: { fontSize: 9, cellPadding: 4, textColor: [textDark.r, textDark.g, textDark.b], lineColor: [borderLight.r, borderLight.g, borderLight.b], lineWidth: 0.1 },
+      columnStyles: { 1: { halign: "right", fontStyle: "bold" } }, margin: { left: 20, right: 20 },
     });
     y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 15;
 
     // Top Performers
     if (analytics.topPatientsByHourlyRate.length > 0 || analytics.topTreatmentsByHourlyRate.length > 0) {
       if (y > 220) { doc.addPage(); y = 20; }
-      doc.setFontSize(10);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(navy.r, navy.g, navy.b);
-      doc.text("TOP PERFORMERS", 15, y);
-      doc.setDrawColor(230, 230, 230);
-      doc.setLineWidth(0.3);
-      doc.line(15, y + 3, pageWidth - 15, y + 3);
-      y += 12;
+      y = sectionHeader("Top Performers", y);
 
       // Side by side tables
-      const leftWidth = (pageWidth - 40) / 2;
+      const leftWidth = (pageWidth - 50) / 2;
 
       if (analytics.topPatientsByHourlyRate.length > 0) {
         doc.setFontSize(8);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(gray.r, gray.g, gray.b);
-        doc.text("By Patient (£/hour)", 15, y);
+        doc.setTextColor(textMuted.r, textMuted.g, textMuted.b);
+        doc.text("By Patient (£/hour)", 20, y);
         autoTable(doc, {
-          startY: y + 2,
+          startY: y + 3,
           head: [["Patient", "£/hr"]],
           body: analytics.topPatientsByHourlyRate.slice(0, 5).map(p => [p.name.substring(0, 20), formatCurrency(p.hourlyRate)]),
           theme: "plain",
-          headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 7, fontStyle: "bold" },
-          styles: { fontSize: 7, cellPadding: 1.5, textColor: [navy.r, navy.g, navy.b] },
+          headStyles: { fillColor: [bgLight.r, bgLight.g, bgLight.b], textColor: [textMuted.r, textMuted.g, textMuted.b], fontSize: 7, fontStyle: "bold" },
+          styles: { fontSize: 7, cellPadding: 2, textColor: [textDark.r, textDark.g, textDark.b] },
           columnStyles: { 1: { halign: "right" } },
-          margin: { left: 15, right: pageWidth - 15 - leftWidth },
+          margin: { left: 20, right: pageWidth - 20 - leftWidth },
           tableWidth: leftWidth,
         });
       }
@@ -385,17 +427,17 @@ export async function GET(req: NextRequest) {
       if (analytics.topTreatmentsByHourlyRate.length > 0) {
         doc.setFontSize(8);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(gray.r, gray.g, gray.b);
-        doc.text("By Treatment (£/hour)", 15 + leftWidth + 10, y);
+        doc.setTextColor(textMuted.r, textMuted.g, textMuted.b);
+        doc.text("By Treatment (£/hour)", 20 + leftWidth + 10, y);
         autoTable(doc, {
-          startY: y + 2,
+          startY: y + 3,
           head: [["Treatment", "£/hr"]],
           body: analytics.topTreatmentsByHourlyRate.slice(0, 5).map(t => [t.treatment.substring(0, 20), formatCurrency(t.hourlyRate)]),
           theme: "plain",
-          headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 7, fontStyle: "bold" },
-          styles: { fontSize: 7, cellPadding: 1.5, textColor: [navy.r, navy.g, navy.b] },
+          headStyles: { fillColor: [bgLight.r, bgLight.g, bgLight.b], textColor: [textMuted.r, textMuted.g, textMuted.b], fontSize: 7, fontStyle: "bold" },
+          styles: { fontSize: 7, cellPadding: 2, textColor: [textDark.r, textDark.g, textDark.b] },
           columnStyles: { 1: { halign: "right" } },
-          margin: { left: 15 + leftWidth + 10, right: 15 },
+          margin: { left: 20 + leftWidth + 10, right: 20 },
           tableWidth: leftWidth,
         });
       }
@@ -425,36 +467,55 @@ export async function GET(req: NextRequest) {
           p.finance ? "Y" : ""
         ]),
         theme: "plain",
-        headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 7, fontStyle: "bold" },
-        styles: { fontSize: 7, cellPadding: 2, textColor: [navy.r, navy.g, navy.b] },
+        headStyles: { fillColor: [bgLight.r, bgLight.g, bgLight.b], textColor: [textMuted.r, textMuted.g, textMuted.b], fontSize: 7, fontStyle: "bold" },
+        styles: { fontSize: 7, cellPadding: 2.5, textColor: [textDark.r, textDark.g, textDark.b], lineColor: [borderLight.r, borderLight.g, borderLight.b], lineWidth: 0.1 },
         columnStyles: { 2: { halign: "right" }, 3: { halign: "center" }, 4: { halign: "right" } },
-        margin: { left: 15, right: 15 },
+        margin: { left: 20, right: 20 },
       });
     } else {
       autoTable(doc, {
         startY: y, head: [["Patient", "Date", "Amount", "Finance"]],
         body: patients.map((p) => [p.name, p.date, formatCurrency(p.amount), p.finance ? "Yes" : ""]),
         theme: "plain",
-        headStyles: { fillColor: [lightGray.r, lightGray.g, lightGray.b], textColor: [gray.r, gray.g, gray.b], fontSize: 8, fontStyle: "bold" },
-        styles: { fontSize: 8, cellPadding: 2.5, textColor: [navy.r, navy.g, navy.b] },
+        headStyles: { fillColor: [bgLight.r, bgLight.g, bgLight.b], textColor: [textMuted.r, textMuted.g, textMuted.b], fontSize: 8, fontStyle: "bold" },
+        styles: { fontSize: 8, cellPadding: 3, textColor: [textDark.r, textDark.g, textDark.b], lineColor: [borderLight.r, borderLight.g, borderLight.b], lineWidth: 0.1 },
         columnStyles: { 2: { halign: "right" } },
-        margin: { left: 15, right: 15 },
+        margin: { left: 20, right: 20 },
       });
     }
   }
 
-  // Clean, minimal footer
+  // Professional footer with branding
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
-    const footerY = doc.internal.pageSize.getHeight() - 12;
+    const footerY = pageHeight - 15;
 
+    // Footer divider line
+    doc.setDrawColor(borderLight.r, borderLight.g, borderLight.b);
+    doc.setLineWidth(0.5);
+    doc.line(20, footerY - 5, pageWidth - 20, footerY - 5);
+
+    // Left: Clinic name
     doc.setFontSize(7);
-    doc.setTextColor(gray.r, gray.g, gray.b);
-    doc.text(clinicName.toUpperCase(), 15, footerY);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(textMuted.r, textMuted.g, textMuted.b);
+    doc.text(clinicName, 20, footerY);
+
+    // Center: Website
     doc.setFont("helvetica", "normal");
     doc.text(clinicWebsite, pageWidth / 2, footerY, { align: "center" });
-    doc.text(`${i} / ${pageCount}`, pageWidth - 15, footerY, { align: "right" });
+
+    // Right: Page number with styling
+    doc.setFillColor(bgLight.r, bgLight.g, bgLight.b);
+    doc.roundedRect(pageWidth - 35, footerY - 5, 15, 8, 1, 1, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(textDark.r, textDark.g, textDark.b);
+    doc.text(`${i}/${pageCount}`, pageWidth - 27.5, footerY, { align: "center" });
+
+    // Bottom accent bar
+    doc.setFillColor(brandBlue.r, brandBlue.g, brandBlue.b);
+    doc.rect(0, pageHeight - 4, pageWidth, 4, "F");
   }
 
   const pdfBuffer = Buffer.from(doc.output("arraybuffer"));

@@ -3,6 +3,49 @@ import { useEffect, useState, useRef } from "react";
 import Shell from "@/components/Shell";
 import { Save, Loader2, Upload, X, Building2, Image as ImageIcon } from "lucide-react";
 
+// Move Section outside the component to prevent re-renders
+function Section({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="bg-white rounded-xl border border-border p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        {icon && <span className="text-primary-600">{icon}</span>}
+        <h2 className="font-semibold text-text">{title}</h2>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// Reusable input field component
+function SettingsField({
+  label,
+  value,
+  onChange,
+  type = "text",
+  placeholder = "",
+  span = 1
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  placeholder?: string;
+  span?: number;
+}) {
+  return (
+    <div className={span === 2 ? "col-span-2" : ""}>
+      <label className="block text-xs font-medium text-text-muted mb-1">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
+      />
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -73,29 +116,6 @@ export default function SettingsPage() {
     update("clinic_logo_url", "");
   }
 
-  const Section = ({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) => (
-    <div className="bg-white rounded-xl border border-border p-5 space-y-4">
-      <div className="flex items-center gap-2">
-        {icon && <span className="text-primary-600">{icon}</span>}
-        <h2 className="font-semibold text-text">{title}</h2>
-      </div>
-      {children}
-    </div>
-  );
-
-  const Field = ({ label, k, type = "text", placeholder = "", span = 1 }: { label: string; k: string; type?: string; placeholder?: string; span?: number }) => (
-    <div className={span === 2 ? "col-span-2" : ""}>
-      <label className="block text-xs font-medium text-text-muted mb-1">{label}</label>
-      <input
-        type={type}
-        value={settings[k] || ""}
-        onChange={(e) => update(k, e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
-      />
-    </div>
-  );
-
   return (
     <Shell>
       <div className="max-w-3xl mx-auto space-y-6">
@@ -160,14 +180,14 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <Field label="Clinic Name" k="clinic_name" placeholder="Your Dental Clinic" span={2} />
-            <Field label="Address Line 1" k="clinic_address_line1" placeholder="123 High Street" />
-            <Field label="Address Line 2" k="clinic_address_line2" placeholder="Suite 100" />
-            <Field label="City" k="clinic_city" placeholder="London" />
-            <Field label="Postcode" k="clinic_postcode" placeholder="SW1A 1AA" />
-            <Field label="Phone" k="clinic_phone" placeholder="+44 20 1234 5678" />
-            <Field label="Email" k="clinic_email" placeholder="info@clinic.com" />
-            <Field label="Website" k="clinic_website" placeholder="eliopay.co.uk" span={2} />
+            <SettingsField label="Clinic Name" value={settings.clinic_name || ""} onChange={(v) => update("clinic_name", v)} placeholder="Your Dental Clinic" span={2} />
+            <SettingsField label="Address Line 1" value={settings.clinic_address_line1 || ""} onChange={(v) => update("clinic_address_line1", v)} placeholder="123 High Street" />
+            <SettingsField label="Address Line 2" value={settings.clinic_address_line2 || ""} onChange={(v) => update("clinic_address_line2", v)} placeholder="Suite 100" />
+            <SettingsField label="City" value={settings.clinic_city || ""} onChange={(v) => update("clinic_city", v)} placeholder="London" />
+            <SettingsField label="Postcode" value={settings.clinic_postcode || ""} onChange={(v) => update("clinic_postcode", v)} placeholder="SW1A 1AA" />
+            <SettingsField label="Phone" value={settings.clinic_phone || ""} onChange={(v) => update("clinic_phone", v)} placeholder="+44 20 1234 5678" />
+            <SettingsField label="Email" value={settings.clinic_email || ""} onChange={(v) => update("clinic_email", v)} placeholder="info@clinic.com" />
+            <SettingsField label="Website" value={settings.clinic_website || ""} onChange={(v) => update("clinic_website", v)} placeholder="eliopay.co.uk" span={2} />
           </div>
         </Section>
 
@@ -241,9 +261,7 @@ export default function SettingsPage() {
 
         <Section title="Dentally Integration">
           <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <Field label="Site ID" k="dentally_site_id" placeholder="212f9c01-f4f2-446d-b7a3-0162b135e9d3" span={2} />
-            </div>
+            <SettingsField label="Site ID" value={settings.dentally_site_id || ""} onChange={(v) => update("dentally_site_id", v)} placeholder="212f9c01-f4f2-446d-b7a3-0162b135e9d3" span={2} />
             <div className="col-span-2">
               <label className="block text-xs font-medium text-text-muted mb-1">Therapist IDs (comma-separated)</label>
               <input
@@ -269,13 +287,11 @@ export default function SettingsPage() {
 
         <Section title="Email (SMTP)">
           <div className="grid grid-cols-2 gap-4">
-            <Field label="SMTP Host" k="smtp_host" placeholder="smtp.gmail.com" />
-            <Field label="SMTP Port" k="smtp_port" placeholder="587" />
-            <Field label="SMTP Username" k="smtp_user" placeholder="you@gmail.com" />
-            <Field label="SMTP Password" k="smtp_pass" type="password" placeholder="App password" />
-            <div className="col-span-2">
-              <Field label="From Address" k="email_from" placeholder="payslips@eliopay.co.uk" span={2} />
-            </div>
+            <SettingsField label="SMTP Host" value={settings.smtp_host || ""} onChange={(v) => update("smtp_host", v)} placeholder="smtp.gmail.com" />
+            <SettingsField label="SMTP Port" value={settings.smtp_port || ""} onChange={(v) => update("smtp_port", v)} placeholder="587" />
+            <SettingsField label="SMTP Username" value={settings.smtp_user || ""} onChange={(v) => update("smtp_user", v)} placeholder="you@gmail.com" />
+            <SettingsField label="SMTP Password" value={settings.smtp_pass || ""} onChange={(v) => update("smtp_pass", v)} type="password" placeholder="App password" />
+            <SettingsField label="From Address" value={settings.email_from || ""} onChange={(v) => update("email_from", v)} placeholder="payslips@eliopay.co.uk" span={2} />
           </div>
           <p className="text-xs text-text-subtle">
             For Gmail, use an App Password (not your regular password). Enable 2FA first, then generate at myaccount.google.com.

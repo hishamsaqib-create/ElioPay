@@ -74,12 +74,31 @@ export async function getDb(): Promise<Client> {
 async function initializeDb(db: Client) {
   // Create tables one at a time (libsql doesn't support multi-statement exec reliably)
   const tables = [
+    `CREATE TABLE IF NOT EXISTS clinics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      slug TEXT UNIQUE NOT NULL,
+      email TEXT,
+      phone TEXT,
+      address_line1 TEXT,
+      address_line2 TEXT,
+      city TEXT,
+      postcode TEXT,
+      website TEXT,
+      logo_url TEXT,
+      dentally_site_id TEXT,
+      dentally_api_token TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
     `CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'manager',
+      clinic_id INTEGER REFERENCES clinics(id),
+      is_super_admin INTEGER NOT NULL DEFAULT 0,
       must_change_password INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now'))
     )`,
@@ -164,6 +183,9 @@ async function initializeDb(db: Client) {
     "ALTER TABLE dentists ADD COLUMN weekly_hours REAL DEFAULT 40",
     "ALTER TABLE payslip_entries ADD COLUMN therapy_breakdown_json TEXT DEFAULT '[]'",
     "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN clinic_id INTEGER REFERENCES clinics(id)",
+    "ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE dentists ADD COLUMN clinic_id INTEGER REFERENCES clinics(id)",
     "UPDATE dentists SET is_nhs = 1, uda_rate = 35.45, performer_number = '110271' WHERE name = 'Hisham Saqib'",
   ];
 
