@@ -96,11 +96,12 @@ export async function POST(req: NextRequest) {
     // Hash password
     const passwordHash = bcrypt.hashSync(password, 12);
 
-    // Create user
+    // Create user - ensure clinic_id is null if not provided
+    const clinicIdValue = clinic_id !== undefined ? clinic_id : null;
     const result = await db.execute({
       sql: `INSERT INTO users (email, password_hash, name, role, clinic_id, is_super_admin, must_change_password)
             VALUES (?, ?, ?, ?, ?, 0, 1)`,
-      args: [email.toLowerCase().trim(), passwordHash, name.trim(), userRole, clinic_id || null],
+      args: [email.toLowerCase().trim(), passwordHash, name.trim(), userRole, clinicIdValue],
     });
 
     return NextResponse.json({
