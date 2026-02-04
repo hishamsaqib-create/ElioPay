@@ -3,11 +3,16 @@ import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import {
-  LayoutDashboard, Users, FileText, Settings, LogOut, Menu, X, ChevronRight
+  LayoutDashboard, Users, FileText, Settings, LogOut, Menu, X, ChevronRight, User
 } from "lucide-react";
 
 interface User {
   id: number; name: string; email: string; role: string;
+}
+
+interface ClinicSettings {
+  clinic_name?: string;
+  clinic_logo_url?: string;
 }
 
 const NAV = [
@@ -19,6 +24,7 @@ const NAV = [
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [clinicSettings, setClinicSettings] = useState<ClinicSettings>({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
@@ -30,6 +36,14 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         setUser(data.user);
       } else {
         router.replace("/login");
+      }
+    });
+
+    // Fetch clinic settings
+    fetch("/api/settings").then(async (r) => {
+      if (r.ok) {
+        const data = await r.json();
+        setClinicSettings(data.settings || {});
       }
     });
   }, [router]);
@@ -48,6 +62,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   }
 
   const currentPage = NAV.find((n) => pathname.startsWith(n.href));
+  const clinicName = clinicSettings.clinic_name || "Your Clinic";
 
   return (
     <div className="min-h-screen flex bg-surface-dim">
@@ -64,16 +79,16 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       >
         <div className="h-16 flex items-center px-6 border-b border-border">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 flex items-center justify-center">
-              <svg viewBox="0 0 100 100" className="w-8 h-8">
-                <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-700"/>
-                <path d="M50 25 L35 70 L42 70 L45 60 L55 60 L58 70 L65 70 L50 25 Z M47 53 L50 42 L53 53 Z" fill="currentColor" className="text-slate-700"/>
-                <path d="M40 58 Q50 68 60 58" fill="currentColor" className="text-slate-700"/>
-              </svg>
-            </div>
+            {clinicSettings.clinic_logo_url ? (
+              <img src={clinicSettings.clinic_logo_url} alt="Logo" className="w-8 h-8 object-contain" />
+            ) : (
+              <div className="w-8 h-8 flex items-center justify-center bg-primary-100 rounded-lg">
+                <span className="text-primary-700 font-bold text-sm">E</span>
+              </div>
+            )}
             <div>
-              <h1 className="text-base font-bold text-text leading-none">AuraPay<sup className="text-[8px] font-medium ml-0.5 text-text-subtle">TM</sup></h1>
-              <p className="text-[10px] text-text-subtle leading-none mt-0.5">Aura Dental Clinic</p>
+              <h1 className="text-base font-bold text-text leading-none">ElioPay<sup className="text-[8px] font-medium ml-0.5 text-text-subtle">™</sup></h1>
+              <p className="text-[10px] text-text-subtle leading-none mt-0.5 truncate max-w-[140px]">{clinicName}</p>
             </div>
           </div>
           <button onClick={() => setSidebarOpen(false)} className="ml-auto lg:hidden text-text-muted">
@@ -103,7 +118,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="p-3 border-t border-border">
-          <div className="flex items-center gap-3 px-3 py-2">
+          <Link
+            href="/account"
+            className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-muted transition"
+          >
             <div className="w-8 h-8 bg-primary-100 text-primary-700 rounded-full flex items-center justify-center text-sm font-semibold">
               {user.name.charAt(0)}
             </div>
@@ -111,10 +129,14 @@ export default function Shell({ children }: { children: React.ReactNode }) {
               <p className="text-sm font-medium text-text truncate">{user.name}</p>
               <p className="text-xs text-text-subtle truncate">{user.role}</p>
             </div>
-            <button onClick={logout} className="text-text-subtle hover:text-danger transition" title="Sign out">
-              <LogOut size={16} />
-            </button>
-          </div>
+          </Link>
+          <button
+            onClick={logout}
+            className="w-full flex items-center gap-3 px-3 py-2 mt-1 rounded-lg text-sm text-text-muted hover:bg-surface-muted hover:text-danger transition"
+          >
+            <LogOut size={16} />
+            Sign out
+          </button>
         </div>
       </aside>
 
@@ -125,7 +147,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             <Menu size={20} />
           </button>
           <div className="flex items-center gap-1.5 text-sm text-text-muted">
-            <span className="hidden sm:inline">AuraPay</span>
+            <span className="hidden sm:inline">ElioPay</span>
             {currentPage && (
               <>
                 <ChevronRight size={14} />

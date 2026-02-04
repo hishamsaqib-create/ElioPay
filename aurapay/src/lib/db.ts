@@ -16,7 +16,7 @@ function validateDbConfig(): { url: string; authToken?: string } {
       throw new Error("CRITICAL: TURSO_DATABASE_URL environment variable is required in production");
     }
     console.warn("WARNING: Using local SQLite database. Set TURSO_DATABASE_URL for production.");
-    return { url: "file:aurapay.db" };
+    return { url: "file:eliopay.db" };
   }
 
   // Validate URL format
@@ -184,18 +184,18 @@ async function initializeDb(db: Client) {
 
     await db.execute({
       sql: "INSERT INTO users (email, password_hash, name, role, must_change_password) VALUES (?, ?, ?, ?, ?)",
-      args: ["hisham@aurapay.cloud", hash, "Hisham Saqib", "owner", 1],
+      args: ["admin@eliodental.co.uk", hash, "Admin", "owner", 1],
     });
     await db.execute({
       sql: "INSERT INTO users (email, password_hash, name, role, must_change_password) VALUES (?, ?, ?, ?, ?)",
-      args: ["manager@aurapay.cloud", hash, "Practice Manager", "manager", 1],
+      args: ["manager@eliodental.co.uk", hash, "Practice Manager", "manager", 1],
     });
 
     // Log the initial password (only visible in server logs during first deployment)
     if (!process.env.INITIAL_ADMIN_PASSWORD) {
       console.log("=".repeat(60));
       console.log("IMPORTANT: Initial admin password generated");
-      console.log("Email: hisham@aurapay.cloud");
+      console.log("Email: admin@eliodental.co.uk");
       console.log("Password:", initialPassword);
       console.log("Please change this password immediately after first login!");
       console.log("=".repeat(60));
@@ -243,7 +243,17 @@ async function initializeDb(db: Client) {
   const settingsCount = await db.execute("SELECT COUNT(*) as c FROM settings");
   if (Number(settingsCount.rows[0].c) === 0) {
     const defaults: [string, string][] = [
-      ["practice_name", "Aura Dental Clinic"],
+      // Clinic branding
+      ["clinic_name", "Your Dental Clinic"],
+      ["clinic_address_line1", ""],
+      ["clinic_address_line2", ""],
+      ["clinic_city", ""],
+      ["clinic_postcode", ""],
+      ["clinic_phone", ""],
+      ["clinic_email", ""],
+      ["clinic_website", ""],
+      ["clinic_logo_url", ""],
+      // Pay calculation settings
       ["therapy_rate", "0.5833"],
       ["lab_bill_split", "0.5"],
       ["finance_fee_split", "0.5"],
@@ -256,7 +266,7 @@ async function initializeDb(db: Client) {
       ["smtp_port", process.env.SMTP_PORT || "587"],
       ["smtp_user", process.env.SMTP_USER || ""],
       ["smtp_pass", process.env.SMTP_PASS || ""],
-      ["email_from", process.env.EMAIL_FROM || "payslips@aurapay.cloud"],
+      ["email_from", process.env.EMAIL_FROM || "payslips@eliopay.co.uk"],
     ];
     for (const [k, v] of defaults) {
       await db.execute({ sql: "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", args: [k, v] });

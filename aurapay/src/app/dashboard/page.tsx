@@ -29,7 +29,7 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-text">Dashboard</h1>
-            <p className="text-sm text-text-muted mt-0.5">Manage payslips for Aura Dental Clinic</p>
+            <p className="text-sm text-text-muted mt-0.5">Manage payslips and dentist payments</p>
           </div>
           <Link
             href="/payslips/new"

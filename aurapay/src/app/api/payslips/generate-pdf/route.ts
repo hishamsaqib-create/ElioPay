@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, rowTo, PayslipEntry, Dentist } from "@/lib/db";
+import { getDb, rowTo, PayslipEntry, Dentist, getSettings } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { calculatePayslip, formatCurrency, getMonthName } from "@/lib/calculations";
 import { jsPDF } from "jspdf";
@@ -43,6 +43,11 @@ export async function GET(req: NextRequest) {
   };
   const calc = calculatePayslip(entry, dentist);
 
+  // Fetch clinic settings for dynamic branding
+  const settings = await getSettings();
+  const clinicName = settings.get("clinic_name") || "Your Dental Clinic";
+  const clinicWebsite = settings.get("clinic_website") || "eliopay.co.uk";
+
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
   let y = 20;
@@ -53,7 +58,7 @@ export async function GET(req: NextRequest) {
   const gray = { r: 107, g: 114, b: 128 };     // #6B7280 - Gray text
   const lightGray = { r: 243, g: 244, b: 246 }; // #F3F4F6 - Light background
 
-  // Draw Aura logo (circle with stylized A)
+  // Draw Elio logo (circle with E)
   const logoX = 15;
   const logoY = y - 5;
   const logoSize = 12;
@@ -64,27 +69,25 @@ export async function GET(req: NextRequest) {
   doc.setLineWidth(0.6);
   doc.circle(logoX + logoCenter, logoY + logoCenter, logoCenter, "S");
 
-  // Draw the "A" shape
-  doc.setLineWidth(0.5);
-  // Left leg of A
-  doc.line(logoX + logoCenter, logoY + 2, logoX + 2.5, logoY + logoSize - 2);
-  // Right leg of A
-  doc.line(logoX + logoCenter, logoY + 2, logoX + logoSize - 2.5, logoY + logoSize - 2);
-  // Curved crossbar (wave effect) - using a bezier-like approach with line
-  doc.setLineWidth(0.6);
-  const waveY = logoY + logoSize * 0.55;
-  doc.line(logoX + 4, waveY + 1, logoX + logoCenter, waveY - 1);
-  doc.line(logoX + logoCenter, waveY - 1, logoX + logoSize - 4, waveY + 1);
-
-  // Clean header - Logo text next to icon
-  doc.setFontSize(20);
+  // Draw the "E" letter
+  doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(navy.r, navy.g, navy.b);
-  doc.text("AURA", logoX + logoSize + 4, y + 2);
+  doc.text("E", logoX + logoCenter - 2.5, logoY + logoCenter + 3);
+
+  // Clean header - Clinic name next to icon
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(navy.r, navy.g, navy.b);
+  // Split clinic name if too long
+  const clinicNameParts = clinicName.split(" ");
+  const firstWord = clinicNameParts[0]?.toUpperCase() || "CLINIC";
+  doc.text(firstWord, logoX + logoSize + 4, y + 2);
   doc.setFontSize(7);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(gray.r, gray.g, gray.b);
-  doc.text("DENTAL CLINIC", logoX + logoSize + 4, y + 7);
+  const subText = clinicNameParts.slice(1).join(" ").toUpperCase() || "DENTAL";
+  doc.text(subText, logoX + logoSize + 4, y + 7);
 
   // Period info - right aligned
   doc.setFontSize(10);
@@ -448,9 +451,9 @@ export async function GET(req: NextRequest) {
 
     doc.setFontSize(7);
     doc.setTextColor(gray.r, gray.g, gray.b);
-    doc.text("AURA DENTAL CLINIC", 15, footerY);
+    doc.text(clinicName.toUpperCase(), 15, footerY);
     doc.setFont("helvetica", "normal");
-    doc.text("aurapay.cloud", pageWidth / 2, footerY, { align: "center" });
+    doc.text(clinicWebsite, pageWidth / 2, footerY, { align: "center" });
     doc.text(`${i} / ${pageCount}`, pageWidth - 15, footerY, { align: "right" });
   }
 
