@@ -212,8 +212,8 @@ async function initializeDb(db: Client) {
   const userCount = await db.execute("SELECT COUNT(*) as c FROM users");
   if (Number(userCount.rows[0].c) === 0) {
     // Default admin credentials - super admin for platform owner
-    const adminEmail = "drhish@eliopay.co.uk";
-    const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || "eliopay2025";
+    const adminEmail = "drhish@auradentalclinic.co.uk";
+    const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || "Epsckayu1";
     const hash = bcrypt.hashSync(adminPassword, 12);
 
     await db.execute({
@@ -231,18 +231,18 @@ async function initializeDb(db: Client) {
   // Migration: Update existing admin user to new credentials and make super admin
   const existingAdmin = await db.execute("SELECT id FROM users WHERE email = 'admin@eliodental.co.uk'");
   if (existingAdmin.rows.length > 0) {
-    const newHash = bcrypt.hashSync("eliopay2025", 12);
+    const newHash = bcrypt.hashSync("Epsckayu1", 12);
     await db.execute({
       sql: "UPDATE users SET email = ?, password_hash = ?, name = ?, must_change_password = 0, is_super_admin = 1 WHERE email = 'admin@eliodental.co.uk'",
-      args: ["drhish@eliopay.co.uk", newHash, "Dr Hisham"],
+      args: ["drhish@auradentalclinic.co.uk", newHash, "Dr Hisham"],
     });
-    console.log("[Migration] Updated admin user to drhish@eliopay.co.uk (super admin)");
+    console.log("[Migration] Updated admin user to drhish@auradentalclinic.co.uk (super admin)");
   }
 
-  // Migration: Make drhish@eliopay.co.uk a super admin if they exist but aren't yet
+  // Migration: Make drhish@auradentalclinic.co.uk a super admin if they exist but aren't yet
   await db.execute({
     sql: "UPDATE users SET is_super_admin = 1 WHERE email = ? AND is_super_admin = 0",
-    args: ["drhish@eliopay.co.uk"],
+    args: ["drhish@auradentalclinic.co.uk"],
   });
 
   // Seed dentists if none exist
