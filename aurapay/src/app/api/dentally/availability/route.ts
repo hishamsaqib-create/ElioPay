@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, rowsTo, Dentist } from "@/lib/db";
+import { getDb, rowTo, rowsTo, Dentist } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 
 const DENTALLY_API = "https://api.dentally.co/v1";
@@ -260,7 +260,7 @@ export async function POST(req: NextRequest) {
   if (periodResult.rows.length === 0) {
     return NextResponse.json({ error: "Period not found" }, { status: 404 });
   }
-  const period = periodResult.rows[0] as { id: number; month: number; year: number };
+  const period = rowTo<{ id: number; month: number; year: number }>(periodResult.rows[0]);
 
   // Calculate date range
   const startDate = `${period.year}-${String(period.month).padStart(2, "0")}-01`;
@@ -357,7 +357,7 @@ export async function GET(req: NextRequest) {
   if (periodResult.rows.length === 0) {
     return NextResponse.json({ error: "Period not found" }, { status: 404 });
   }
-  const period = periodResult.rows[0] as { id: number; month: number; year: number };
+  const period = rowTo<{ id: number; month: number; year: number }>(periodResult.rows[0]);
 
   // Calculate date range
   const startDate = `${period.year}-${String(period.month).padStart(2, "0")}-01`;
