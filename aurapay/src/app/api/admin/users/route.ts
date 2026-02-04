@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getDb, rowTo, rowsTo } from "@/lib/db";
 import { getSession } from "@/lib/auth";
+import { logAudit } from "../audit/route";
 
 // GET /api/admin/users - List all users
 export async function GET() {
@@ -104,10 +105,20 @@ export async function POST(req: NextRequest) {
       args: [email.toLowerCase().trim(), passwordHash, name.trim(), userRole, clinicIdValue],
     });
 
+    const newUserId = Number(result.lastInsertRowid);
+
+    // Log audit
+    await logAudit(user.id, "user_created", "user", newUserId, {
+      email: email.toLowerCase().trim(),
+      name: name.trim(),
+      role: userRole,
+      clinic_id: clinic_id || null,
+    }, req);
+
     return NextResponse.json({
       ok: true,
       user: {
-        id: Number(result.lastInsertRowid),
+        id: newUserId,
         email: email.toLowerCase().trim(),
         name: name.trim(),
         role: userRole,
@@ -215,6 +226,15 @@ export async function PUT(req: NextRequest) {
       args,
     });
 
+    // Log audit
+    await logAudit(user.id, "user_updated", "user", id, {
+      email: email?.toLowerCase().trim(),
+      name: name?.trim(),
+      role,
+      clinic_id,
+      password_changed: !!password,
+    }, req);
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[Admin] Error updating user:", error);
@@ -262,10 +282,23 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Cannot delete super admin users" }, { status: 403 });
     }
 
+    // Get user details before deleting for audit
+    const userDetails = await db.execute({
+      sql: "SELECT email, name FROM users WHERE id = ?",
+      args: [id],
+    });
+    const deletedUserInfo = rowTo<{ email: string; name: string }>(userDetails.rows[0]);
+
     await db.execute({
       sql: "DELETE FROM users WHERE id = ?",
       args: [id],
     });
+
+    // Log audit
+    await logAudit(user.id, "user_deleted", "user", id, {
+      deleted_email: deletedUserInfo.email,
+      deleted_name: deletedUserInfo.name,
+    }, req);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

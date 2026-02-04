@@ -191,22 +191,75 @@ export default function SettingsPage() {
           </div>
         </Section>
 
-        <Section title="Calculation Rates">
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-text-muted mb-1">Therapy Rate (per min)</label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle text-sm">£</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={settings.therapy_rate || "0.5833"}
-                  onChange={(e) => update("therapy_rate", e.target.value)}
-                  className="w-full pl-7 pr-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
-                />
+        {/* Therapy Calculator Section */}
+        <Section title="Therapy Calculator" icon={<span className="text-lg">🧮</span>}>
+          <div className="bg-gradient-to-r from-primary-50 to-blue-50 rounded-lg p-4 border border-primary-100">
+            <div className="grid grid-cols-3 gap-4 items-end">
+              <div>
+                <label className="block text-xs font-medium text-text mb-1">Hourly Rate</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-sm font-medium">£</span>
+                  <input
+                    type="number"
+                    step="1"
+                    value={settings.therapy_hourly_rate || "35"}
+                    onChange={(e) => {
+                      const hourly = parseFloat(e.target.value) || 0;
+                      update("therapy_hourly_rate", e.target.value);
+                      update("therapy_rate", (hourly / 60).toFixed(4));
+                    }}
+                    placeholder="35"
+                    className="w-full pl-7 pr-12 py-2.5 border border-primary-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none bg-white font-semibold"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted text-xs">/hour</span>
+                </div>
               </div>
-              <p className="text-[10px] text-text-subtle mt-1">Default: £0.5833 (£35/hour)</p>
+              <div className="flex items-center justify-center">
+                <div className="text-2xl text-primary-400">=</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-text mb-1">Per Minute Rate</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-sm font-medium">£</span>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={settings.therapy_rate || "0.5833"}
+                    onChange={(e) => {
+                      const perMin = parseFloat(e.target.value) || 0;
+                      update("therapy_rate", e.target.value);
+                      update("therapy_hourly_rate", (perMin * 60).toFixed(2));
+                    }}
+                    className="w-full pl-7 pr-12 py-2.5 border border-primary-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none bg-white font-semibold"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted text-xs">/min</span>
+                </div>
+              </div>
             </div>
+            {/* Quick reference examples */}
+            <div className="mt-4 pt-3 border-t border-primary-100">
+              <p className="text-xs font-medium text-text-muted mb-2">Quick Reference</p>
+              <div className="grid grid-cols-4 gap-2">
+                {[15, 30, 45, 60].map((mins) => {
+                  const rate = parseFloat(settings.therapy_rate || "0.5833");
+                  const cost = (rate * mins).toFixed(2);
+                  return (
+                    <div key={mins} className="bg-white rounded-md px-3 py-2 text-center border border-primary-100">
+                      <div className="text-xs text-text-muted">{mins} mins</div>
+                      <div className="text-sm font-bold text-primary-700">£{cost}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <p className="text-[10px] text-text-subtle mt-2">
+            This rate is charged to dentists for therapy/hygienist appointments referred by them. The cost is deducted from their payslip.
+          </p>
+        </Section>
+
+        <Section title="Calculation Rates">
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-text-muted mb-1">Lab Bill Split</label>
               <div className="relative">
