@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Shell from "@/components/Shell";
 import {
@@ -116,6 +116,11 @@ export default function PeriodDetailPage() {
   const [undoHistory, setUndoHistory] = useState<Map<number, Entry[]>>(new Map());
   const MAX_UNDO_HISTORY = 10;
 
+  // Auto-save infrastructure to prevent data loss
+  const autoSaveTimers = useRef<Record<number, NodeJS.Timeout>>({});
+  const entriesRef = useRef<Entry[]>([]);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<Record<number, "saving" | "saved" | null>>({});
+
   // Save state for undo before any change
   function saveForUndo(entryId: number, currentEntry: Entry) {
     setUndoHistory(prev => {
@@ -134,6 +139,7 @@ export default function PeriodDetailPage() {
 
     const previousState = history[history.length - 1];
     setEntries(prev => prev.map(e => e.id === entryId ? previousState : e));
+    scheduleAutoSave(entryId);
 
     // Remove the used state from history
     setUndoHistory(prev => {
@@ -146,6 +152,107 @@ export default function PeriodDetailPage() {
 
     showToast("Change undone");
   }
+
+  // Keep entriesRef in sync with state for auto-save
+  useEffect(() => {
+    entriesRef.current = entries;
+  }, [entries]);
+
+  // Silently persist entry to database without reloading (for auto-save)
+  const silentSaveEntry = useCallback(async (entryId: number) => {
+    const entry = entriesRef.current.find(e => e.id === entryId);
+    if (!entry) return;
+
+    setAutoSaveStatus(s => ({ ...s, [entryId]: "saving" }));
+    const labBills: LabBill[] = JSON.parse(entry.lab_bills_json || "[]");
+    const adjustments: Adjustment[] = JSON.parse(entry.adjustments_json || "[]");
+    const privatePatients: PrivatePatient[] = JSON.parse(entry.private_patients_json || "[]");
+    const discrepancies: Discrepancy[] = JSON.parse(entry.discrepancies_json || "[]");
+    const dentistLog: DentistLogEntry[] = JSON.parse(entry.dentist_log_json || "[]");
+
+    try {
+      await fetch("/api/periods/entries", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: entry.id,
+          gross_private: entry.gross_private,
+          nhs_udas: entry.nhs_udas,
+          lab_bills: labBills,
+          finance_fees: entry.finance_fees,
+          therapy_minutes: entry.therapy_minutes,
+          therapy_rate: entry.therapy_rate,
+          adjustments: adjustments,
+          notes: entry.notes,
+          private_patients: privatePatients,
+          discrepancies: discrepancies,
+          dentist_log: dentistLog,
+        }),
+      });
+      setAutoSaveStatus(s => ({ ...s, [entryId]: "saved" }));
+      setTimeout(() => setAutoSaveStatus(s => ({ ...s, [entryId]: null })), 2000);
+    } catch (e) {
+      console.error("Auto-save failed:", e);
+      setAutoSaveStatus(s => ({ ...s, [entryId]: null }));
+    }
+  }, []);
+
+  // Schedule a debounced auto-save for an entry
+  function scheduleAutoSave(entryId: number) {
+    if (autoSaveTimers.current[entryId]) {
+      clearTimeout(autoSaveTimers.current[entryId]);
+    }
+    autoSaveTimers.current[entryId] = setTimeout(() => {
+      silentSaveEntry(entryId);
+      delete autoSaveTimers.current[entryId];
+    }, 1500);
+  }
+
+  // Flush pending auto-saves (for page unload)
+  const flushPendingSaves = useCallback(() => {
+    Object.entries(autoSaveTimers.current).forEach(([id, timer]) => {
+      clearTimeout(timer);
+      delete autoSaveTimers.current[Number(id)];
+      const entry = entriesRef.current.find(e => e.id === Number(id));
+      if (!entry) return;
+
+      const labBills = JSON.parse(entry.lab_bills_json || "[]");
+      const adjustments = JSON.parse(entry.adjustments_json || "[]");
+      const privatePatients = JSON.parse(entry.private_patients_json || "[]");
+      const discrepancies = JSON.parse(entry.discrepancies_json || "[]");
+      const dentistLog = JSON.parse(entry.dentist_log_json || "[]");
+
+      fetch("/api/periods/entries", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: entry.id,
+          gross_private: entry.gross_private,
+          nhs_udas: entry.nhs_udas,
+          lab_bills: labBills,
+          finance_fees: entry.finance_fees,
+          therapy_minutes: entry.therapy_minutes,
+          therapy_rate: entry.therapy_rate,
+          adjustments: adjustments,
+          notes: entry.notes,
+          private_patients: privatePatients,
+          discrepancies: discrepancies,
+          dentist_log: dentistLog,
+        }),
+        keepalive: true,
+      });
+    });
+  }, []);
+
+  // Save pending changes on page unload / component unmount
+  useEffect(() => {
+    const handleBeforeUnload = () => flushPendingSaves();
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      flushPendingSaves();
+    };
+  }, [flushPendingSaves]);
 
   const loadData = useCallback(async () => {
     const [periodsRes, entriesRes] = await Promise.all([
@@ -203,6 +310,7 @@ export default function PeriodDetailPage() {
       saveForUndo(id, entry);
     }
     setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...updates } : e)));
+    scheduleAutoSave(id);
   }
 
   function updateLabBills(entryId: number, labBills: LabBill[]) {
@@ -1707,20 +1815,32 @@ export default function PeriodDetailPage() {
                           </span>
                         )}
                       </div>
-                      {!isFinalized && (
-                        <button
-                          onClick={() => saveEntry(entry)}
-                          disabled={saving[entry.id]}
-                          className="flex items-center gap-1.5 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50"
-                        >
-                          {saving[entry.id] ? (
-                            <Loader2 size={15} className="animate-spin" />
-                          ) : (
-                            <Save size={15} />
-                          )}
-                          Save
-                        </button>
-                      )}
+                      <div className="flex items-center gap-3">
+                        {autoSaveStatus[entry.id] === "saving" && (
+                          <span className="flex items-center gap-1 text-xs text-text-muted">
+                            <Loader2 size={12} className="animate-spin" /> Saving...
+                          </span>
+                        )}
+                        {autoSaveStatus[entry.id] === "saved" && (
+                          <span className="flex items-center gap-1 text-xs text-green-600">
+                            <CheckCircle2 size={12} /> Auto-saved
+                          </span>
+                        )}
+                        {!isFinalized && (
+                          <button
+                            onClick={() => saveEntry(entry)}
+                            disabled={saving[entry.id]}
+                            className="flex items-center gap-1.5 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50"
+                          >
+                            {saving[entry.id] ? (
+                              <Loader2 size={15} className="animate-spin" />
+                            ) : (
+                              <Save size={15} />
+                            )}
+                            Save & Recalculate
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
