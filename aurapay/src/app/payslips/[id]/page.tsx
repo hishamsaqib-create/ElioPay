@@ -112,6 +112,55 @@ export default function PeriodDetailPage() {
   const [nhsPdfFile, setNhsPdfFile] = useState<File | null>(null);
   const [nhsResult, setNhsResult] = useState<{ extractions?: Array<{ dentistName: string; udas: number; nhsIncome: number }>; extractedText?: string; period?: { start: string | null; end: string | null } } | null>(null);
 
+  // Split settings from API (used for client-side recalculation)
+  const [splitSettings, setSplitSettings] = useState<{ labBillSplit: number; financeFeeSplit: number }>({ labBillSplit: 0.5, financeFeeSplit: 0.5 });
+
+  // Client-side recalculation (mirrors server-side calculatePayslip)
+  function recalculate(entry: Entry): Calculation {
+    const labBills: LabBill[] = JSON.parse(entry.lab_bills_json || "[]");
+    const adjustments: Adjustment[] = JSON.parse(entry.adjustments_json || "[]");
+
+    const splitPercentage = Math.max(0, Math.min(100, entry.dentist.split_percentage));
+    const grossPrivate = Math.max(0, entry.gross_private);
+    const netPrivate = Math.round(grossPrivate * (splitPercentage / 100) * 100) / 100;
+
+    const nhsUdas = Math.max(0, entry.nhs_udas);
+    const udaRate = Math.max(0, entry.dentist.uda_rate);
+    const nhsIncome = entry.dentist.is_nhs ? Math.round(nhsUdas * udaRate * 100) / 100 : 0;
+
+    const validLabBills = labBills.filter(b => b.amount > 0);
+    const labBillsTotal = Math.round(validLabBills.reduce((s, b) => s + b.amount, 0) * 100) / 100;
+    const labBillsDeduction = Math.round(labBillsTotal * splitSettings.labBillSplit * 100) / 100;
+
+    const financeFees = Math.max(0, entry.finance_fees);
+    const financeFeesDeduction = Math.round(financeFees * splitSettings.financeFeeSplit * 100) / 100;
+
+    const therapyMinutes = Math.max(0, entry.therapy_minutes);
+    const therapyRate = entry.therapy_rate > 0 ? entry.therapy_rate : 0.5833;
+    const therapyDeduction = Math.round(therapyMinutes * therapyRate * 100) / 100;
+
+    let adjustmentsTotal = 0;
+    for (const adj of adjustments) {
+      if (typeof adj.amount !== "number" || adj.amount < 0) continue;
+      adjustmentsTotal += adj.type === "addition" ? adj.amount : -adj.amount;
+    }
+    adjustmentsTotal = Math.round(adjustmentsTotal * 100) / 100;
+
+    const totalEarnings = Math.round((netPrivate + nhsIncome) * 100) / 100;
+    const totalDeductions = Math.round((labBillsDeduction + financeFeesDeduction + therapyDeduction) * 100) / 100;
+    const netPay = Math.round((totalEarnings - totalDeductions + adjustmentsTotal) * 100) / 100;
+
+    return {
+      grossPrivate, splitPercentage, netPrivate,
+      nhsUdas, udaRate, nhsIncome,
+      labBills: validLabBills, labBillsTotal, labBillsDeduction,
+      financeFees, financeFeesDeduction,
+      therapyMinutes, therapyRate, therapyDeduction,
+      adjustments, adjustmentsTotal,
+      totalDeductions, totalEarnings, netPay,
+    };
+  }
+
   // Undo history - stores previous entry states
   const [undoHistory, setUndoHistory] = useState<Map<number, Entry[]>>(new Map());
   const MAX_UNDO_HISTORY = 10;
@@ -157,6 +206,9 @@ export default function PeriodDetailPage() {
     const p = periodsData.periods?.find((p: Period) => p.id === parseInt(periodId));
     setPeriod(p || null);
     setEntries(entriesData.entries || []);
+    if (entriesData.settings) {
+      setSplitSettings(entriesData.settings);
+    }
   }, [periodId]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -394,7 +446,7 @@ export default function PeriodDetailPage() {
     return <Shell><div className="flex items-center justify-center h-64 text-text-muted">Loading...</div></Shell>;
   }
 
-  const totalNetPay = entries.reduce((s, e) => s + e.calculation.netPay, 0);
+  const totalNetPay = entries.reduce((s, e) => s + recalculate(e).netPay, 0);
   const isFinalized = period.status === "finalized";
 
   return (
@@ -625,15 +677,15 @@ export default function PeriodDetailPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-4 border-t border-slate-700">
             <div>
               <p className="text-xs text-slate-400">Total Gross</p>
-              <p className="text-sm font-semibold">{fmt(entries.reduce((s, e) => s + e.calculation.grossPrivate, 0))}</p>
+              <p className="text-sm font-semibold">{fmt(entries.reduce((s, e) => s + recalculate(e).grossPrivate, 0))}</p>
             </div>
             <div>
               <p className="text-xs text-slate-400">Total NHS</p>
-              <p className="text-sm font-semibold">{fmt(entries.reduce((s, e) => s + e.calculation.nhsIncome, 0))}</p>
+              <p className="text-sm font-semibold">{fmt(entries.reduce((s, e) => s + recalculate(e).nhsIncome, 0))}</p>
             </div>
             <div>
               <p className="text-xs text-slate-400">Total Deductions</p>
-              <p className="text-sm font-semibold text-red-400">{fmt(entries.reduce((s, e) => s + e.calculation.totalDeductions, 0))}</p>
+              <p className="text-sm font-semibold text-red-400">{fmt(entries.reduce((s, e) => s + recalculate(e).totalDeductions, 0))}</p>
             </div>
             <div>
               <p className="text-xs text-slate-400">Dentists</p>
@@ -721,7 +773,7 @@ export default function PeriodDetailPage() {
             const labBills: LabBill[] = JSON.parse(entry.lab_bills_json || "[]");
             const adjustments: Adjustment[] = JSON.parse(entry.adjustments_json || "[]");
             const patients: PrivatePatient[] = JSON.parse(entry.private_patients_json || "[]");
-            const c = entry.calculation;
+            const c = recalculate(entry);
 
             return (
               <div key={entry.id} className="bg-white rounded-xl border border-border overflow-hidden">
@@ -803,6 +855,43 @@ export default function PeriodDetailPage() {
                         <p className="text-sm font-bold text-red-700 mt-0.5">-{fmt(c.totalDeductions)}</p>
                       </div>
                     </div>
+
+                    {/* Deductions Breakdown */}
+                    {(c.totalDeductions > 0 || c.therapyMinutes > 0) && (
+                      <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-2">
+                        <h4 className="text-xs font-semibold text-red-800 uppercase tracking-wide">Deductions Breakdown</h4>
+                        <div className="space-y-1.5 text-xs">
+                          {c.labBillsDeduction > 0 && (
+                            <div className="flex justify-between text-red-700">
+                              <span>Lab Bills ({fmt(c.labBillsTotal)} total, dentist pays {Math.round(splitSettings.labBillSplit * 100)}%)</span>
+                              <span className="font-medium">-{fmt(c.labBillsDeduction)}</span>
+                            </div>
+                          )}
+                          {c.financeFeesDeduction > 0 && (
+                            <div className="flex justify-between text-red-700">
+                              <span>Finance Fees ({fmt(c.financeFees)} total, {Math.round(splitSettings.financeFeeSplit * 100)}% split)</span>
+                              <span className="font-medium">-{fmt(c.financeFeesDeduction)}</span>
+                            </div>
+                          )}
+                          {c.therapyDeduction > 0 && (
+                            <div className="flex justify-between text-red-700">
+                              <span>Therapy ({c.therapyMinutes} mins x {fmt(c.therapyRate)}/min)</span>
+                              <span className="font-medium">-{fmt(c.therapyDeduction)}</span>
+                            </div>
+                          )}
+                          {c.therapyMinutes > 0 && c.therapyDeduction === 0 && (
+                            <div className="flex justify-between text-amber-600">
+                              <span>Therapy ({c.therapyMinutes} mins) - rate not set</span>
+                              <span className="font-medium">£0.00</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between text-red-900 font-bold pt-1.5 border-t border-red-200">
+                            <span>Total Deductions</span>
+                            <span>-{fmt(c.totalDeductions)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Performance Analytics */}
                     {(() => {

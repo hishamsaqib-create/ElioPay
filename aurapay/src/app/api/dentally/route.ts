@@ -1077,6 +1077,7 @@ export async function POST(req: NextRequest) {
             analytics_json = ?,
             therapy_breakdown_json = ?,
             therapy_minutes = ?,
+            therapy_rate = ?,
             updated_at = datetime('now')
           WHERE period_id = ? AND dentist_id = ?`,
           args: [
@@ -1086,6 +1087,7 @@ export async function POST(req: NextRequest) {
             analyticsJson,
             therapyBreakdownJson,
             totalTherapyMinutes,
+            therapyRate, // Sync therapy rate from settings
             period_id,
             dentistId,
           ],
