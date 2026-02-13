@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, rowsTo, PayslipEntry, Dentist } from "@/lib/db";
+import { getDb, rowsTo, PayslipEntry, Dentist, getSetting } from "@/lib/db";
 import { getSession } from "@/lib/auth";
-import { calculatePayslip } from "@/lib/calculations";
+import { calculatePayslipWithSettings } from "@/lib/calculations";
 
 export async function GET(req: NextRequest) {
   const user = await getSession();
@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
   type EntryRow = PayslipEntry & { dentist_name: string; dentist_email: string | null; split_percentage: number; is_nhs: number; uda_rate: number; performer_number: string | null };
   const entries = rowsTo<EntryRow>(result.rows);
 
-  const results = entries.map((entry) => {
+  const results = await Promise.all(entries.map(async (entry) => {
     const dentist: Dentist = {
       id: entry.dentist_id,
       name: entry.dentist_name,
@@ -36,11 +36,15 @@ export async function GET(req: NextRequest) {
       practitioner_id: null,
       active: 1,
     };
-    const calc = calculatePayslip(entry, dentist);
+    const calc = await calculatePayslipWithSettings(entry, dentist);
     return { ...entry, calculation: calc, dentist };
-  });
+  }));
 
-  return NextResponse.json({ entries: results });
+  // Return split settings so client-side recalculation can use them
+  const labBillSplit = await getSetting("lab_bill_split", 0.5);
+  const financeFeeSplit = await getSetting("finance_fee_split", 0.5);
+
+  return NextResponse.json({ entries: results, settings: { labBillSplit, financeFeeSplit } });
 }
 
 export async function PUT(req: NextRequest) {
