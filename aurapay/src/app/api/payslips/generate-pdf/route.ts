@@ -175,23 +175,15 @@ export async function GET(req: NextRequest) {
     doc.setTextColor(white.r, white.g, white.b);
     doc.text(formatCurrency(calc.netPay), 26, y + 36);
 
-    // Right side info
+    // Right side info - period only
     doc.setFontSize(7);
     doc.setTextColor(slate300.r, slate300.g, slate300.b);
-    doc.text("ISSUED", pageWidth - 25, y + 14, { align: "right" });
+    doc.text("PERIOD", pageWidth - 25, y + 14, { align: "right" });
     doc.setFontSize(9);
-    doc.setTextColor(white.r, white.g, white.b);
-    const today = new Date();
-    doc.text(today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), pageWidth - 25, y + 22, { align: "right" });
-
-    doc.setFontSize(7);
-    doc.setTextColor(slate300.r, slate300.g, slate300.b);
-    doc.text("PERIOD", pageWidth - 25, y + 32, { align: "right" });
-    doc.setFontSize(8);
     doc.setTextColor(white.r, white.g, white.b);
     const periodStart = new Date(entry.year, entry.month - 1, 1);
     const periodEnd = new Date(entry.year, entry.month, 0);
-    doc.text(`${periodStart.getDate()}-${periodEnd.getDate()} ${getMonthName(entry.month).substring(0, 3)}`, pageWidth - 25, y + 40, { align: "right" });
+    doc.text(`${periodStart.getDate()}-${periodEnd.getDate()} ${getMonthName(entry.month).substring(0, 3)} ${entry.year}`, pageWidth - 25, y + 22, { align: "right" });
 
     y += heroHeight + 8;
 
@@ -277,7 +269,16 @@ export async function GET(req: NextRequest) {
     const labBills: LabBill[] = entry.lab_bills_json ? JSON.parse(String(entry.lab_bills_json)) : [];
 
     const deductRows: [string, string][] = [];
-    if (calc.labBillsTotal > 0) deductRows.push([`Lab Bills (50%)`, formatCurrency(calc.labBillsDeduction)]);
+    if (calc.labBillsTotal > 0) {
+      const labSplitPct = Math.round((calc.labBillsDeduction / calc.labBillsTotal) * 100);
+      for (const lb of labBills) {
+        if (lb.amount > 0) {
+          const lbDeduction = Math.round(lb.amount * (labSplitPct / 100) * 100) / 100;
+          const name = lb.lab_name || "Lab Bill";
+          deductRows.push([`${name} (${labSplitPct}%)`, formatCurrency(lbDeduction)]);
+        }
+      }
+    }
     if (calc.financeFeesDeduction > 0) deductRows.push(["Finance Fees (50%)", formatCurrency(calc.financeFeesDeduction)]);
     if (calc.therapyDeduction > 0) deductRows.push([`Therapy (${calc.therapyMinutes}min)`, formatCurrency(calc.therapyDeduction)]);
     for (const adj of calc.adjustments) deductRows.push([adj.description, formatCurrency(adj.amount)]);

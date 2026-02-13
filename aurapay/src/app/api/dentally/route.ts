@@ -176,6 +176,8 @@ interface DentallyAppointment {
   practitioner_id?: number | string;
   starts_at?: string;
   finish_at?: string;
+  start_time?: string;  // Alternative field name from Dentally API
+  finish_time?: string; // Alternative field name from Dentally API
   duration?: number; // Duration in minutes
   treatment_description?: string;
   reason?: string;
@@ -343,10 +345,12 @@ function getAppointmentDuration(apt: DentallyAppointment): number {
   // If duration is provided directly
   if (apt.duration && apt.duration > 0) return apt.duration;
 
-  // Calculate from starts_at and finish_at
-  if (apt.starts_at && apt.finish_at) {
-    const start = new Date(apt.starts_at);
-    const end = new Date(apt.finish_at);
+  // Calculate from start/finish times (handle both field name variants from Dentally API)
+  const startStr = apt.starts_at || apt.start_time;
+  const endStr = apt.finish_at || apt.finish_time;
+  if (startStr && endStr) {
+    const start = new Date(startStr);
+    const end = new Date(endStr);
     const mins = Math.round((end.getTime() - start.getTime()) / 60000);
     if (mins > 0 && mins < 480) return mins; // Sanity check: max 8 hours
   }
@@ -360,7 +364,7 @@ function buildAppointmentMap(appointments: DentallyAppointment[]): Map<string, D
 
   for (const apt of appointments) {
     const patientId = String(apt.patient_id);
-    const dateStr = apt.starts_at?.substring(0, 10) || "";
+    const dateStr = (apt.starts_at || apt.start_time || "").substring(0, 10);
     if (!patientId || !dateStr) continue;
 
     const key = `${patientId}_${dateStr}`;
@@ -487,8 +491,8 @@ async function findReferringDentist(
 
   // Sort by date descending to find most recent
   appointments.sort((a, b) => {
-    const dateA = a.starts_at || "";
-    const dateB = b.starts_at || "";
+    const dateA = a.starts_at || a.start_time || "";
+    const dateB = b.starts_at || b.start_time || "";
     return dateB.localeCompare(dateA);
   });
 
@@ -540,7 +544,7 @@ async function calculateTherapyBreakdown(
     const practId = String(apt.practitioner_id || apt.user_id || "");
     if (!therapistIds.has(practId)) return false;
 
-    const aptDate = apt.starts_at?.substring(0, 10) || "";
+    const aptDate = (apt.starts_at || apt.start_time || "").substring(0, 10);
     return aptDate >= startDate && aptDate < endDate;
   });
 
@@ -559,7 +563,7 @@ async function calculateTherapyBreakdown(
 
   for (const apt of therapistAppointments) {
     const patientId = String(apt.patient_id);
-    const aptDate = apt.starts_at?.substring(0, 10) || "";
+    const aptDate = (apt.starts_at || apt.start_time || "").substring(0, 10);
     const practId = String(apt.practitioner_id || apt.user_id || "");
     const duration = getAppointmentDuration(apt);
 

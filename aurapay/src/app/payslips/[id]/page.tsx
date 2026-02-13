@@ -266,7 +266,11 @@ export default function PeriodDetailPage() {
   }
 
   function updatePatients(entryId: number, patients: PrivatePatient[]) {
-    updateEntry(entryId, { private_patients_json: JSON.stringify(patients) });
+    const totalFinanceFees = Math.round(patients.reduce((s, p) => s + (p.financeFee || 0), 0) * 100) / 100;
+    updateEntry(entryId, {
+      private_patients_json: JSON.stringify(patients),
+      finance_fees: totalFinanceFees,
+    });
   }
 
   async function downloadPdf(entryId: number) {
