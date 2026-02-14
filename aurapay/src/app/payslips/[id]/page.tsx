@@ -288,7 +288,16 @@ export default function PeriodDetailPage() {
       const entry = entries.find(e => e.id === entryId);
       if (entry) await saveEntry(entry);
 
-      const res = await fetch(`/api/payslips/generate-pdf?entry_id=${entryId}`);
+      // Compute current therapy values from client state to pass directly
+      // (avoids relying on DB roundtrip which can be stale)
+      const c = entry ? recalculate(entry) : null;
+      const params = new URLSearchParams({ entry_id: String(entryId) });
+      if (c && c.therapyMinutes > 0) {
+        params.set("therapy_minutes", String(c.therapyMinutes));
+        params.set("therapy_rate", String(c.therapyRate));
+      }
+
+      const res = await fetch(`/api/payslips/generate-pdf?${params.toString()}`);
       if (!res.ok) {
         const contentType = res.headers.get("Content-Type");
         if (contentType?.includes("application/json")) {
