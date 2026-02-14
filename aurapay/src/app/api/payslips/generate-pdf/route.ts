@@ -53,16 +53,28 @@ export async function GET(req: NextRequest) {
     const calc = await calculatePayslipWithSettings(entry, dentist);
     console.log(`[PDF] Calc result: therapyMinutes=${calc.therapyMinutes}, therapyDeduction=${calc.therapyDeduction}, totalDeductions=${calc.totalDeductions}`);
 
-    // Compute therapy deduction: use calc, or failsafe from query params if calc missed it
-    let therapyMinsForPdf = calc.therapyMinutes;
-    let therapyDeductForPdf = calc.therapyDeduction;
-    if (therapyDeductForPdf === 0 && qTherapyMins) {
-      therapyMinsForPdf = parseFloat(qTherapyMins) || 0;
-      const rate = parseFloat(qTherapyRate || "") || entry.therapy_rate || 0.5833;
-      therapyDeductForPdf = Math.round(therapyMinsForPdf * rate * 100) / 100;
-      console.log(`[PDF] Failsafe therapy: mins=${therapyMinsForPdf}, rate=${rate}, deduction=${therapyDeductForPdf}`);
-    }
-    // Adjusted totals if failsafe therapy was used
+    // Compute therapy deduction from ALL possible sources
+    const qMins = qTherapyMins ? parseFloat(qTherapyMins) : 0;
+    const qRate = qTherapyRate ? parseFloat(qTherapyRate) : 0;
+    const dbMins = Number(entry.therapy_minutes) || 0;
+    const dbRate = Number(entry.therapy_rate) || 0.5833;
+    // Parse therapy_breakdown_json directly as another source
+    let breakdownMins = 0;
+    try {
+      const bd = JSON.parse(String(entry.therapy_breakdown_json || "[]"));
+      if (Array.isArray(bd)) breakdownMins = bd.reduce((s: number, t: { minutes?: number }) => s + (Number(t.minutes) || 0), 0);
+    } catch { /* ignore */ }
+
+    console.log(`[PDF] Therapy sources: calc=${calc.therapyMinutes}/${calc.therapyDeduction}, qParams=${qMins}/${qRate}, db=${dbMins}/${dbRate}, breakdown=${breakdownMins}`);
+
+    // Use the best available therapy minutes (priority: query params > calc > breakdown > db)
+    const therapyMinsForPdf = qMins > 0 ? qMins : calc.therapyMinutes > 0 ? calc.therapyMinutes : breakdownMins > 0 ? breakdownMins : dbMins;
+    const therapyRateForPdf = qRate > 0 ? qRate : calc.therapyRate > 0 ? calc.therapyRate : dbRate;
+    const therapyDeductForPdf = Math.round(therapyMinsForPdf * therapyRateForPdf * 100) / 100;
+
+    console.log(`[PDF] Final therapy for PDF: mins=${therapyMinsForPdf}, rate=${therapyRateForPdf}, deduction=${therapyDeductForPdf}`);
+
+    // Adjusted totals
     const extraTherapy = therapyDeductForPdf > calc.therapyDeduction ? therapyDeductForPdf - calc.therapyDeduction : 0;
     const displayTotalDeductions = Math.round((calc.totalDeductions + extraTherapy) * 100) / 100;
     const displayNetPay = Math.round((calc.netPay - extraTherapy) * 100) / 100;
