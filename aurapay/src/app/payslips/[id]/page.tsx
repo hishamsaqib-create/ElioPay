@@ -289,13 +289,19 @@ export default function PeriodDetailPage() {
       if (entry) await saveEntry(entry);
 
       // Compute current therapy values from client state to pass directly
-      // (avoids relying on DB roundtrip which can be stale)
       const c = entry ? recalculate(entry) : null;
+      console.log(`[downloadPdf] entry.therapy_minutes=${entry?.therapy_minutes}, entry.therapy_rate=${entry?.therapy_rate}, entry.therapy_breakdown_json=${entry?.therapy_breakdown_json?.substring(0, 100)}`);
+      console.log(`[downloadPdf] recalculate result: therapyMinutes=${c?.therapyMinutes}, therapyRate=${c?.therapyRate}, therapyDeduction=${c?.therapyDeduction}`);
+
       const params = new URLSearchParams({ entry_id: String(entryId) });
-      if (c && c.therapyMinutes > 0) {
-        params.set("therapy_minutes", String(c.therapyMinutes));
-        params.set("therapy_rate", String(c.therapyRate));
+      // Always pass therapy data if available from any source
+      const therapyMins = c?.therapyMinutes || entry?.therapy_minutes || 0;
+      const therapyRate = c?.therapyRate || entry?.therapy_rate || 0.5833;
+      if (therapyMins > 0) {
+        params.set("therapy_minutes", String(therapyMins));
+        params.set("therapy_rate", String(therapyRate));
       }
+      console.log(`[downloadPdf] Fetching: /api/payslips/generate-pdf?${params.toString()}`);
 
       const res = await fetch(`/api/payslips/generate-pdf?${params.toString()}`);
       if (!res.ok) {
