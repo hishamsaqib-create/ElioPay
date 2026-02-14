@@ -35,6 +35,14 @@ export async function GET(req: NextRequest) {
     };
     const entry = rowTo<EntryRow>(result.rows[0]);
 
+    // Accept client-provided therapy data to bypass potential DB staleness
+    const qTherapyMins = req.nextUrl.searchParams.get("therapy_minutes");
+    const qTherapyRate = req.nextUrl.searchParams.get("therapy_rate");
+    if (qTherapyMins) entry.therapy_minutes = parseFloat(qTherapyMins) || entry.therapy_minutes;
+    if (qTherapyRate) entry.therapy_rate = parseFloat(qTherapyRate) || entry.therapy_rate;
+
+    console.log(`[PDF] Entry ${entryId}: therapy_minutes=${entry.therapy_minutes}, therapy_rate=${entry.therapy_rate}, therapy_breakdown_json=${String(entry.therapy_breakdown_json).substring(0, 100)}`);
+
     const dentist: Dentist = {
       id: entry.dentist_id, name: entry.dentist_name, email: entry.dentist_email,
       split_percentage: entry.split_percentage, is_nhs: entry.is_nhs,
@@ -42,6 +50,7 @@ export async function GET(req: NextRequest) {
       practitioner_id: null, active: 1,
     };
     const calc = await calculatePayslipWithSettings(entry, dentist);
+    console.log(`[PDF] Calc result: therapyMinutes=${calc.therapyMinutes}, therapyDeduction=${calc.therapyDeduction}, totalDeductions=${calc.totalDeductions}`);
 
     // Fetch clinic settings for dynamic branding
     const settings = await getSettings();
