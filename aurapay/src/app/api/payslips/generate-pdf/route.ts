@@ -1,15 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, rowTo, PayslipEntry, Dentist, getSettings } from "@/lib/db";
 import { getSession } from "@/lib/auth";
-import { calculatePayslipWithSettings, formatCurrency, getMonthName } from "@/lib/calculations";
+import { calculatePayslipWithSettings, formatCurrency, getMonthName, PayslipCalculation } from "@/lib/calculations";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
+export async function POST(req: NextRequest) {
+  return generatePdf(req, true);
+}
+
 export async function GET(req: NextRequest) {
+  return generatePdf(req, false);
+}
+
+async function generatePdf(req: NextRequest, isPost: boolean) {
   const user = await getSession();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const entryId = req.nextUrl.searchParams.get("entry_id");
+  let entryId: string | null = null;
+  let clientCalc: PayslipCalculation | null = null;
+
+  if (isPost) {
+    const body = await req.json();
+    entryId = String(body.entry_id);
+    if (body.calculation) clientCalc = body.calculation as PayslipCalculation;
+  } else {
+    entryId = req.nextUrl.searchParams.get("entry_id");
+  }
+
   if (!entryId) return NextResponse.json({ error: "entry_id required" }, { status: 400 });
 
   try {
@@ -33,16 +51,7 @@ export async function GET(req: NextRequest) {
       performer_number: string | null; month: number; year: number;
       nhs_period_start: string | null; nhs_period_end: string | null;
     };
-    // Spread into a plain object so properties are mutable (Turso Row objects may have read-only getters)
     const entry: EntryRow = { ...rowTo<EntryRow>(result.rows[0]) };
-
-    // Accept client-provided therapy data to bypass potential DB staleness
-    const qTherapyMins = req.nextUrl.searchParams.get("therapy_minutes");
-    const qTherapyRate = req.nextUrl.searchParams.get("therapy_rate");
-    if (qTherapyMins) entry.therapy_minutes = parseFloat(qTherapyMins) || entry.therapy_minutes;
-    if (qTherapyRate) entry.therapy_rate = parseFloat(qTherapyRate) || entry.therapy_rate;
-
-    console.log(`[PDF] Entry ${entryId}: therapy_minutes=${entry.therapy_minutes}, therapy_rate=${entry.therapy_rate}, qParams=${qTherapyMins}/${qTherapyRate}, db_therapy_minutes=${rowTo<EntryRow>(result.rows[0]).therapy_minutes}`);
 
     const dentist: Dentist = {
       id: entry.dentist_id, name: entry.dentist_name, email: entry.dentist_email,
@@ -50,34 +59,16 @@ export async function GET(req: NextRequest) {
       uda_rate: entry.uda_rate, performer_number: entry.performer_number,
       practitioner_id: null, active: 1,
     };
-    const calc = await calculatePayslipWithSettings(entry, dentist);
-    console.log(`[PDF] Calc result: therapyMinutes=${calc.therapyMinutes}, therapyDeduction=${calc.therapyDeduction}, totalDeductions=${calc.totalDeductions}`);
 
-    // Compute therapy deduction from ALL possible sources
-    const qMins = qTherapyMins ? parseFloat(qTherapyMins) : 0;
-    const qRate = qTherapyRate ? parseFloat(qTherapyRate) : 0;
-    const dbMins = Number(entry.therapy_minutes) || 0;
-    const dbRate = Number(entry.therapy_rate) || 0.5833;
-    // Parse therapy_breakdown_json directly as another source
-    let breakdownMins = 0;
-    try {
-      const bd = JSON.parse(String(entry.therapy_breakdown_json || "[]"));
-      if (Array.isArray(bd)) breakdownMins = bd.reduce((s: number, t: { minutes?: number }) => s + (Number(t.minutes) || 0), 0);
-    } catch { /* ignore */ }
+    // Use client-provided calculation if available (POST), otherwise compute from DB
+    const calc = clientCalc ?? await calculatePayslipWithSettings(entry, dentist);
 
-    console.log(`[PDF] Therapy sources: calc=${calc.therapyMinutes}/${calc.therapyDeduction}, qParams=${qMins}/${qRate}, db=${dbMins}/${dbRate}, breakdown=${breakdownMins}`);
-
-    // Use the best available therapy minutes (priority: query params > calc > breakdown > db)
-    const therapyMinsForPdf = qMins > 0 ? qMins : calc.therapyMinutes > 0 ? calc.therapyMinutes : breakdownMins > 0 ? breakdownMins : dbMins;
-    const therapyRateForPdf = qRate > 0 ? qRate : calc.therapyRate > 0 ? calc.therapyRate : dbRate;
-    const therapyDeductForPdf = Math.round(therapyMinsForPdf * therapyRateForPdf * 100) / 100;
-
-    console.log(`[PDF] Final therapy for PDF: mins=${therapyMinsForPdf}, rate=${therapyRateForPdf}, deduction=${therapyDeductForPdf}`);
-
-    // Adjusted totals
-    const extraTherapy = therapyDeductForPdf > calc.therapyDeduction ? therapyDeductForPdf - calc.therapyDeduction : 0;
-    const displayTotalDeductions = Math.round((calc.totalDeductions + extraTherapy) * 100) / 100;
-    const displayNetPay = Math.round((calc.netPay - extraTherapy) * 100) / 100;
+    // For therapy specifically, use client values when provided (they match the dashboard)
+    const therapyMinsForPdf = calc.therapyMinutes;
+    const therapyRateForPdf = calc.therapyRate;
+    const therapyDeductForPdf = calc.therapyDeduction;
+    const displayTotalDeductions = calc.totalDeductions;
+    const displayNetPay = calc.netPay;
 
     // Fetch clinic settings for dynamic branding
     const settings = await getSettings();

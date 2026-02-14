@@ -284,26 +284,22 @@ export default function PeriodDetailPage() {
 
   async function downloadPdf(entryId: number) {
     try {
-      // Save entry first to ensure PDF reflects latest values
+      // Capture entry and compute calculation BEFORE saving (to get the exact values shown on dashboard)
       const entry = entries.find(e => e.id === entryId);
+      const c = entry ? recalculate(entry) : null;
+
+      // Save entry to DB (so other systems have latest data)
       if (entry) await saveEntry(entry);
 
-      // Compute current therapy values from client state to pass directly
-      const c = entry ? recalculate(entry) : null;
-      console.log(`[downloadPdf] entry.therapy_minutes=${entry?.therapy_minutes}, entry.therapy_rate=${entry?.therapy_rate}, entry.therapy_breakdown_json=${entry?.therapy_breakdown_json?.substring(0, 100)}`);
-      console.log(`[downloadPdf] recalculate result: therapyMinutes=${c?.therapyMinutes}, therapyRate=${c?.therapyRate}, therapyDeduction=${c?.therapyDeduction}`);
-
-      const params = new URLSearchParams({ entry_id: String(entryId) });
-      // Always pass therapy data if available from any source
-      const therapyMins = c?.therapyMinutes || entry?.therapy_minutes || 0;
-      const therapyRate = c?.therapyRate || entry?.therapy_rate || 0.5833;
-      if (therapyMins > 0) {
-        params.set("therapy_minutes", String(therapyMins));
-        params.set("therapy_rate", String(therapyRate));
-      }
-      console.log(`[downloadPdf] Fetching: /api/payslips/generate-pdf?${params.toString()}`);
-
-      const res = await fetch(`/api/payslips/generate-pdf?${params.toString()}`);
+      // POST the client calculation to the PDF route so it uses the exact same values as the dashboard
+      const res = await fetch("/api/payslips/generate-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entry_id: entryId,
+          calculation: c,
+        }),
+      });
       if (!res.ok) {
         const contentType = res.headers.get("Content-Type");
         if (contentType?.includes("application/json")) {
