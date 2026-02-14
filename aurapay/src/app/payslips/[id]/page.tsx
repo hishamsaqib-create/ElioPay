@@ -140,7 +140,9 @@ export default function PeriodDetailPage() {
       : Math.max(0, entry.finance_fees);
     const financeFeesDeduction = Math.round(financeFees * splitSettings.financeFeeSplit * 100) / 100;
 
-    const therapyMinutes = Math.max(0, entry.therapy_minutes);
+    const therapyBreakdown: { minutes: number }[] = JSON.parse(entry.therapy_breakdown_json || "[]");
+    const breakdownMinutes = therapyBreakdown.reduce((s, t) => s + (t.minutes || 0), 0);
+    const therapyMinutes = breakdownMinutes > 0 ? breakdownMinutes : Math.max(0, entry.therapy_minutes);
     const therapyRate = entry.therapy_rate > 0 ? entry.therapy_rate : 0.5833;
     const therapyDeduction = Math.round(therapyMinutes * therapyRate * 100) / 100;
 
