@@ -282,6 +282,10 @@ export default function PeriodDetailPage() {
 
   async function downloadPdf(entryId: number) {
     try {
+      // Save entry first to ensure PDF reflects latest values
+      const entry = entries.find(e => e.id === entryId);
+      if (entry) await saveEntry(entry);
+
       const res = await fetch(`/api/payslips/generate-pdf?entry_id=${entryId}`);
       if (!res.ok) {
         const contentType = res.headers.get("Content-Type");
