@@ -33,7 +33,8 @@ export async function GET(req: NextRequest) {
       performer_number: string | null; month: number; year: number;
       nhs_period_start: string | null; nhs_period_end: string | null;
     };
-    const entry = rowTo<EntryRow>(result.rows[0]);
+    // Spread into a plain object so properties are mutable (Turso Row objects may have read-only getters)
+    const entry: EntryRow = { ...rowTo<EntryRow>(result.rows[0]) };
 
     // Accept client-provided therapy data to bypass potential DB staleness
     const qTherapyMins = req.nextUrl.searchParams.get("therapy_minutes");
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
     if (qTherapyMins) entry.therapy_minutes = parseFloat(qTherapyMins) || entry.therapy_minutes;
     if (qTherapyRate) entry.therapy_rate = parseFloat(qTherapyRate) || entry.therapy_rate;
 
-    console.log(`[PDF] Entry ${entryId}: therapy_minutes=${entry.therapy_minutes}, therapy_rate=${entry.therapy_rate}, therapy_breakdown_json=${String(entry.therapy_breakdown_json).substring(0, 100)}`);
+    console.log(`[PDF] Entry ${entryId}: therapy_minutes=${entry.therapy_minutes}, therapy_rate=${entry.therapy_rate}, qParams=${qTherapyMins}/${qTherapyRate}, db_therapy_minutes=${rowTo<EntryRow>(result.rows[0]).therapy_minutes}`);
 
     const dentist: Dentist = {
       id: entry.dentist_id, name: entry.dentist_name, email: entry.dentist_email,
@@ -51,6 +52,20 @@ export async function GET(req: NextRequest) {
     };
     const calc = await calculatePayslipWithSettings(entry, dentist);
     console.log(`[PDF] Calc result: therapyMinutes=${calc.therapyMinutes}, therapyDeduction=${calc.therapyDeduction}, totalDeductions=${calc.totalDeductions}`);
+
+    // Compute therapy deduction: use calc, or failsafe from query params if calc missed it
+    let therapyMinsForPdf = calc.therapyMinutes;
+    let therapyDeductForPdf = calc.therapyDeduction;
+    if (therapyDeductForPdf === 0 && qTherapyMins) {
+      therapyMinsForPdf = parseFloat(qTherapyMins) || 0;
+      const rate = parseFloat(qTherapyRate || "") || entry.therapy_rate || 0.5833;
+      therapyDeductForPdf = Math.round(therapyMinsForPdf * rate * 100) / 100;
+      console.log(`[PDF] Failsafe therapy: mins=${therapyMinsForPdf}, rate=${rate}, deduction=${therapyDeductForPdf}`);
+    }
+    // Adjusted totals if failsafe therapy was used
+    const extraTherapy = therapyDeductForPdf > calc.therapyDeduction ? therapyDeductForPdf - calc.therapyDeduction : 0;
+    const displayTotalDeductions = Math.round((calc.totalDeductions + extraTherapy) * 100) / 100;
+    const displayNetPay = Math.round((calc.netPay - extraTherapy) * 100) / 100;
 
     // Fetch clinic settings for dynamic branding
     const settings = await getSettings();
@@ -151,7 +166,7 @@ export async function GET(req: NextRequest) {
     doc.setFontSize(32);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(white.r, white.g, white.b);
-    doc.text(formatCurrency(calc.netPay), 26, y + 36);
+    doc.text(formatCurrency(displayNetPay), 26, y + 36);
 
     // Right side info - period only
     doc.setFontSize(7);
@@ -229,7 +244,7 @@ export async function GET(req: NextRequest) {
       }
     }
     if (calc.financeFeesDeduction > 0) deductRows.push(["Finance Fees (50%)", formatCurrency(calc.financeFeesDeduction)]);
-    if (calc.therapyDeduction > 0) deductRows.push([`Therapy (${calc.therapyMinutes}min)`, formatCurrency(calc.therapyDeduction)]);
+    if (therapyDeductForPdf > 0) deductRows.push([`Therapy (${therapyMinsForPdf}min)`, formatCurrency(therapyDeductForPdf)]);
     for (const adj of calc.adjustments) deductRows.push([adj.description, formatCurrency(adj.amount)]);
 
     if (deductRows.length > 0) {
@@ -249,7 +264,7 @@ export async function GET(req: NextRequest) {
     doc.setFont("helvetica", "bold");
     doc.setTextColor(red600.r, red600.g, red600.b);
     doc.text("Total Deductions", deductX + 3, earningsEndY + 9);
-    doc.text(formatCurrency(calc.totalDeductions), deductX + colWidth - 3, earningsEndY + 9, { align: "right" });
+    doc.text(formatCurrency(displayTotalDeductions), deductX + colWidth - 3, earningsEndY + 9, { align: "right" });
 
     y = earningsEndY + 22;
 
