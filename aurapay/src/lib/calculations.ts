@@ -79,8 +79,10 @@ export function calculatePayslip(
     : Math.max(0, entry.finance_fees);
   const financeFeesDeduction = roundCurrency(financeFees * financeFeeSplit);
 
-  // Calculate therapy deduction
-  const therapyMinutes = Math.max(0, entry.therapy_minutes);
+  // Calculate therapy deduction — derive from breakdown JSON when available
+  const therapyBreakdown = safeJsonParse<{ minutes: number; cost?: number }[]>(entry.therapy_breakdown_json, []);
+  const breakdownMinutes = therapyBreakdown.reduce((s, t) => s + (t.minutes || 0), 0);
+  const therapyMinutes = breakdownMinutes > 0 ? breakdownMinutes : Math.max(0, entry.therapy_minutes);
   const therapyRate = entry.therapy_rate > 0 ? entry.therapy_rate : 0.5833;
   const therapyDeduction = roundCurrency(therapyMinutes * therapyRate);
 

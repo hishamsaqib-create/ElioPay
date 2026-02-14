@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, rowTo, PayslipEntry, Dentist, getSettings } from "@/lib/db";
 import { getSession } from "@/lib/auth";
-import { calculatePayslip, formatCurrency, getMonthName } from "@/lib/calculations";
+import { calculatePayslipWithSettings, formatCurrency, getMonthName } from "@/lib/calculations";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -41,25 +41,12 @@ export async function GET(req: NextRequest) {
       uda_rate: entry.uda_rate, performer_number: entry.performer_number,
       practitioner_id: null, active: 1,
     };
-    const calc = calculatePayslip(entry, dentist);
+    const calc = await calculatePayslipWithSettings(entry, dentist);
 
     // Fetch clinic settings for dynamic branding
     const settings = await getSettings();
     const clinicName = settings.get("clinic_name") || "ElioPay";
     const clinicWebsite = settings.get("clinic_website") || "eliopay.co.uk";
-
-    // Parse analytics
-    interface Analytics {
-      totalChairMins: number;
-      totalPatients: number;
-      grossPerHour: number;
-      netPerHour: number;
-      utilizationPercent: number;
-      avgAppointmentMins: number;
-      topPatientsByHourlyRate: Array<{ name: string; amount: number; durationMins: number; hourlyRate: number }>;
-      topTreatmentsByHourlyRate: Array<{ treatment: string; totalAmount: number; totalMins: number; hourlyRate: number; count: number }>;
-    }
-    const analytics: Analytics | null = entry.analytics_json ? JSON.parse(String(entry.analytics_json)) : null;
 
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -95,28 +82,9 @@ export async function GET(req: NextRequest) {
     }
     const patients: PatientData[] = JSON.parse(String(entry.private_patients_json) || "[]");
 
-    // Calculate additional analytics from patient data
-    const patientsWithData = patients.filter(p => p.durationMins && p.durationMins > 0);
-    const sortedByHourlyRate = [...patientsWithData].sort((a, b) => (b.hourlyRate || 0) - (a.hourlyRate || 0));
     const sortedByAmount = [...patients].sort((a, b) => b.amount - a.amount);
     const totalBilled = patients.reduce((s, p) => s + p.amount, 0);
-    const avgTicket = patients.length > 0 ? totalBilled / patients.length : 0;
     const highestTicket = sortedByAmount[0];
-
-    // Group by treatment
-    const treatmentMap = new Map<string, { total: number; count: number; mins: number }>();
-    for (const p of patients) {
-      const treatment = p.treatment || "General";
-      const existing = treatmentMap.get(treatment) || { total: 0, count: 0, mins: 0 };
-      existing.total += p.amount;
-      existing.count += 1;
-      existing.mins += p.durationMins || 0;
-      treatmentMap.set(treatment, existing);
-    }
-    const topTreatments = Array.from(treatmentMap.entries())
-      .map(([name, data]) => ({ name, ...data, hourlyRate: data.mins > 0 ? (data.total / data.mins) * 60 : 0 }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 5);
 
     // ========== PAGE 1: EXECUTIVE SUMMARY ==========
 
@@ -187,35 +155,6 @@ export async function GET(req: NextRequest) {
     doc.text(`${periodStart.getDate()}-${periodEnd.getDate()} ${getMonthName(entry.month).substring(0, 3)} ${entry.year}`, pageWidth - 25, y + 22, { align: "right" });
 
     y += heroHeight + 8;
-
-    // ========== KEY PERFORMANCE METRICS ==========
-    if (analytics && analytics.totalChairMins > 0) {
-      const cardW = (pageWidth - 40) / 5;
-      const cardH = 35;
-      const gap = 2.5;
-      let cardX = 15;
-
-      const metrics = [
-        { label: "CHAIR TIME", value: `${(analytics.totalChairMins / 60).toFixed(1)}h`, color: slate100 },
-        { label: "GROSS/HR", value: formatCurrency(analytics.grossPerHour), color: slate100 },
-        { label: "NET/HR", value: formatCurrency(analytics.netPerHour), color: emerald50, highlight: true },
-        { label: "PATIENTS", value: String(analytics.totalPatients), color: slate100 },
-        { label: "AVG TICKET", value: formatCurrency(avgTicket), color: slate100 },
-      ];
-
-      for (const m of metrics) {
-        drawCard(cardX, y, cardW, cardH, m.color, 3);
-        doc.setFontSize(6);
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(slate500.r, slate500.g, slate500.b);
-        doc.text(m.label, cardX + 5, y + 10);
-        doc.setFontSize(13);
-        doc.setTextColor(m.highlight ? emerald600.r : navy.r, m.highlight ? emerald600.g : navy.g, m.highlight ? emerald600.b : navy.b);
-        doc.text(m.value, cardX + 5, y + 24);
-        cardX += cardW + gap;
-      }
-      y += cardH + 10;
-    }
 
     // ========== EARNINGS & DEDUCTIONS SIDE BY SIDE ==========
     const colWidth = (pageWidth - 40) / 2;
@@ -305,77 +244,6 @@ export async function GET(req: NextRequest) {
 
     y = earningsEndY + 22;
 
-    // ========== TOP PERFORMERS SECTION ==========
-    if (sortedByHourlyRate.length > 0) {
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(amber500.r, amber500.g, amber500.b);
-      doc.text("TOP PERFORMERS BY £/HOUR", 15, y);
-      doc.setDrawColor(amber500.r, amber500.g, amber500.b);
-      doc.setLineWidth(1);
-      doc.line(15, y + 1.5, 15 + doc.getTextWidth("TOP PERFORMERS BY £/HOUR"), y + 1.5);
-
-      y += 6;
-
-      // Show top 5 patients by hourly rate
-      const topPerformers = sortedByHourlyRate.slice(0, 5);
-      autoTable(doc, {
-        startY: y,
-        head: [["#", "Patient", "Amount", "Time", "£/Hour"]],
-        body: topPerformers.map((p, i) => [
-          String(i + 1),
-          p.name.length > 20 ? p.name.substring(0, 18) + "..." : p.name,
-          formatCurrency(p.amount),
-          `${p.durationMins}m`,
-          formatCurrency(p.hourlyRate || 0),
-        ]),
-        theme: "plain",
-        headStyles: { fillColor: [amber50.r, amber50.g, amber50.b], textColor: [amber500.r, amber500.g, amber500.b], fontSize: 7, fontStyle: "bold", cellPadding: 2 },
-        bodyStyles: { fontSize: 7, cellPadding: 2 },
-        styles: { textColor: [slate700.r, slate700.g, slate700.b] },
-        columnStyles: {
-          0: { cellWidth: 8, halign: "center" },
-          1: { cellWidth: 45 },
-          2: { halign: "right", cellWidth: 22 },
-          3: { halign: "center", cellWidth: 15 },
-          4: { halign: "right", cellWidth: 22, fontStyle: "bold", textColor: [emerald600.r, emerald600.g, emerald600.b] },
-        },
-        margin: { left: 15, right: pageWidth / 2 + 5 },
-        tableWidth: (pageWidth - 40) / 2,
-      });
-
-      // TOP TREATMENTS on the right
-      if (topTreatments.length > 0) {
-        doc.setFontSize(9);
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(blue600.r, blue600.g, blue600.b);
-        doc.text("TOP TREATMENTS BY REVENUE", pageWidth / 2 + 5, y - 6);
-
-        autoTable(doc, {
-          startY: y,
-          head: [["Treatment", "Revenue", "Count"]],
-          body: topTreatments.map(t => [
-            t.name.length > 22 ? t.name.substring(0, 20) + "..." : t.name,
-            formatCurrency(t.total),
-            String(t.count),
-          ]),
-          theme: "plain",
-          headStyles: { fillColor: [slate100.r, slate100.g, slate100.b], textColor: [blue600.r, blue600.g, blue600.b], fontSize: 7, fontStyle: "bold", cellPadding: 2 },
-          bodyStyles: { fontSize: 7, cellPadding: 2 },
-          styles: { textColor: [slate700.r, slate700.g, slate700.b] },
-          columnStyles: {
-            0: { cellWidth: 50 },
-            1: { halign: "right", cellWidth: 22, fontStyle: "bold" },
-            2: { halign: "center", cellWidth: 15 },
-          },
-          margin: { left: pageWidth / 2 + 5, right: 15 },
-          tableWidth: (pageWidth - 40) / 2,
-        });
-      }
-
-      y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
-    }
-
     // ========== HIGHEST TICKET HIGHLIGHT ==========
     if (highestTicket && highestTicket.amount > 500) {
       drawCard(15, y, pageWidth - 30, 18, amber50, 3);
@@ -408,15 +276,11 @@ export async function GET(req: NextRequest) {
       // Quick stats bar
       drawCard(15, y, pageWidth - 30, 22, slate100, 3);
       const qsX = 22;
-      const qsW = (pageWidth - 50) / 4;
-      const totalMins = patientsWithData.reduce((s, p) => s + (p.durationMins || 0), 0);
-      const avgHr = patientsWithData.length > 0 ? patientsWithData.reduce((s, p) => s + (p.hourlyRate || 0), 0) / patientsWithData.length : 0;
+      const qsW = (pageWidth - 50) / 2;
 
       const quickStats = [
         { label: "PATIENTS", val: String(patients.length) },
         { label: "TOTAL BILLED", val: formatCurrency(totalBilled) },
-        { label: "CHAIR TIME", val: totalMins > 0 ? `${(totalMins / 60).toFixed(1)}h` : "N/A" },
-        { label: "AVG £/HR", val: avgHr > 0 ? formatCurrency(avgHr) : "N/A" },
       ];
 
       for (let i = 0; i < quickStats.length; i++) {
@@ -448,14 +312,12 @@ export async function GET(req: NextRequest) {
         // Compact rich table
         autoTable(doc, {
           startY: y,
-          head: [["Patient", "Date", "Treatment", "Amount", "Mins", "£/hr"]],
+          head: [["Patient", "Date", "Treatment", "Amount"]],
           body: patients.map(p => [
-            p.name.length > 18 ? p.name.substring(0, 16) + "..." : p.name,
+            p.name.length > 22 ? p.name.substring(0, 20) + "..." : p.name,
             new Date(p.date + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit" }),
-            (p.treatment || "-").length > 20 ? (p.treatment || "-").substring(0, 18) + "..." : (p.treatment || "-"),
+            (p.treatment || "-").length > 25 ? (p.treatment || "-").substring(0, 23) + "..." : (p.treatment || "-"),
             formatCurrency(p.amount),
-            p.durationMins ? String(p.durationMins) : "-",
-            p.hourlyRate ? formatCurrency(p.hourlyRate) : "-",
           ]),
           theme: "striped",
           headStyles: {
@@ -477,23 +339,12 @@ export async function GET(req: NextRequest) {
             overflow: "ellipsize",
           },
           columnStyles: {
-            0: { cellWidth: 35 },
-            1: { cellWidth: 18 },
-            2: { cellWidth: 45 },
-            3: { halign: "right", cellWidth: 22 },
-            4: { halign: "center", cellWidth: 14 },
-            5: { halign: "right", cellWidth: 20 },
+            0: { cellWidth: 45 },
+            1: { cellWidth: 20 },
+            2: { cellWidth: 55 },
+            3: { halign: "right", cellWidth: 30 },
           },
           margin: { left: 15, right: 15 },
-          didParseCell: (data) => {
-            if (data.section === "body" && data.column.index === 5) {
-              const patient = patients[data.row.index];
-              if (patient && patient.hourlyRate && patient.hourlyRate > 300) {
-                data.cell.styles.textColor = [emerald600.r, emerald600.g, emerald600.b];
-                data.cell.styles.fontStyle = "bold";
-              }
-            }
-          },
         });
       } else {
         // Simple compact table
