@@ -63,12 +63,37 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
     // Use client-provided calculation if available (POST), otherwise compute from DB
     const calc = clientCalc ?? await calculatePayslipWithSettings(entry, dentist);
 
-    // For therapy specifically, use client values when provided (they match the dashboard)
-    const therapyMinsForPdf = calc.therapyMinutes;
-    const therapyRateForPdf = calc.therapyRate;
-    const therapyDeductForPdf = calc.therapyDeduction;
-    const displayTotalDeductions = calc.totalDeductions;
-    const displayNetPay = calc.netPay;
+    // THERAPY: Read raw values directly from DB row by column index (bypasses any Row property issues)
+    const colNames = result.columns;
+    const rawRow = result.rows[0];
+    const rawTherapyMins = Number(rawRow[colNames.indexOf("therapy_minutes")]) || 0;
+    const rawTherapyRate = Number(rawRow[colNames.indexOf("therapy_rate")]) || 0.5833;
+    let rawBreakdownMins = 0;
+    try {
+      const rawBdJson = String(rawRow[colNames.indexOf("therapy_breakdown_json")] ?? "[]");
+      const bd = JSON.parse(rawBdJson);
+      if (Array.isArray(bd)) rawBreakdownMins = bd.reduce((s: number, t: { minutes?: number }) => s + (Number(t.minutes) || 0), 0);
+    } catch { /* ignore */ }
+    const rawEffectiveMins = rawBreakdownMins > 0 ? rawBreakdownMins : rawTherapyMins;
+    const rawTherapyDeduct = Math.round(rawEffectiveMins * rawTherapyRate * 100) / 100;
+
+    // Use the best source: client calc > server calc > raw DB values
+    let therapyMinsForPdf = calc.therapyMinutes || 0;
+    let therapyRateForPdf = calc.therapyRate || 0.5833;
+    let therapyDeductForPdf = calc.therapyDeduction || 0;
+    if (therapyDeductForPdf <= 0 && rawTherapyDeduct > 0) {
+      therapyMinsForPdf = rawEffectiveMins;
+      therapyRateForPdf = rawTherapyRate;
+      therapyDeductForPdf = rawTherapyDeduct;
+    }
+
+    // Adjust totals if raw therapy was used as fallback
+    const extraTherapy = therapyDeductForPdf > (calc.therapyDeduction || 0) ? therapyDeductForPdf - (calc.therapyDeduction || 0) : 0;
+    const displayTotalDeductions = Math.round(((calc.totalDeductions || 0) + extraTherapy) * 100) / 100;
+    const displayNetPay = Math.round(((calc.netPay || 0) - extraTherapy) * 100) / 100;
+
+    // Debug info (will be rendered as small text on PDF for diagnosis - remove after fix confirmed)
+    const debugInfo = `[v3] clientCalc=${!!clientCalc} calc.therapy=${calc.therapyMinutes}/${calc.therapyDeduction} raw=${rawTherapyMins}/${rawBreakdownMins}/${rawTherapyDeduct} final=${therapyMinsForPdf}/${therapyDeductForPdf}`;
 
     // Fetch clinic settings for dynamic branding
     const settings = await getSettings();
@@ -430,6 +455,14 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
       doc.text(clinicWebsite, pageWidth / 2, footerY, { align: "center" });
       doc.setFont("helvetica", "bold");
       doc.text(`${i}/${pageCount}`, pageWidth - 15, footerY, { align: "right" });
+
+      // DEBUG: Temporary diagnostic text (remove after therapy fix confirmed)
+      if (i === 1) {
+        doc.setFontSize(4);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(200, 200, 200);
+        doc.text(debugInfo, 15, pageHeight - 3);
+      }
 
       doc.setFillColor(blue600.r, blue600.g, blue600.b);
       doc.rect(0, pageHeight - 2, pageWidth, 2, "F");
