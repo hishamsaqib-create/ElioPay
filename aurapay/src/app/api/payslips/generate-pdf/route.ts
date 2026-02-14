@@ -90,6 +90,7 @@ export async function GET(req: NextRequest) {
     // Parse patients data
     interface PatientData {
       name: string; date: string; amount: number; finance: boolean;
+      financeFee?: number;
       durationMins?: number; hourlyRate?: number; treatment?: string;
     }
     const patients: PatientData[] = JSON.parse(String(entry.private_patients_json) || "[]");
@@ -498,12 +499,12 @@ export async function GET(req: NextRequest) {
         // Simple compact table
         autoTable(doc, {
           startY: y,
-          head: [["Patient", "Date", "Amount", "Finance"]],
+          head: [["Patient", "Date", "Amount", "Fin. Fee"]],
           body: patients.map(p => [
             p.name.length > 25 ? p.name.substring(0, 23) + "..." : p.name,
             new Date(p.date + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit" }),
             formatCurrency(p.amount),
-            p.finance ? "Yes" : "",
+            p.financeFee ? formatCurrency(p.financeFee) : "",
           ]),
           theme: "striped",
           headStyles: {
