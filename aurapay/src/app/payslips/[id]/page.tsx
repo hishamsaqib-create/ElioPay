@@ -121,9 +121,9 @@ export default function PeriodDetailPage() {
     const adjustments: Adjustment[] = JSON.parse(entry.adjustments_json || "[]");
 
     const splitPercentage = Math.max(0, Math.min(100, entry.dentist.split_percentage));
-    const patientAmounts: { amount: number }[] = JSON.parse(entry.private_patients_json || "[]");
-    const grossPrivate = patientAmounts.length > 0
-      ? Math.round(patientAmounts.reduce((s, p) => s + (p.amount || 0), 0) * 100) / 100
+    const patientData: { amount: number; financeFee?: number }[] = JSON.parse(entry.private_patients_json || "[]");
+    const grossPrivate = patientData.length > 0
+      ? Math.round(patientData.reduce((s, p) => s + (p.amount || 0), 0) * 100) / 100
       : Math.max(0, entry.gross_private);
     const netPrivate = Math.round(grossPrivate * (splitPercentage / 100) * 100) / 100;
 
@@ -135,7 +135,9 @@ export default function PeriodDetailPage() {
     const labBillsTotal = Math.round(validLabBills.reduce((s, b) => s + b.amount, 0) * 100) / 100;
     const labBillsDeduction = Math.round(labBillsTotal * splitSettings.labBillSplit * 100) / 100;
 
-    const financeFees = Math.max(0, entry.finance_fees);
+    const financeFees = patientData.length > 0
+      ? Math.round(patientData.reduce((s, p) => s + (p.financeFee || 0), 0) * 100) / 100
+      : Math.max(0, entry.finance_fees);
     const financeFeesDeduction = Math.round(financeFees * splitSettings.financeFeeSplit * 100) / 100;
 
     const therapyMinutes = Math.max(0, entry.therapy_minutes);

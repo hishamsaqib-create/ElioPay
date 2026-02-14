@@ -50,10 +50,10 @@ export function calculatePayslip(
     splitPercentage = Math.max(0, Math.min(100, splitPercentage));
   }
 
-  // Calculate net private income — derive gross from patient amounts when available
-  const patientAmounts = safeJsonParse<{ amount: number }[]>(entry.private_patients_json, []);
-  const grossPrivate = patientAmounts.length > 0
-    ? roundCurrency(patientAmounts.reduce((s, p) => s + (p.amount || 0), 0))
+  // Calculate net private income — derive gross and finance fees from patient data when available
+  const patientData = safeJsonParse<{ amount: number; financeFee?: number }[]>(entry.private_patients_json, []);
+  const grossPrivate = patientData.length > 0
+    ? roundCurrency(patientData.reduce((s, p) => s + (p.amount || 0), 0))
     : Math.max(0, entry.gross_private);
   const netPrivate = roundCurrency(grossPrivate * (splitPercentage / 100));
 
@@ -73,8 +73,10 @@ export function calculatePayslip(
   const labBillsTotal = roundCurrency(validLabBills.reduce((s, b) => s + b.amount, 0));
   const labBillsDeduction = roundCurrency(labBillsTotal * labBillSplit);
 
-  // Calculate finance fees deduction
-  const financeFees = Math.max(0, entry.finance_fees);
+  // Calculate finance fees deduction — derive from patient data when available
+  const financeFees = patientData.length > 0
+    ? roundCurrency(patientData.reduce((s, p) => s + (p.financeFee || 0), 0))
+    : Math.max(0, entry.finance_fees);
   const financeFeesDeduction = roundCurrency(financeFees * financeFeeSplit);
 
   // Calculate therapy deduction
