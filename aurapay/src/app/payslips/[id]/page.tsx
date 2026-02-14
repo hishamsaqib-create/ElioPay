@@ -121,7 +121,10 @@ export default function PeriodDetailPage() {
     const adjustments: Adjustment[] = JSON.parse(entry.adjustments_json || "[]");
 
     const splitPercentage = Math.max(0, Math.min(100, entry.dentist.split_percentage));
-    const grossPrivate = Math.max(0, entry.gross_private);
+    const patientAmounts: { amount: number }[] = JSON.parse(entry.private_patients_json || "[]");
+    const grossPrivate = patientAmounts.length > 0
+      ? Math.round(patientAmounts.reduce((s, p) => s + (p.amount || 0), 0) * 100) / 100
+      : Math.max(0, entry.gross_private);
     const netPrivate = Math.round(grossPrivate * (splitPercentage / 100) * 100) / 100;
 
     const nhsUdas = Math.max(0, entry.nhs_udas);

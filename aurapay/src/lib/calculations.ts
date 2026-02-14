@@ -50,8 +50,11 @@ export function calculatePayslip(
     splitPercentage = Math.max(0, Math.min(100, splitPercentage));
   }
 
-  // Calculate net private income
-  const grossPrivate = Math.max(0, entry.gross_private);
+  // Calculate net private income — derive gross from patient amounts when available
+  const patientAmounts = safeJsonParse<{ amount: number }[]>(entry.private_patients_json, []);
+  const grossPrivate = patientAmounts.length > 0
+    ? roundCurrency(patientAmounts.reduce((s, p) => s + (p.amount || 0), 0))
+    : Math.max(0, entry.gross_private);
   const netPrivate = roundCurrency(grossPrivate * (splitPercentage / 100));
 
   // Calculate NHS income (only for NHS dentists)
