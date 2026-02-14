@@ -92,9 +92,6 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
     const displayTotalDeductions = Math.round(((calc.totalDeductions || 0) + extraTherapy) * 100) / 100;
     const displayNetPay = Math.round(((calc.netPay || 0) - extraTherapy) * 100) / 100;
 
-    // Debug info (will be rendered as small text on PDF for diagnosis - remove after fix confirmed)
-    const debugInfo = `[v3] clientCalc=${!!clientCalc} calc.therapy=${calc.therapyMinutes}/${calc.therapyDeduction} raw=${rawTherapyMins}/${rawBreakdownMins}/${rawTherapyDeduct} final=${therapyMinsForPdf}/${therapyDeductForPdf}`;
-
     // Fetch clinic settings for dynamic branding
     const settings = await getSettings();
     const clinicName = settings.get("clinic_name") || "ElioPay";
@@ -240,12 +237,6 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
     });
 
     const earningsEndY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
-    drawCard(15, earningsEndY + 1, colWidth, 14, emerald50, 2);
-    doc.setFontSize(8);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(emerald600.r, emerald600.g, emerald600.b);
-    doc.text("Total Earnings", 18, earningsEndY + 9);
-    doc.text(formatCurrency(calc.totalEarnings), 15 + colWidth - 3, earningsEndY + 9, { align: "right" });
 
     // DEDUCTIONS
     const deductX = 15 + colWidth + 10;
@@ -275,6 +266,7 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
     if (therapyDeductForPdf > 0) deductRows.push([`Therapy (${therapyMinsForPdf}min)`, formatCurrency(therapyDeductForPdf)]);
     for (const adj of calc.adjustments) deductRows.push([adj.description, formatCurrency(adj.amount)]);
 
+    let deductionsEndY = startY + 4;
     if (deductRows.length > 0) {
       autoTable(doc, {
         startY: startY + 4,
@@ -285,16 +277,27 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
         margin: { left: deductX, right: 15 },
         tableWidth: colWidth,
       });
+      deductionsEndY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
     }
 
-    drawCard(deductX, earningsEndY + 1, colWidth, 14, red50, 2);
+    // Position summary cards below whichever table is taller
+    const summaryY = Math.max(earningsEndY, deductionsEndY);
+
+    drawCard(15, summaryY + 1, colWidth, 14, emerald50, 2);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(emerald600.r, emerald600.g, emerald600.b);
+    doc.text("Total Earnings", 18, summaryY + 9);
+    doc.text(formatCurrency(calc.totalEarnings), 15 + colWidth - 3, summaryY + 9, { align: "right" });
+
+    drawCard(deductX, summaryY + 1, colWidth, 14, red50, 2);
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(red600.r, red600.g, red600.b);
-    doc.text("Total Deductions", deductX + 3, earningsEndY + 9);
-    doc.text(formatCurrency(displayTotalDeductions), deductX + colWidth - 3, earningsEndY + 9, { align: "right" });
+    doc.text("Total Deductions", deductX + 3, summaryY + 9);
+    doc.text(formatCurrency(displayTotalDeductions), deductX + colWidth - 3, summaryY + 9, { align: "right" });
 
-    y = earningsEndY + 22;
+    y = summaryY + 22;
 
     // ========== HIGHEST TICKET HIGHLIGHT ==========
     if (highestTicket && highestTicket.amount > 500) {
@@ -455,14 +458,6 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
       doc.text(clinicWebsite, pageWidth / 2, footerY, { align: "center" });
       doc.setFont("helvetica", "bold");
       doc.text(`${i}/${pageCount}`, pageWidth - 15, footerY, { align: "right" });
-
-      // DEBUG: Temporary diagnostic text (remove after therapy fix confirmed)
-      if (i === 1) {
-        doc.setFontSize(4);
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(200, 200, 200);
-        doc.text(debugInfo, 15, pageHeight - 3);
-      }
 
       doc.setFillColor(blue600.r, blue600.g, blue600.b);
       doc.rect(0, pageHeight - 2, pageWidth, 2, "F");
