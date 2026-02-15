@@ -104,6 +104,8 @@ export default function PeriodDetailPage() {
   const [showLogImport, setShowLogImport] = useState<number | null>(null);
   const [logCsv, setLogCsv] = useState("");
   const [importingLog, setImportingLog] = useState(false);
+  const [downloadingAll, setDownloadingAll] = useState(false);
+  const [emailingAll, setEmailingAll] = useState(false);
   const [fetchingSheets, setFetchingSheets] = useState(false);
   const [showNhsUpload, setShowNhsUpload] = useState(false);
   const [nhsText, setNhsText] = useState("");
@@ -341,6 +343,51 @@ export default function PeriodDetailPage() {
     setEmailSending((s) => ({ ...s, [entryId]: false }));
   }
 
+  async function downloadAllPdfs() {
+    setDownloadingAll(true);
+    try {
+      const res = await fetch("/api/payslips/download-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ period_id: parseInt(periodId) }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        showToast(data.error || "Failed to download all PDFs", "error");
+        setDownloadingAll(false);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.headers.get("Content-Disposition")?.split("filename=")[1]?.replace(/"/g, "") || "payslips.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast("All PDFs downloaded");
+    } catch {
+      showToast("Failed to download all PDFs", "error");
+    }
+    setDownloadingAll(false);
+  }
+
+  async function emailAll() {
+    setEmailingAll(true);
+    try {
+      const res = await fetch("/api/payslips/send-all-emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ period_id: parseInt(periodId) }),
+      });
+      const data = await res.json();
+      if (res.ok) showToast(data.message || "All emails sent!");
+      else showToast(data.error || "Failed to send emails", "error");
+    } catch {
+      showToast("Failed to send emails", "error");
+    }
+    setEmailingAll(false);
+  }
+
   async function fetchFromDentally() {
     setFetchingDentally(true);
     try {
@@ -510,7 +557,23 @@ export default function PeriodDetailPage() {
               <span className="text-sm text-text-muted">{entries.length} dentists</span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={downloadAllPdfs}
+              disabled={downloadingAll || entries.length === 0}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {downloadingAll ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+              {downloadingAll ? "Zipping..." : "Download All PDFs"}
+            </button>
+            <button
+              onClick={emailAll}
+              disabled={emailingAll || entries.length === 0}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {emailingAll ? <Loader2 size={15} className="animate-spin" /> : <Mail size={15} />}
+              {emailingAll ? "Sending..." : "Email All"}
+            </button>
             {!isFinalized && (
               <button
                 onClick={fetchFromDentally}
