@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
 
   try {
     await transporter.sendMail({
-      from: `"${clinicName}" <${settings.email_from || "pm@auradentalclinic.co.uk"}>`,
+      from: `"Mrs Jennifer Ingledew - Practice Manager" <pm@auradentalclinic.co.uk>`,
       to: entry.dentist_email,
       subject: `Your Payslip - ${getMonthName(entry.month)} ${entry.year}`,
       html: `
