@@ -319,7 +319,7 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
       y += 22;
     }
 
-    // ========== PAGE 2: COMPACT PATIENT BREAKDOWN ==========
+    // ========== PAGE 2: COMPACT PRIVATE PATIENT BREAKDOWN ==========
     if (patients.length > 0) {
       doc.addPage();
 
@@ -356,10 +356,10 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(navy.r, navy.g, navy.b);
-      doc.text("PATIENT BREAKDOWN", 15, y);
+      doc.text("PRIVATE PATIENT BREAKDOWN", 15, y);
       doc.setDrawColor(blue600.r, blue600.g, blue600.b);
       doc.setLineWidth(1.5);
-      doc.line(15, y + 2, 15 + doc.getTextWidth("PATIENT BREAKDOWN"), y + 2);
+      doc.line(15, y + 2, 15 + doc.getTextWidth("PRIVATE PATIENT BREAKDOWN"), y + 2);
 
       y += 6;
 
@@ -407,7 +407,7 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
         // Simple compact table
         autoTable(doc, {
           startY: y,
-          head: [["Patient", "Date", "Amount", "Fin. Fee"]],
+          head: [["Patient", "Date", "Amount", "Finance Fee"]],
           body: patients.map(p => [
             p.name.length > 25 ? p.name.substring(0, 23) + "..." : p.name,
             new Date(p.date + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit" }),
