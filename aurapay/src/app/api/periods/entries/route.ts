@@ -67,6 +67,7 @@ export async function PUT(req: NextRequest) {
       private_patients_json = ?,
       discrepancies_json = ?,
       dentist_log_json = ?,
+      superannuation_deduction = ?,
       updated_at = datetime('now')
     WHERE id = ?`,
     args: [
@@ -81,6 +82,7 @@ export async function PUT(req: NextRequest) {
       JSON.stringify(body.private_patients || []),
       JSON.stringify(body.discrepancies || []),
       JSON.stringify(body.dentist_log || []),
+      body.superannuation_deduction ?? 0,
       body.id,
     ],
   });

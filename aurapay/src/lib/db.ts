@@ -145,6 +145,7 @@ async function initializeDb(db: Client) {
       nhs_period_json TEXT DEFAULT '{}',
       analytics_json TEXT DEFAULT '{}',
       therapy_breakdown_json TEXT DEFAULT '[]',
+      superannuation_deduction REAL NOT NULL DEFAULT 0 CHECK(superannuation_deduction >= 0),
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(period_id, dentist_id)
@@ -193,6 +194,7 @@ async function initializeDb(db: Client) {
     "ALTER TABLE payslip_entries ADD COLUMN analytics_json TEXT DEFAULT '{}'",
     "ALTER TABLE dentists ADD COLUMN weekly_hours REAL DEFAULT 40",
     "ALTER TABLE payslip_entries ADD COLUMN therapy_breakdown_json TEXT DEFAULT '[]'",
+    "ALTER TABLE payslip_entries ADD COLUMN superannuation_deduction REAL NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN clinic_id INTEGER REFERENCES clinics(id)",
     "ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0",
@@ -545,6 +547,7 @@ export interface PayslipEntry {
   dentist_log_json: string;
   analytics_json: string;
   therapy_breakdown_json: string;
+  superannuation_deduction: number;
   nhs_period_json?: string;
   created_at: string;
   updated_at: string;

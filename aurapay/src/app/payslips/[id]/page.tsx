@@ -44,6 +44,7 @@ interface Calculation {
   labBills: LabBill[]; labBillsTotal: number; labBillsDeduction: number;
   financeFees: number; financeFeesDeduction: number;
   therapyMinutes: number; therapyRate: number; therapyDeduction: number;
+  superannuationDeduction: number;
   adjustments: Adjustment[]; adjustmentsTotal: number;
   totalDeductions: number; totalEarnings: number; netPay: number;
 }
@@ -68,6 +69,7 @@ interface Entry {
   id: number; period_id: number; dentist_id: number;
   gross_private: number; nhs_udas: number; lab_bills_json: string;
   finance_fees: number; therapy_minutes: number; therapy_rate: number;
+  superannuation_deduction: number;
   adjustments_json: string; notes: string; private_patients_json: string;
   discrepancies_json?: string; dentist_log_json?: string; analytics_json?: string;
   therapy_breakdown_json?: string;
@@ -146,6 +148,8 @@ export default function PeriodDetailPage() {
     const therapyRate = entry.therapy_rate > 0 ? entry.therapy_rate : 0.5833;
     const therapyDeduction = Math.round(therapyMinutes * therapyRate * 100) / 100;
 
+    const superannuationDeduction = Math.round(Math.max(0, entry.superannuation_deduction || 0) * 100) / 100;
+
     let adjustmentsTotal = 0;
     for (const adj of adjustments) {
       if (typeof adj.amount !== "number" || adj.amount < 0) continue;
@@ -154,7 +158,7 @@ export default function PeriodDetailPage() {
     adjustmentsTotal = Math.round(adjustmentsTotal * 100) / 100;
 
     const totalEarnings = Math.round((netPrivate + nhsIncome) * 100) / 100;
-    const totalDeductions = Math.round((labBillsDeduction + financeFeesDeduction + therapyDeduction) * 100) / 100;
+    const totalDeductions = Math.round((labBillsDeduction + financeFeesDeduction + therapyDeduction + superannuationDeduction) * 100) / 100;
     const netPay = Math.round((totalEarnings - totalDeductions + adjustmentsTotal) * 100) / 100;
 
     return {
@@ -163,6 +167,7 @@ export default function PeriodDetailPage() {
       labBills: validLabBills, labBillsTotal, labBillsDeduction,
       financeFees, financeFeesDeduction,
       therapyMinutes, therapyRate, therapyDeduction,
+      superannuationDeduction,
       adjustments, adjustmentsTotal,
       totalDeductions, totalEarnings, netPay,
     };
@@ -244,6 +249,7 @@ export default function PeriodDetailPage() {
         finance_fees: entry.finance_fees,
         therapy_minutes: entry.therapy_minutes,
         therapy_rate: entry.therapy_rate,
+        superannuation_deduction: entry.superannuation_deduction || 0,
         adjustments: adjustments,
         notes: entry.notes,
         private_patients: privatePatients,
@@ -885,7 +891,7 @@ export default function PeriodDetailPage() {
                     </div>
 
                     {/* Deductions Breakdown */}
-                    {(c.totalDeductions > 0 || c.therapyMinutes > 0) && (
+                    {(c.totalDeductions > 0 || c.therapyMinutes > 0 || c.superannuationDeduction > 0) && (
                       <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-2">
                         <h4 className="text-xs font-semibold text-red-800 uppercase tracking-wide">Deductions Breakdown</h4>
                         <div className="space-y-1.5 text-xs">
@@ -911,6 +917,12 @@ export default function PeriodDetailPage() {
                             <div className="flex justify-between text-amber-600">
                               <span>Therapy ({c.therapyMinutes} mins) - rate not set</span>
                               <span className="font-medium">£0.00</span>
+                            </div>
+                          )}
+                          {c.superannuationDeduction > 0 && (
+                            <div className="flex justify-between text-red-700">
+                              <span>Superannuation</span>
+                              <span className="font-medium">-{fmt(c.superannuationDeduction)}</span>
                             </div>
                           )}
                           <div className="flex justify-between text-red-900 font-bold pt-1.5 border-t border-red-200">
@@ -1013,20 +1025,38 @@ export default function PeriodDetailPage() {
                       );
                     })()}
 
+                    {/* Drift warning: stored gross_private doesn't match computed total */}
+                    {patients.length > 0 && Math.abs(entry.gross_private - c.grossPrivate) > 0.01 && (
+                      <div className="bg-amber-50 border border-amber-300 rounded-lg px-4 py-2 flex items-center justify-between">
+                        <p className="text-xs text-amber-800">
+                          Stored Gross Private ({fmt(entry.gross_private)}) differs from patient total ({fmt(c.grossPrivate)}). Using computed value.
+                        </p>
+                        <button
+                          onClick={() => updateEntry(entry.id, { gross_private: c.grossPrivate })}
+                          className="text-xs font-medium text-amber-700 hover:text-amber-900 underline ml-3 whitespace-nowrap"
+                        >
+                          Sync now
+                        </button>
+                      </div>
+                    )}
+
                     {/* Editable fields */}
                     <div className="space-y-5">
                       {/* Gross Private & NHS */}
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div>
-                          <label className="block text-xs font-medium text-text-muted mb-1">Gross Private Income</label>
+                          <label className="block text-xs font-medium text-text-muted mb-1">
+                            Gross Private Income
+                            {patients.length > 0 && <span className="text-[10px] text-text-subtle ml-1">(from patients)</span>}
+                          </label>
                           <div className="relative">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle text-sm">£</span>
                             <input
                               type="number"
                               step="0.01"
-                              value={entry.gross_private || ""}
+                              value={patients.length > 0 ? c.grossPrivate : (entry.gross_private || "")}
                               onChange={(e) => updateEntry(entry.id, { gross_private: parseFloat(e.target.value) || 0 })}
-                              disabled={isFinalized}
+                              disabled={isFinalized || patients.length > 0}
                               className="w-full pl-7 pr-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted disabled:text-text-muted"
                             />
                           </div>
@@ -1047,16 +1077,19 @@ export default function PeriodDetailPage() {
                           </div>
                         ) : null}
                         <div>
-                          <label className="block text-xs font-medium text-text-muted mb-1">Finance Fees Total</label>
+                          <label className="block text-xs font-medium text-text-muted mb-1">
+                            Finance Fees Total
+                            {patients.length > 0 && <span className="text-[10px] text-text-subtle ml-1">(from patients)</span>}
+                          </label>
                           <div className="relative">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle text-sm">£</span>
                             <input
                               type="number"
                               step="0.01"
-                              value={entry.finance_fees || ""}
+                              value={patients.length > 0 ? c.financeFees : (entry.finance_fees || "")}
                               onChange={(e) => updateEntry(entry.id, { finance_fees: parseFloat(e.target.value) || 0 })}
-                              disabled={isFinalized}
-                              className="w-full pl-7 pr-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted"
+                              disabled={isFinalized || patients.length > 0}
+                              className="w-full pl-7 pr-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted disabled:text-text-muted"
                             />
                           </div>
                         </div>
@@ -1090,59 +1123,23 @@ export default function PeriodDetailPage() {
                         </div>
                       </div>
 
-                      {/* Therapy Breakdown */}
-                      {(() => {
-                        const therapyBreakdown: TherapyBreakdownItem[] = JSON.parse(entry.therapy_breakdown_json || "[]");
-                        if (therapyBreakdown.length === 0) return null;
-                        const totalMins = therapyBreakdown.reduce((sum, t) => sum + t.minutes, 0);
-                        const totalCost = therapyBreakdown.reduce((sum, t) => sum + t.cost, 0);
-                        return (
-                          <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
-                            <div className="flex items-center justify-between mb-2">
-                              <h4 className="text-xs font-semibold text-purple-800 flex items-center gap-2">
-                                🦷 Therapy Referrals Breakdown
-                                <span className="text-purple-600 font-normal">({therapyBreakdown.length} appointments)</span>
-                              </h4>
-                              <span className="text-xs font-bold text-purple-700">
-                                {totalMins} mins = {fmt(totalCost)}
-                              </span>
-                            </div>
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-xs">
-                                <thead>
-                                  <tr className="text-left text-purple-600">
-                                    <th className="py-1 pr-3">Patient</th>
-                                    <th className="py-1 pr-3">Date</th>
-                                    <th className="py-1 pr-3">Therapist</th>
-                                    <th className="py-1 pr-3 text-right">Mins</th>
-                                    <th className="py-1 text-right">Cost</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="text-purple-800">
-                                  {therapyBreakdown.map((t, i) => (
-                                    <tr key={i} className="border-t border-purple-100">
-                                      <td className="py-1.5 pr-3 font-medium">{t.patientName}</td>
-                                      <td className="py-1.5 pr-3 text-purple-600">
-                                        {new Date(t.date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
-                                      </td>
-                                      <td className="py-1.5 pr-3 text-purple-600">{t.therapistName || "Therapist"}</td>
-                                      <td className="py-1.5 pr-3 text-right">{t.minutes}</td>
-                                      <td className="py-1.5 text-right font-medium">{fmt(t.cost)}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                                <tfoot>
-                                  <tr className="border-t-2 border-purple-300 font-bold text-purple-900">
-                                    <td colSpan={3} className="py-1.5">Total</td>
-                                    <td className="py-1.5 text-right">{totalMins}</td>
-                                    <td className="py-1.5 text-right">{fmt(totalCost)}</td>
-                                  </tr>
-                                </tfoot>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      {/* Superannuation Deduction */}
+                      <div>
+                        <label className="block text-xs font-medium text-text-muted mb-1">Superannuation Deduction</label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle text-sm">£</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={entry.superannuation_deduction || ""}
+                            onChange={(e) => updateEntry(entry.id, { superannuation_deduction: Math.round((parseFloat(e.target.value) || 0) * 100) / 100 })}
+                            disabled={isFinalized}
+                            placeholder="0.00"
+                            className="w-full sm:w-1/2 pl-7 pr-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted disabled:text-text-muted"
+                          />
+                        </div>
+                      </div>
 
                       {/* Lab Bills */}
                       <div>
@@ -1680,11 +1677,12 @@ export default function PeriodDetailPage() {
                             j === discIdx ? { ...disc, resolved: true } : disc
                           );
 
-                          // Update entry with both changes
+                          // Update entry with both changes — gross_private derived from patient totals
+                          const computedGross = Math.round(updatedPatients.reduce((s, p) => s + (p.amount || 0), 0) * 100) / 100;
                           updateEntry(entry.id, {
                             private_patients_json: JSON.stringify(updatedPatients),
                             discrepancies_json: JSON.stringify(updatedDiscrepancies),
-                            gross_private: entry.gross_private + amount, // Also add to gross total
+                            gross_private: computedGross,
                           });
                           showToast(`Added ${d.patientName} (${fmt(amount)}) to breakdown`);
                         };
