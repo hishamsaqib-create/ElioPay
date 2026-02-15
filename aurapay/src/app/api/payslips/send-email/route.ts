@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
         <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
           <div style="background:#0f172a;padding:20px;border-radius:8px 8px 0 0">
             <h1 style="color:#fff;margin:0;font-size:24px">${clinicName}</h1>
-            <p style="color:#94a3b8;margin:5px 0 0">Dental Payslip Portal</p>
+            <p style="color:#94a3b8;margin:5px 0 0">Payslip Notification</p>
           </div>
           <div style="padding:25px;background:#fff;border:1px solid #e9ecef">
             <p>Dear ${entry.dentist_name},</p>
