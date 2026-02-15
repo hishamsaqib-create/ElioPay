@@ -1013,20 +1013,38 @@ export default function PeriodDetailPage() {
                       );
                     })()}
 
+                    {/* Drift warning: stored gross_private doesn't match computed total */}
+                    {patients.length > 0 && Math.abs(entry.gross_private - c.grossPrivate) > 0.01 && (
+                      <div className="bg-amber-50 border border-amber-300 rounded-lg px-4 py-2 flex items-center justify-between">
+                        <p className="text-xs text-amber-800">
+                          Stored Gross Private ({fmt(entry.gross_private)}) differs from patient total ({fmt(c.grossPrivate)}). Using computed value.
+                        </p>
+                        <button
+                          onClick={() => updateEntry(entry.id, { gross_private: c.grossPrivate })}
+                          className="text-xs font-medium text-amber-700 hover:text-amber-900 underline ml-3 whitespace-nowrap"
+                        >
+                          Sync now
+                        </button>
+                      </div>
+                    )}
+
                     {/* Editable fields */}
                     <div className="space-y-5">
                       {/* Gross Private & NHS */}
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div>
-                          <label className="block text-xs font-medium text-text-muted mb-1">Gross Private Income</label>
+                          <label className="block text-xs font-medium text-text-muted mb-1">
+                            Gross Private Income
+                            {patients.length > 0 && <span className="text-[10px] text-text-subtle ml-1">(from patients)</span>}
+                          </label>
                           <div className="relative">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle text-sm">£</span>
                             <input
                               type="number"
                               step="0.01"
-                              value={entry.gross_private || ""}
+                              value={patients.length > 0 ? c.grossPrivate : (entry.gross_private || "")}
                               onChange={(e) => updateEntry(entry.id, { gross_private: parseFloat(e.target.value) || 0 })}
-                              disabled={isFinalized}
+                              disabled={isFinalized || patients.length > 0}
                               className="w-full pl-7 pr-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted disabled:text-text-muted"
                             />
                           </div>
@@ -1047,16 +1065,19 @@ export default function PeriodDetailPage() {
                           </div>
                         ) : null}
                         <div>
-                          <label className="block text-xs font-medium text-text-muted mb-1">Finance Fees Total</label>
+                          <label className="block text-xs font-medium text-text-muted mb-1">
+                            Finance Fees Total
+                            {patients.length > 0 && <span className="text-[10px] text-text-subtle ml-1">(from patients)</span>}
+                          </label>
                           <div className="relative">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle text-sm">£</span>
                             <input
                               type="number"
                               step="0.01"
-                              value={entry.finance_fees || ""}
+                              value={patients.length > 0 ? c.financeFees : (entry.finance_fees || "")}
                               onChange={(e) => updateEntry(entry.id, { finance_fees: parseFloat(e.target.value) || 0 })}
-                              disabled={isFinalized}
-                              className="w-full pl-7 pr-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted"
+                              disabled={isFinalized || patients.length > 0}
+                              className="w-full pl-7 pr-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:bg-surface-muted disabled:text-text-muted"
                             />
                           </div>
                         </div>
@@ -1680,11 +1701,12 @@ export default function PeriodDetailPage() {
                             j === discIdx ? { ...disc, resolved: true } : disc
                           );
 
-                          // Update entry with both changes
+                          // Update entry with both changes — gross_private derived from patient totals
+                          const computedGross = Math.round(updatedPatients.reduce((s, p) => s + (p.amount || 0), 0) * 100) / 100;
                           updateEntry(entry.id, {
                             private_patients_json: JSON.stringify(updatedPatients),
                             discrepancies_json: JSON.stringify(updatedDiscrepancies),
-                            gross_private: entry.gross_private + amount, // Also add to gross total
+                            gross_private: computedGross,
                           });
                           showToast(`Added ${d.patientName} (${fmt(amount)}) to breakdown`);
                         };
