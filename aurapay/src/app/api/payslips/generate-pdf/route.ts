@@ -264,6 +264,8 @@ async function generatePdf(req: NextRequest, isPost: boolean) {
     }
     if (calc.financeFeesDeduction > 0) deductRows.push(["Finance Fees (50%)", formatCurrency(calc.financeFeesDeduction)]);
     if (therapyDeductForPdf > 0) deductRows.push([`Therapy (${therapyMinsForPdf}min)`, formatCurrency(therapyDeductForPdf)]);
+    const superannForPdf = calc.superannuationDeduction || 0;
+    if (superannForPdf > 0) deductRows.push(["Superannuation", formatCurrency(superannForPdf)]);
     for (const adj of calc.adjustments) deductRows.push([adj.description, formatCurrency(adj.amount)]);
 
     let deductionsEndY = startY + 4;

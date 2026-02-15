@@ -15,6 +15,7 @@ export interface PayslipCalculation {
   therapyMinutes: number;
   therapyRate: number;
   therapyDeduction: number;
+  superannuationDeduction: number;
   adjustments: AdjustmentItem[];
   adjustmentsTotal: number;
   totalDeductions: number;
@@ -86,6 +87,9 @@ export function calculatePayslip(
   const therapyRate = entry.therapy_rate > 0 ? entry.therapy_rate : 0.5833;
   const therapyDeduction = roundCurrency(therapyMinutes * therapyRate);
 
+  // Superannuation deduction
+  const superannuationDeduction = roundCurrency(Math.max(0, entry.superannuation_deduction || 0));
+
   // Calculate adjustments
   let adjustmentsTotal = 0;
   for (const adj of adjustments) {
@@ -103,7 +107,7 @@ export function calculatePayslip(
 
   // Calculate totals
   const totalEarnings = roundCurrency(netPrivate + nhsIncome);
-  const totalDeductions = roundCurrency(labBillsDeduction + financeFeesDeduction + therapyDeduction);
+  const totalDeductions = roundCurrency(labBillsDeduction + financeFeesDeduction + therapyDeduction + superannuationDeduction);
   const netPay = roundCurrency(totalEarnings - totalDeductions + adjustmentsTotal);
 
   // Check for negative pay
@@ -127,6 +131,7 @@ export function calculatePayslip(
     therapyMinutes,
     therapyRate,
     therapyDeduction,
+    superannuationDeduction,
     adjustments,
     adjustmentsTotal,
     totalDeductions,
