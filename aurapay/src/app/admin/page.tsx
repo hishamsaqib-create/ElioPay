@@ -288,7 +288,7 @@ export default function AdminPage() {
             </div>
             <div>
               <h1 className="text-2xl font-bold text-text">Admin Zone</h1>
-              <p className="text-sm text-text-muted">ElioPay platform management</p>
+              <p className="text-sm text-text-muted">AuraPay platform management</p>
             </div>
           </div>
         </div>
@@ -659,7 +659,7 @@ export default function AdminPage() {
                     value={clinicFormData.name}
                     onChange={(e) => setClinicFormData({ ...clinicFormData, name: e.target.value })}
                     className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none"
-                    placeholder="Elio Dental"
+                    placeholder="Aura Dental"
                   />
                 </div>
 

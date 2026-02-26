@@ -64,7 +64,7 @@ export async function PUT(req: NextRequest) {
     const token = signToken(updatedUser);
 
     const res = NextResponse.json({ user: updatedUser });
-    res.cookies.set("eliopay_token", token, {
+    res.cookies.set("aurapay_token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",

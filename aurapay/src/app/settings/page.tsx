@@ -122,7 +122,7 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-text">Settings</h1>
-            <p className="text-sm text-text-muted mt-0.5">Configure ElioPay™ system settings</p>
+            <p className="text-sm text-text-muted mt-0.5">Configure AuraPay™ system settings</p>
           </div>
           <button
             onClick={save}
@@ -187,7 +187,7 @@ export default function SettingsPage() {
             <SettingsField label="Postcode" value={settings.clinic_postcode || ""} onChange={(v) => update("clinic_postcode", v)} placeholder="SW1A 1AA" />
             <SettingsField label="Phone" value={settings.clinic_phone || ""} onChange={(v) => update("clinic_phone", v)} placeholder="+44 20 1234 5678" />
             <SettingsField label="Email" value={settings.clinic_email || ""} onChange={(v) => update("clinic_email", v)} placeholder="info@clinic.com" />
-            <SettingsField label="Website" value={settings.clinic_website || ""} onChange={(v) => update("clinic_website", v)} placeholder="eliopay.co.uk" span={2} />
+            <SettingsField label="Website" value={settings.clinic_website || ""} onChange={(v) => update("clinic_website", v)} placeholder="aurapay.co.uk" span={2} />
           </div>
         </Section>
 
@@ -346,7 +346,7 @@ export default function SettingsPage() {
             <SettingsField label="SMTP Port" value={settings.smtp_port || ""} onChange={(v) => update("smtp_port", v)} placeholder="587" />
             <SettingsField label="SMTP Username" value={settings.smtp_user || ""} onChange={(v) => update("smtp_user", v)} placeholder="you@gmail.com" />
             <SettingsField label="SMTP Password" value={settings.smtp_pass || ""} onChange={(v) => update("smtp_pass", v)} type="password" placeholder="App password" />
-            <SettingsField label="From Address" value={settings.email_from || ""} onChange={(v) => update("email_from", v)} placeholder="payslips@eliopay.co.uk" span={2} />
+            <SettingsField label="From Address" value={settings.email_from || ""} onChange={(v) => update("email_from", v)} placeholder="payslips@aurapay.co.uk" span={2} />
           </div>
           <p className="text-xs text-text-subtle">
             For Gmail, use an App Password (not your regular password). Enable 2FA first, then generate at myaccount.google.com.

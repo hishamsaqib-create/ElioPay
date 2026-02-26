@@ -48,7 +48,7 @@ export function verifyToken(token: string): AuthUser | null {
 
 export async function getSession(): Promise<AuthUser | null> {
   const cookieStore = await cookies();
-  const token = cookieStore.get("eliopay_token")?.value;
+  const token = cookieStore.get("aurapay_token")?.value;
   if (!token) return null;
   return verifyToken(token);
 }
