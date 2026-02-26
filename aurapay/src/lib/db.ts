@@ -16,7 +16,7 @@ function validateDbConfig(): { url: string; authToken?: string } {
       throw new Error("CRITICAL: TURSO_DATABASE_URL environment variable is required in production");
     }
     console.warn("WARNING: Using local SQLite database. Set TURSO_DATABASE_URL for production.");
-    return { url: "file:eliopay.db" };
+    return { url: "file:aurapay.db" };
   }
 
   // Validate URL format
@@ -276,11 +276,11 @@ async function initializeDb(db: Client) {
   }
 
   // Migration: Update existing admin user to new credentials and make super admin
-  const existingAdmin = await db.execute("SELECT id FROM users WHERE email = 'admin@eliodental.co.uk'");
+  const existingAdmin = await db.execute("SELECT id FROM users WHERE email = 'admin@auradental.co.uk'");
   if (existingAdmin.rows.length > 0) {
     const newHash = bcrypt.hashSync("Epsckayu1", 12);
     await db.execute({
-      sql: "UPDATE users SET email = ?, password_hash = ?, name = ?, must_change_password = 0, is_super_admin = 1 WHERE email = 'admin@eliodental.co.uk'",
+      sql: "UPDATE users SET email = ?, password_hash = ?, name = ?, must_change_password = 0, is_super_admin = 1 WHERE email = 'admin@auradental.co.uk'",
       args: ["drhish@auradentalclinic.co.uk", newHash, "Dr Hisham"],
     });
     console.log("[Migration] Updated admin user to drhish@auradentalclinic.co.uk (super admin)");
@@ -356,7 +356,7 @@ async function initializeDb(db: Client) {
       ["smtp_port", process.env.SMTP_PORT || "587"],
       ["smtp_user", process.env.SMTP_USER || ""],
       ["smtp_pass", process.env.SMTP_PASS || ""],
-      ["email_from", process.env.EMAIL_FROM || "payslips@eliopay.co.uk"],
+      ["email_from", process.env.EMAIL_FROM || "payslips@aurapay.co.uk"],
     ];
     for (const [k, v] of defaults) {
       await db.execute({ sql: "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", args: [k, v] });

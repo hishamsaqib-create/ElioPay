@@ -1,38 +1,47 @@
 @import "tailwindcss";
 
 @theme {
-  --color-primary-50: #f0fdf4;
-  --color-primary-100: #dcfce7;
-  --color-primary-200: #bbf7d0;
-  --color-primary-300: #86efac;
-  --color-primary-400: #4ade80;
-  --color-primary-500: #22c55e;
-  --color-primary-600: #16a34a;
-  --color-primary-700: #15803d;
-  --color-primary-800: #166534;
-  --color-primary-900: #14532d;
+  /* Apple-inspired blue primary palette */
+  --color-primary-50: #f0f5ff;
+  --color-primary-100: #e0eaff;
+  --color-primary-200: #c7d7fe;
+  --color-primary-300: #a4bcfd;
+  --color-primary-400: #7c9cf9;
+  --color-primary-500: #5b7cf5;
+  --color-primary-600: #3b63e9;
+  --color-primary-700: #2d4fd6;
+  --color-primary-800: #2841ad;
+  --color-primary-900: #263a89;
 
   --color-gold-400: #fbbf24;
   --color-gold-500: #f59e0b;
 
+  /* Clean, warm surfaces */
   --color-surface: #ffffff;
-  --color-surface-dim: #f8f9fa;
-  --color-surface-muted: #f1f3f5;
-  --color-border: #e9ecef;
-  --color-border-strong: #dee2e6;
-  --color-text: #212529;
-  --color-text-muted: #868e96;
-  --color-text-subtle: #adb5bd;
+  --color-surface-dim: #f5f5f7;
+  --color-surface-muted: #ececee;
 
-  --color-success: #40c057;
-  --color-warning: #fd7e14;
-  --color-danger: #fa5252;
+  /* Softer borders */
+  --color-border: #d2d2d7;
+  --color-border-strong: #c4c4c9;
+
+  /* Refined text hierarchy */
+  --color-text: #1d1d1f;
+  --color-text-muted: #6e6e73;
+  --color-text-subtle: #a1a1a6;
+
+  /* Status colors - Apple-inspired */
+  --color-success: #34c759;
+  --color-warning: #ff9f0a;
+  --color-danger: #ff3b30;
 }
 
 body {
-  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;
   color: var(--color-text);
   background: var(--color-surface-dim);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 @layer base {
@@ -43,5 +52,33 @@ body {
   }
   input[type="number"] {
     -moz-appearance: textfield;
+  }
+
+  /* Apple-style focus rings */
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    box-shadow: 0 0 0 4px rgba(59, 99, 233, 0.15);
+    border-color: var(--color-primary-500) !important;
+  }
+
+  /* Smoother transitions everywhere */
+  button, a, input, select {
+    transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+
+  /* Apple-style scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border-strong);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-subtle);
   }
 }

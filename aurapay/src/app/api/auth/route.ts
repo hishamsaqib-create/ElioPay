@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
       user: { id: user.id, email: user.email, name: user.name, role, is_super_admin: isSuperAdmin },
     });
 
-    res.cookies.set("eliopay_token", token, {
+    res.cookies.set("aurapay_token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
@@ -160,7 +160,7 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE() {
   const res = NextResponse.json({ ok: true });
-  res.cookies.set("eliopay_token", "", {
+  res.cookies.set("aurapay_token", "", {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",

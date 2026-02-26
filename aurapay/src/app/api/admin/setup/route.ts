@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   const { setupKey, email, password } = body;
 
   // Validate setup key - must match environment variable or default
-  const expectedKey = process.env.ADMIN_SETUP_KEY || "eliopay-setup-2025";
+  const expectedKey = process.env.ADMIN_SETUP_KEY || "aurapay-setup-2025";
   if (setupKey !== expectedKey) {
     return NextResponse.json({ error: "Invalid setup key" }, { status: 403 });
   }
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const setupKey = req.nextUrl.searchParams.get("key");
 
-  const expectedKey = process.env.ADMIN_SETUP_KEY || "eliopay-setup-2025";
+  const expectedKey = process.env.ADMIN_SETUP_KEY || "aurapay-setup-2025";
   if (setupKey !== expectedKey) {
     return NextResponse.json({ error: "Invalid setup key" }, { status: 403 });
   }

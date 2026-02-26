@@ -19,10 +19,10 @@ export async function GET() {
     }
 
     // Return default icon - redirect to static icon
-    return NextResponse.redirect(new URL("/icon.svg", process.env.NEXT_PUBLIC_APP_URL || "https://eliopay.co.uk"), { status: 302 });
+    return NextResponse.redirect(new URL("/icon.svg", process.env.NEXT_PUBLIC_APP_URL || "https://aurapay.co.uk"), { status: 302 });
   } catch (error) {
     console.error("[Favicon] Error:", error);
     // Fallback to default icon
-    return NextResponse.redirect(new URL("/icon.svg", process.env.NEXT_PUBLIC_APP_URL || "https://eliopay.co.uk"), { status: 302 });
+    return NextResponse.redirect(new URL("/icon.svg", process.env.NEXT_PUBLIC_APP_URL || "https://aurapay.co.uk"), { status: 302 });
   }
 }
