@@ -203,8 +203,14 @@ export async function POST(req: NextRequest) {
 
   patients.push(newPatient);
 
-  // Sort by date
-  patients.sort((a, b) => a.date.localeCompare(b.date));
+  // Sort by date and time (full chronological order)
+  patients.sort((a, b) => {
+    const dateCompare = a.date.localeCompare(b.date);
+    if (dateCompare !== 0) return dateCompare;
+    const timeA = (a as PatientRecord & { time?: string }).time || "99:99";
+    const timeB = (b as PatientRecord & { time?: string }).time || "99:99";
+    return timeA.localeCompare(timeB);
+  });
 
   // Recalculate totals
   let grossPrivate = 0;

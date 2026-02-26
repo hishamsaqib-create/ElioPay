@@ -173,6 +173,51 @@ async function initializeDb(db: Client) {
       user_agent TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )`,
+    `CREATE TABLE IF NOT EXISTS lab_bill_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lab_name TEXT NOT NULL,
+      dentist_id INTEGER REFERENCES dentists(id),
+      amount REAL NOT NULL DEFAULT 0,
+      description TEXT DEFAULT '',
+      file_url TEXT,
+      date TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      paid INTEGER NOT NULL DEFAULT 0,
+      paid_date TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS supplier_invoice_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      supplier_name TEXT NOT NULL,
+      dentist_id INTEGER REFERENCES dentists(id),
+      amount REAL NOT NULL DEFAULT 0,
+      description TEXT DEFAULT '',
+      invoice_number TEXT DEFAULT '',
+      file_url TEXT,
+      date TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      paid INTEGER NOT NULL DEFAULT 0,
+      paid_date TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS saved_labs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      account_name TEXT DEFAULT '',
+      sort_code TEXT DEFAULT '',
+      account_number TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS saved_suppliers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      account_name TEXT DEFAULT '',
+      sort_code TEXT DEFAULT '',
+      account_number TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
   ];
 
   for (const sql of tables) {
