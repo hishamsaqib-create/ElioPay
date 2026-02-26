@@ -47,7 +47,7 @@ export default function LoginPage() {
           <h1 className="text-[28px] font-semibold text-text tracking-tight">
             AuraPay
           </h1>
-          <p className="text-text-muted mt-1 text-sm">Dental Payslip Portal</p>
+          <p className="text-text-muted mt-1 text-sm">Practice Management Portal</p>
         </div>
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-lg shadow-black/5 border border-border/60 p-7 space-y-4">
           <div>
@@ -99,9 +99,6 @@ export default function LoginPage() {
             ) : "Sign In"}
           </button>
         </form>
-        <p className="text-text-subtle text-xs text-center mt-5">
-          Secure payslip management system
-        </p>
       </div>
     </div>
   );
