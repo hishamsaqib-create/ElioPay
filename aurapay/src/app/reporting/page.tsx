@@ -349,10 +349,10 @@ export default function ReportingPage() {
 
   return (
     <Shell>
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
         <div>
-          <h1 className="text-2xl font-bold text-text">Reporting</h1>
-          <p className="text-sm text-text-muted mt-1">Financial analytics, trends, and anomaly detection</p>
+          <h1 className="text-xl sm:text-2xl font-bold text-text">Reporting</h1>
+          <p className="text-xs sm:text-sm text-text-muted mt-1">Financial analytics, trends, and anomaly detection</p>
         </div>
 
         {loading ? (
@@ -362,7 +362,7 @@ export default function ReportingPage() {
         ) : (
           <>
             {/* Summary Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
               <div className="bg-white rounded-xl border border-border p-4">
                 <p className="text-xs text-text-muted font-medium uppercase tracking-wide">Total Lab Bills</p>
                 <p className="text-2xl font-bold text-text mt-1">{fmt(Number(labSummary?.total_amount || 0))}</p>
@@ -387,10 +387,10 @@ export default function ReportingPage() {
 
             {/* Monthly Trend Line Chart */}
             {trendData.length > 0 && (
-              <div className="bg-white rounded-xl border border-border p-6">
-                <div className="flex items-center justify-between mb-4">
+              <div className="bg-white rounded-xl border border-border p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                   <div>
-                    <h2 className="text-lg font-semibold text-text">Monthly Costs Trend</h2>
+                    <h2 className="text-base sm:text-lg font-semibold text-text">Monthly Costs Trend</h2>
                     <p className="text-xs text-text-muted mt-0.5">Lab bills and supplier invoices over time</p>
                   </div>
                   <div className="flex items-center gap-4 text-xs">
@@ -398,21 +398,21 @@ export default function ReportingPage() {
                     <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-amber-500 inline-block rounded"></span> Supplier Invoices</span>
                   </div>
                 </div>
-                <div className="overflow-x-auto">
-                  <LineChart data={trendData} width={Math.max(700, trendData.length * 80)} height={280} />
+                <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+                  <LineChart data={trendData} width={Math.max(500, trendData.length * 70)} height={250} />
                 </div>
               </div>
             )}
 
             {/* Dentist Pay Trend */}
             {dentistTrendData.length > 0 && (
-              <div className="bg-white rounded-xl border border-border p-6">
-                <div className="flex items-center justify-between mb-4">
+              <div className="bg-white rounded-xl border border-border p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                   <div>
-                    <h2 className="text-lg font-semibold text-text">Dentist Net Pay Trend</h2>
+                    <h2 className="text-base sm:text-lg font-semibold text-text">Dentist Net Pay Trend</h2>
                     <p className="text-xs text-text-muted mt-0.5">All pay periods &mdash; draft months marked with *</p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
                     {dentistNames.map((name, i) => (
                       <span key={name} className="flex items-center gap-1.5">
                         <span className="w-3 h-0.5 inline-block rounded" style={{ backgroundColor: dentistColors[i % dentistColors.length] }}></span>
@@ -421,8 +421,8 @@ export default function ReportingPage() {
                     ))}
                   </div>
                 </div>
-                <div className="overflow-x-auto">
-                  <LineChart data={dentistTrendData} width={Math.max(700, dentistTrendData.length * 80)} height={280} />
+                <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+                  <LineChart data={dentistTrendData} width={Math.max(500, dentistTrendData.length * 70)} height={250} />
                 </div>
 
                 {/* Pay Data Table */}

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AuraPay™ | Dental Payslip Portal",
-  description: "Professional payslip management for dental practices",
+  title: "AuraPay™ | Practice Management Portal",
+  description: "Payslips, lab bills, invoices and reporting for dental practices",
   metadataBase: new URL("https://aurapay.co.uk"),
   icons: {
     icon: [
@@ -13,7 +13,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "AuraPay™",
-    description: "Professional payslip management for dental practices",
+    description: "Payslips, lab bills, invoices and reporting for dental practices",
     siteName: "AuraPay",
     type: "website",
   },

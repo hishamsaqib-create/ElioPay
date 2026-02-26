@@ -129,8 +129,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
               <p className="text-[10px] text-text-subtle leading-none mt-0.5 truncate max-w-[140px]">{clinicName}</p>
             </div>
           </div>
-          <button onClick={() => setSidebarOpen(false)} className="ml-auto lg:hidden text-text-muted hover:text-text">
-            <X size={18} />
+          <button onClick={() => setSidebarOpen(false)} className="ml-auto lg:hidden p-1.5 text-text-muted hover:text-text">
+            <X size={20} />
           </button>
         </div>
 
@@ -199,9 +199,9 @@ export default function Shell({ children }: { children: React.ReactNode }) {
 
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 bg-white/80 backdrop-blur-xl border-b border-border/60 flex items-center px-6 gap-4 shrink-0 sticky top-0 z-30">
-          <button onClick={() => setSidebarOpen(true)} className="lg:hidden text-text-muted hover:text-text">
-            <Menu size={18} />
+        <header className="h-14 bg-white/80 backdrop-blur-xl border-b border-border/60 flex items-center px-4 sm:px-6 gap-3 shrink-0 sticky top-0 z-30">
+          <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-1.5 -ml-1.5 text-text-muted hover:text-text">
+            <Menu size={20} />
           </button>
           <div className="flex items-center gap-1.5 text-[13px] text-text-subtle">
             <span className="hidden sm:inline">AuraPay</span>
@@ -213,7 +213,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             )}
           </div>
         </header>
-        <main className="flex-1 p-6 overflow-auto">{children}</main>
+        <main className="flex-1 p-3 sm:p-6 overflow-auto">{children}</main>
       </div>
     </div>
   );
