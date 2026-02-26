@@ -24,16 +24,16 @@ export default function DashboardPage() {
 
   return (
     <Shell>
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
         {/* Welcome */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-text">Dashboard</h1>
-            <p className="text-sm text-text-muted mt-0.5">Manage payslips and dentist payments</p>
+            <h1 className="text-xl sm:text-2xl font-bold text-text">Dashboard</h1>
+            <p className="text-xs sm:text-sm text-text-muted mt-0.5">Manage payslips and dentist payments</p>
           </div>
           <Link
             href="/payslips/new"
-            className="flex items-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-lg transition shadow-sm"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-xl transition shadow-sm w-full sm:w-auto"
           >
             <Plus size={16} />
             New Period
@@ -41,7 +41,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
           <div className="bg-white rounded-xl border border-border p-5">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-primary-50 text-primary-600 rounded-lg flex items-center justify-center">

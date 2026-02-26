@@ -180,7 +180,7 @@ export default function BulkPaymentsPage() {
           </button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[500px]">
             <thead>
               <tr className="border-b border-border">
                 <th className="text-left px-4 py-2.5 font-medium text-text-muted">Name</th>
@@ -316,14 +316,14 @@ export default function BulkPaymentsPage() {
 
   return (
     <Shell>
-      <div className="max-w-7xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-text">Bulk Payments</h1>
-            <p className="text-sm text-text-muted mt-1">Manage bank details and generate bulk payment files for Starling</p>
+            <h1 className="text-xl sm:text-2xl font-bold text-text">Bulk Payments</h1>
+            <p className="text-xs sm:text-sm text-text-muted mt-1">Manage bank details and generate bulk payment files</p>
           </div>
           {activeTab === "unpaid" && (selectedLab.size > 0 || selectedSupplier.size > 0) && (
-            <button onClick={generateCsv} className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition">
+            <button onClick={generateCsv} className="flex items-center justify-center gap-2 bg-primary-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-primary-700 transition w-full sm:w-auto">
               <Download size={16} /> Export Starling CSV
             </button>
           )}

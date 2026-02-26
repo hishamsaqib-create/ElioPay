@@ -68,15 +68,15 @@ export default function DentistsPage() {
 
   return (
     <Shell>
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-text">Dentists</h1>
-            <p className="text-sm text-text-muted mt-0.5">Manage dentist profiles, splits, and rates</p>
+            <h1 className="text-xl sm:text-2xl font-bold text-text">Dentists</h1>
+            <p className="text-xs sm:text-sm text-text-muted mt-0.5">Manage dentist profiles, splits, and rates</p>
           </div>
           <button
             onClick={() => { setEditing({ ...empty }); setIsNew(true); }}
-            className="flex items-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-lg transition"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-xl transition w-full sm:w-auto"
           >
             <Plus size={16} /> Add Dentist
           </button>
@@ -84,15 +84,15 @@ export default function DentistsPage() {
 
         {/* Edit modal */}
         {editing && (
-          <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4">
+          <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-3 sm:p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold">{isNew ? "Add Dentist" : "Edit Dentist"}</h2>
-                <button onClick={() => { setEditing(null); setIsNew(false); }} className="text-text-muted hover:text-text">
+                <button onClick={() => { setEditing(null); setIsNew(false); }} className="p-1.5 text-text-muted hover:text-text">
                   <X size={20} />
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-text-muted mb-1">Full Name</label>
                   <input
@@ -216,8 +216,8 @@ export default function DentistsPage() {
         </div>
 
         {/* Table */}
-        <div className="bg-white rounded-xl border border-border overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-white rounded-xl border border-border overflow-hidden overflow-x-auto">
+          <table className="w-full text-sm min-w-[600px]">
             <thead>
               <tr className="bg-surface-dim border-b border-border">
                 <th className="text-left px-4 py-3 font-medium text-text-muted">Name</th>

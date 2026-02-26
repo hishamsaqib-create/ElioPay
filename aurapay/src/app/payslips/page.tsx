@@ -19,15 +19,15 @@ export default function PayslipsPage() {
 
   return (
     <Shell>
-      <div className="max-w-4xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="max-w-4xl mx-auto space-y-4 sm:space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-text">Pay Periods</h1>
-            <p className="text-sm text-text-muted mt-0.5">All monthly payslip periods</p>
+            <h1 className="text-xl sm:text-2xl font-bold text-text">Pay Periods</h1>
+            <p className="text-xs sm:text-sm text-text-muted mt-0.5">All monthly payslip periods</p>
           </div>
           <Link
             href="/payslips/new"
-            className="flex items-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-lg transition"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-xl transition w-full sm:w-auto"
           >
             <Plus size={16} /> New Period
           </Link>
