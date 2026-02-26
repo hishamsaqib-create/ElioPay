@@ -402,6 +402,37 @@ async function initializeDb(db: Client) {
 
     console.log("[Migration] Assigned users and dentists to Aura Dental Clinic");
   }
+
+  // Seed saved labs and suppliers if none exist
+  const labCount = await db.execute("SELECT COUNT(*) as c FROM saved_labs");
+  if (Number(labCount.rows[0].c) === 0) {
+    const labs = [
+      "Halo Dental Lab", "Robinsons", "Furze", "Boutique Practice", "Queensway",
+      "Richley", "Mango / Akira", "S4S", "Costech", "Jordent", "Priory",
+      "Optadent", "Woodford", "scan digital",
+    ];
+    for (const name of labs) {
+      await db.execute({ sql: "INSERT OR IGNORE INTO saved_labs (name) VALUES (?)", args: [name] });
+    }
+    console.log("[Migration] Seeded saved labs");
+  }
+
+  const supplierCount = await db.execute("SELECT COUNT(*) as c FROM saved_suppliers");
+  if (Number(supplierCount.rows[0].c) === 0) {
+    const suppliers = [
+      "ADT ALARMS", "YU ENERGY", "ECLIPSE PHONES", "TV License",
+      "Breckon Services", "Sunderland Dental", "Stockton Council", "General Medical",
+      "Hull University (RPA)", "Orthocare", "Wrights", "HE Woolley",
+      "Dentsply Sirona", "Henry Schein", "Enlighten", "Damas",
+      "hu mac (legionella man)", "Bio Horizons", "Trycare",
+      "ORANGE BOX - BLS TRAINING", "Eurodontics", "PHS", "Acorn Polymers",
+      "Stoves plumbing and heating",
+    ];
+    for (const name of suppliers) {
+      await db.execute({ sql: "INSERT OR IGNORE INTO saved_suppliers (name) VALUES (?)", args: [name] });
+    }
+    console.log("[Migration] Seeded saved suppliers");
+  }
 }
 
 // Helper to get settings with caching
