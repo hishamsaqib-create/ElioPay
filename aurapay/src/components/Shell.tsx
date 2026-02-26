@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import {
-  LayoutDashboard, Users, FileText, Settings, LogOut, Menu, X, ChevronRight, User, Shield
+  LayoutDashboard, Users, FileText, Settings, LogOut, Menu, X, ChevronRight, User, Shield,
+  FlaskConical, Truck, CreditCard, BarChart3
 } from "lucide-react";
 
 interface User {
@@ -19,6 +20,10 @@ const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/payslips", label: "Payslips", icon: FileText },
   { href: "/dentists", label: "Dentists", icon: Users },
+  { href: "/lab-bills", label: "Lab Bills", icon: FlaskConical },
+  { href: "/supplier-invoices", label: "Invoices", icon: Truck },
+  { href: "/bulk-payments", label: "Bulk Payments", icon: CreditCard },
+  { href: "/reporting", label: "Reporting", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

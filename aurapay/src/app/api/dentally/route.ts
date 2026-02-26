@@ -188,6 +188,7 @@ interface DentallyAppointment {
 interface PatientRecord {
   name: string;
   date: string;
+  time?: string; // HH:mm for intra-day ordering
   amount: number;
   amountPaid: number;
   amountOutstanding: number;
@@ -951,6 +952,8 @@ export async function POST(req: NextRequest) {
         let durationMins = 0;
         let treatment = "";
 
+        // Extract earliest appointment time for intra-day ordering
+        let appointmentTime: string | undefined;
         if (patientAppointments.length > 0) {
           // Sum all appointments for this patient on this date
           for (const apt of patientAppointments) {
@@ -958,7 +961,19 @@ export async function POST(req: NextRequest) {
             if (!treatment && (apt.treatment_description || apt.reason)) {
               treatment = apt.treatment_description || apt.reason || "";
             }
+            // Get the earliest appointment time (HH:mm)
+            const startStr = apt.starts_at || apt.start_time || "";
+            if (startStr.length >= 16) {
+              const timeStr = startStr.substring(11, 16); // "HH:mm"
+              if (!appointmentTime || timeStr < appointmentTime) {
+                appointmentTime = timeStr;
+              }
+            }
           }
+        }
+        // Fallback: use created_at time from the invoice
+        if (!appointmentTime && inv.created_at && inv.created_at.length >= 16) {
+          appointmentTime = inv.created_at.substring(11, 16);
         }
 
         // Also try to get treatment from invoice items
@@ -974,6 +989,7 @@ export async function POST(req: NextRequest) {
         const patientRecord: PatientRecord = {
           name: patientName,
           date: invoiceDate,
+          time: appointmentTime,
           amount: Math.round(privateAmount * 100) / 100,
           amountPaid: paymentInfo.amountPaid,
           amountOutstanding: paymentInfo.amountOutstanding,
@@ -1019,8 +1035,15 @@ export async function POST(req: NextRequest) {
         processedCount++;
       }
 
-      // Sort patients by date
-      data.patients.sort((a, b) => a.date.localeCompare(b.date));
+      // Sort patients by date and time (full chronological order)
+      data.patients.sort((a, b) => {
+        const dateCompare = a.date.localeCompare(b.date);
+        if (dateCompare !== 0) return dateCompare;
+        // Same date: sort by time (earliest first), no time goes last
+        const timeA = a.time || "99:99";
+        const timeB = b.time || "99:99";
+        return timeA.localeCompare(timeB);
+      });
 
       // Calculate analytics for this dentist
       const dentist = dentists.find(d => d.id === dentistId);
