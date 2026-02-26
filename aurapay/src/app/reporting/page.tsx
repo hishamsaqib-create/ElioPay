@@ -17,7 +17,7 @@ interface ByDentist {
   dentist_name: string | null; lab_name: string; total: number; count: number;
 }
 interface DentistPay {
-  month: number; year: number; dentist_name: string; gross_private: number;
+  month: number; year: number; period_status: string; dentist_name: string; gross_private: number;
   lab_bills_json: string; finance_fees: number; therapy_minutes: number; therapy_rate: number;
   superannuation_deduction: number; adjustments_json: string; split_percentage: number;
   is_nhs: number; uda_rate: number; nhs_udas: number;
@@ -256,38 +256,49 @@ export default function ReportingPage() {
     ],
   }));
 
-  // Prepare dentist pay trend data (only finalized months)
+  // Prepare dentist pay trend data (all periods)
   const dentistNames = [...new Set(dentistPay.map(d => d.dentist_name))];
   const dentistColors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#6366f1"];
   const payMonths = [...new Set(dentistPay.map(d => `${d.year}-${d.month}`))].sort();
+
+  function calcNetPay(entry: DentistPay): number {
+    const labBills = JSON.parse(entry.lab_bills_json || "[]");
+    const labTotal = labBills.reduce((s: number, b: { amount: number }) => s + (b.amount || 0), 0);
+    const adjustments = JSON.parse(entry.adjustments_json || "[]");
+    const adjTotal = adjustments.reduce((s: number, a: { amount: number; type: string }) =>
+      s + (a.type === "addition" ? a.amount : -a.amount), 0);
+    const netPrivate = entry.gross_private * (entry.split_percentage / 100);
+    const nhsIncome = entry.is_nhs ? entry.nhs_udas * entry.uda_rate : 0;
+    const labDeduction = labTotal * 0.5;
+    const financeDeduction = entry.finance_fees * 0.5;
+    const therapyDeduction = entry.therapy_minutes * entry.therapy_rate;
+    return netPrivate + nhsIncome - labDeduction - financeDeduction - therapyDeduction - entry.superannuation_deduction + adjTotal;
+  }
+
   const dentistTrendData = payMonths.map(pm => {
     const [year, month] = pm.split("-").map(Number);
     const monthEntries = dentistPay.filter(d => d.year === year && d.month === month);
+    const isDraft = monthEntries.some(e => e.period_status === "draft");
     return {
-      label: `${monthName(month)} ${String(year).slice(2)}`,
+      label: `${monthName(month)} ${String(year).slice(2)}${isDraft ? "*" : ""}`,
       values: dentistNames.map((name, idx) => {
         const entry = monthEntries.find(e => e.dentist_name === name);
         if (!entry) return { name, value: 0, color: dentistColors[idx % dentistColors.length] };
-
-        // Calculate net pay
-        const labBills = JSON.parse(entry.lab_bills_json || "[]");
-        const labTotal = labBills.reduce((s: number, b: { amount: number }) => s + (b.amount || 0), 0);
-        const adjustments = JSON.parse(entry.adjustments_json || "[]");
-        const adjTotal = adjustments.reduce((s: number, a: { amount: number; type: string }) =>
-          s + (a.type === "addition" ? a.amount : -a.amount), 0);
-
-        const netPrivate = entry.gross_private * (entry.split_percentage / 100);
-        const nhsIncome = entry.is_nhs ? entry.nhs_udas * entry.uda_rate : 0;
-        const labDeduction = labTotal * 0.5;
-        const financeDeduction = entry.finance_fees * 0.5;
-        const therapyDeduction = entry.therapy_minutes * entry.therapy_rate;
-
-        const netPay = netPrivate + nhsIncome - labDeduction - financeDeduction -
-          therapyDeduction - entry.superannuation_deduction + adjTotal;
-
-        return { name, value: Math.max(0, netPay), color: dentistColors[idx % dentistColors.length] };
+        return { name, value: Math.max(0, calcNetPay(entry)), color: dentistColors[idx % dentistColors.length] };
       }),
     };
+  });
+
+  // Build a pay data table for all periods
+  const payTableData = payMonths.map(pm => {
+    const [year, month] = pm.split("-").map(Number);
+    const monthEntries = dentistPay.filter(d => d.year === year && d.month === month);
+    const isDraft = monthEntries.some(e => e.period_status === "draft");
+    const row: Record<string, number> = {};
+    for (const entry of monthEntries) {
+      row[entry.dentist_name] = Math.max(0, calcNetPay(entry));
+    }
+    return { year, month, isDraft, values: row, total: Object.values(row).reduce((s, v) => s + v, 0) };
   });
 
   // Lab bills by lab name bar chart
@@ -393,13 +404,13 @@ export default function ReportingPage() {
               </div>
             )}
 
-            {/* Dentist Pay Trend (Finalized only) */}
+            {/* Dentist Pay Trend */}
             {dentistTrendData.length > 0 && (
               <div className="bg-white rounded-xl border border-border p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <h2 className="text-lg font-semibold text-text">Dentist Net Pay Trend</h2>
-                    <p className="text-xs text-text-muted mt-0.5">From finalized pay periods only</p>
+                    <p className="text-xs text-text-muted mt-0.5">All pay periods &mdash; draft months marked with *</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-3 text-xs">
                     {dentistNames.map((name, i) => (
@@ -413,6 +424,60 @@ export default function ReportingPage() {
                 <div className="overflow-x-auto">
                   <LineChart data={dentistTrendData} width={Math.max(700, dentistTrendData.length * 80)} height={280} />
                 </div>
+
+                {/* Pay Data Table */}
+                {payTableData.length > 0 && (
+                  <div className="mt-6 overflow-x-auto border border-border rounded-lg">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-surface-dim">
+                          <th className="text-left px-4 py-2.5 font-medium text-text-muted">Period</th>
+                          <th className="text-left px-4 py-2.5 font-medium text-text-muted">Status</th>
+                          {dentistNames.map(name => (
+                            <th key={name} className="text-right px-4 py-2.5 font-medium text-text-muted">{name}</th>
+                          ))}
+                          <th className="text-right px-4 py-2.5 font-medium text-text-muted">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {payTableData.map((row, i) => (
+                          <tr key={i} className="border-b border-border last:border-0 hover:bg-surface-dim transition">
+                            <td className="px-4 py-2.5 font-medium whitespace-nowrap">
+                              {monthName(row.month)} {row.year}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              {row.isDraft ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Draft</span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Finalized</span>
+                              )}
+                            </td>
+                            {dentistNames.map(name => (
+                              <td key={name} className="px-4 py-2.5 text-right font-mono tabular-nums">
+                                {row.values[name] != null ? fmt(row.values[name]) : <span className="text-text-subtle">&mdash;</span>}
+                              </td>
+                            ))}
+                            <td className="px-4 py-2.5 text-right font-semibold font-mono tabular-nums">{fmt(row.total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      {payTableData.length > 1 && (
+                        <tfoot>
+                          <tr className="border-t-2 border-border bg-surface-dim">
+                            <td className="px-4 py-2.5 font-semibold" colSpan={2}>Grand Total</td>
+                            {dentistNames.map(name => {
+                              const total = payTableData.reduce((s, row) => s + (row.values[name] || 0), 0);
+                              return <td key={name} className="px-4 py-2.5 text-right font-semibold font-mono tabular-nums">{fmt(total)}</td>;
+                            })}
+                            <td className="px-4 py-2.5 text-right font-bold font-mono tabular-nums">
+                              {fmt(payTableData.reduce((s, row) => s + row.total, 0))}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 

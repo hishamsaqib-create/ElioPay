@@ -52,16 +52,15 @@ export async function GET(req: NextRequest) {
     ORDER BY year, month
   `);
 
-  // Dentist pay from finalized periods (for the pay trend line)
+  // Dentist pay from all periods (finalized + draft for visibility)
   const dentistPay = await db.execute(`
-    SELECT pp.month, pp.year, d.name as dentist_name, pe.gross_private,
+    SELECT pp.month, pp.year, pp.status as period_status, d.name as dentist_name, pe.gross_private,
       pe.lab_bills_json, pe.finance_fees, pe.therapy_minutes, pe.therapy_rate,
       pe.superannuation_deduction, pe.adjustments_json, d.split_percentage,
       d.is_nhs, d.uda_rate, pe.nhs_udas
     FROM payslip_entries pe
     JOIN pay_periods pp ON pe.period_id = pp.id
     JOIN dentists d ON pe.dentist_id = d.id
-    WHERE pp.status = 'finalized'
     ORDER BY pp.year, pp.month, d.name
   `);
 
