@@ -107,6 +107,7 @@ export default function PeriodDetailPage() {
   const [downloadingAll, setDownloadingAll] = useState(false);
   const [emailingAll, setEmailingAll] = useState(false);
   const [fetchingSheets, setFetchingSheets] = useState(false);
+  const [uploadingSheet, setUploadingSheet] = useState(false);
   const [showNhsUpload, setShowNhsUpload] = useState(false);
   const [nhsText, setNhsText] = useState("");
   const [nhsManual, setNhsManual] = useState<Record<string, string>>({});
@@ -472,6 +473,30 @@ export default function PeriodDetailPage() {
       showToast("Network error fetching from Google Sheets", "error");
     }
     setFetchingSheets(false);
+  }
+
+  async function uploadSheetFile(entryId: number, file: File) {
+    setUploadingSheet(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("entry_id", String(entryId));
+      formData.append("period_id", periodId);
+      const res = await fetch("/api/google-sheets/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message || `Uploaded ${data.count || 0} entries from spreadsheet`);
+        await loadData();
+      } else {
+        showToast(data.error || "Failed to process uploaded file", "error");
+      }
+    } catch {
+      showToast("Network error uploading file", "error");
+    }
+    setUploadingSheet(false);
   }
 
   async function submitNhsStatement() {
@@ -1644,9 +1669,24 @@ export default function PeriodDetailPage() {
                           <div className="flex items-center justify-between">
                             <div>
                               <h4 className="text-xs font-semibold text-text uppercase tracking-wide">Dentist Private Log</h4>
-                              <p className="text-xs text-text-muted mt-0.5">Import dentist&apos;s own takings log to cross-reference</p>
+                              <p className="text-xs text-text-muted mt-0.5">Upload a spreadsheet or import from Google Sheets to cross-reference</p>
                             </div>
                             <div className="flex items-center gap-2">
+                              <label className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition cursor-pointer ${uploadingSheet ? "opacity-50 pointer-events-none" : ""}`}>
+                                {uploadingSheet ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                                Upload Sheet
+                                <input
+                                  type="file"
+                                  accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
+                                  className="hidden"
+                                  disabled={uploadingSheet}
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) uploadSheetFile(entry.id, file);
+                                    e.target.value = "";
+                                  }}
+                                />
+                              </label>
                               <button
                                 onClick={() => fetchFromGoogleSheets(entry.id, entry.dentist_name)}
                                 disabled={fetchingSheets}
