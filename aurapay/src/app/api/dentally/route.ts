@@ -842,8 +842,15 @@ export async function POST(req: NextRequest) {
       console.log(`[Dentally] Filtered out ${allInvoices.length - invoices.length} invoices outside exact month range`);
     }
 
-    // Fetch appointments with same buffered range
-    const appointments = await fetchAppointments(apiStartDate, apiEndDate, token, siteId);
+    // Fetch appointments with buffered range, then filter to exact month
+    // (appointments outside the month are harmless since they only match by patient+date,
+    //  but filtering keeps the data clean)
+    const allAppointments = await fetchAppointments(apiStartDate, apiEndDate, token, siteId);
+    const appointments = allAppointments.filter(apt => {
+      const aptDate = (apt.starts_at || apt.start_time || "").substring(0, 10);
+      return aptDate >= startDate && aptDate < endDate;
+    });
+    console.log(`[Dentally] Appointments: ${allAppointments.length} from API, ${appointments.length} in exact month range`);
     const appointmentMap = buildAppointmentMap(appointments);
     console.log(`[Dentally] Built appointment map with ${appointmentMap.size} patient-date combinations`);
 
