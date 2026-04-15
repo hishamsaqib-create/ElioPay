@@ -783,7 +783,17 @@ export async function POST(req: NextRequest) {
   const endYear = period.month === 12 ? period.year + 1 : period.year;
   const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
 
-  console.log(`[Dentally] Fetching invoices for period: ${startDate} to ${endDate} (exclusive)`);
+  // Use wider date range for API calls to work around Dentally API boundary issues
+  // The API may not reliably return invoices from the last few days of the month
+  // We add a buffer and rely on client-side filtering for accuracy
+  const apiStartDate = startDate; // First day of month (no buffer needed at start)
+  const apiEndDate = (() => {
+    // Add 7 days buffer after end of month to catch any boundary edge cases
+    const d = new Date(Number(endYear), endMonth - 1, 8); // 7 days into next month
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+
+  console.log(`[Dentally] Fetching invoices for period: ${startDate} to ${endDate} (exclusive), API range: ${apiStartDate} to ${apiEndDate}`);
   console.log(`[Dentally] Using Site ID: ${siteId}`);
   console.log(`[Dentally] Clinic ID: ${user.clinic_id || "(none - using global settings)"}`);
   console.log(`[Dentally] Therapist IDs: ${therapistIds.size > 0 ? Array.from(therapistIds).join(", ") : "(none configured - therapy minutes won't be calculated)"}`);
@@ -818,20 +828,22 @@ export async function POST(req: NextRequest) {
     const allUsers = await fetchAllUsers(token, siteId);
 
     // Fetch invoices from Dentally WITH date filtering
-    // Use dated_on_from and dated_on_to to filter by invoice date (not created_at)
-    // This significantly reduces the number of invoices fetched
-    const url = `${DENTALLY_API}/invoices?site_id=${siteId}&dated_on_from=${startDate}&dated_on_to=${endDate}`;
-    console.log(`[Dentally] Fetching invoices with date filter: ${startDate} to ${endDate}`);
+    // Use wider API date range to catch boundary edge cases, then filter client-side
+    const url = `${DENTALLY_API}/invoices?site_id=${siteId}&dated_on_from=${apiStartDate}&dated_on_to=${apiEndDate}`;
+    console.log(`[Dentally] Fetching invoices with API date filter: ${apiStartDate} to ${apiEndDate}`);
     const allInvoices = await fetchAllPages(url, token);
 
-    console.log(`[Dentally] Total invoices from API (with date filter): ${allInvoices.length}`);
+    console.log(`[Dentally] Total invoices from API (with buffered date filter): ${allInvoices.length}`);
 
-    // Additional client-side date filtering as safety net (in case API filter is loose)
+    // Strict client-side date filtering to exact month boundaries
     const invoices = allInvoices.filter(inv => isInvoiceInDateRange(inv, startDate, endDate));
-    console.log(`[Dentally] Invoices after client-side verification: ${invoices.length}`);
+    console.log(`[Dentally] Invoices after strict client-side filtering (${startDate} to ${endDate}): ${invoices.length}`);
+    if (allInvoices.length !== invoices.length) {
+      console.log(`[Dentally] Filtered out ${allInvoices.length - invoices.length} invoices outside exact month range`);
+    }
 
-    // Fetch appointments for duration data
-    const appointments = await fetchAppointments(startDate, endDate, token, siteId);
+    // Fetch appointments with same buffered range
+    const appointments = await fetchAppointments(apiStartDate, apiEndDate, token, siteId);
     const appointmentMap = buildAppointmentMap(appointments);
     console.log(`[Dentally] Built appointment map with ${appointmentMap.size} patient-date combinations`);
 
@@ -1080,12 +1092,13 @@ export async function POST(req: NextRequest) {
       });
 
       // Prepare patient data for storage (include payment status, duration, treatment, hourly rate)
+      // Include resolved/resolvedNote/financeFee as undefined so they can be populated by merge logic
       const patientsForStorage = data.patients.map(({ name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason, invoiceId, patientId, durationMins, treatment, hourlyRate }) => ({
-        name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason, invoiceId, patientId, durationMins, treatment, hourlyRate
+        name, date, amount, amountPaid, amountOutstanding, status, finance, flagged, flagReason, invoiceId, patientId, durationMins, treatment, hourlyRate,
+        resolved: undefined as boolean | undefined,
+        resolvedNote: undefined as string | undefined,
+        financeFee: undefined as number | undefined,
       }));
-
-      // Store discrepancies as JSON
-      const discrepanciesJson = JSON.stringify(data.discrepancies);
 
       // Store analytics as JSON
       const analyticsJson = JSON.stringify(data.analytics || {});
@@ -1096,6 +1109,81 @@ export async function POST(req: NextRequest) {
       const totalTherapyMinutes = therapyItems.reduce((sum, item) => sum + item.minutes, 0);
 
       if (entryResult.rows.length > 0) {
+        const existingEntry = entryResult.rows[0];
+
+        // --- Preserve user-entered data ---
+
+        // 1. Preserve discrepancy corrections (resolved status, user notes)
+        const existingDiscrepancies: Array<{ type: string; patientName: string; date: string; resolved?: boolean; [key: string]: unknown }> =
+          JSON.parse(String(existingEntry.discrepancies_json || "[]"));
+        // Build a lookup of existing resolved/corrected discrepancies
+        const resolvedLookup = new Map<string, { resolved?: boolean }>();
+        for (const d of existingDiscrepancies) {
+          if (d.resolved) {
+            resolvedLookup.set(`${d.type}-${d.patientName}-${d.date}`, { resolved: d.resolved });
+          }
+        }
+        // Merge: apply resolved status from existing data onto new discrepancies
+        const mergedDiscrepancies = data.discrepancies.map(d => {
+          const key = `${d.type}-${d.patientName}-${d.date}`;
+          const existing = resolvedLookup.get(key);
+          if (existing?.resolved) {
+            return { ...d, resolved: true };
+          }
+          return d;
+        });
+        // Also keep any log-comparison discrepancies (in_log_not_system, in_system_not_log, log_mismatch)
+        // that were added by dentist log import - these aren't generated by Dentally fetch
+        const logDiscrepancies = existingDiscrepancies.filter(d =>
+          d.type === "log_mismatch" || d.type === "in_log_not_system" || d.type === "in_system_not_log"
+        );
+        const newDiscrepancyKeys = new Set(mergedDiscrepancies.map(d => `${d.type}-${d.patientName}-${d.date}`));
+        for (const ld of logDiscrepancies) {
+          if (!newDiscrepancyKeys.has(`${ld.type}-${ld.patientName}-${ld.date}`)) {
+            mergedDiscrepancies.push(ld as typeof mergedDiscrepancies[number]);
+          }
+        }
+        const discrepanciesJson = JSON.stringify(mergedDiscrepancies);
+
+        // 2. Preserve patient resolved status and finance fees from user corrections
+        const existingPatients: Array<{ invoiceId?: string; patientId?: string; resolved?: boolean; resolvedNote?: string; financeFee?: number }> =
+          JSON.parse(String(existingEntry.private_patients_json || "[]"));
+        const patientCorrectionLookup = new Map<string, { resolved?: boolean; resolvedNote?: string; financeFee?: number }>();
+        for (const p of existingPatients) {
+          if (p.invoiceId && (p.resolved || p.financeFee)) {
+            patientCorrectionLookup.set(p.invoiceId, {
+              resolved: p.resolved,
+              resolvedNote: p.resolvedNote,
+              financeFee: p.financeFee,
+            });
+          }
+        }
+        // Apply preserved corrections to new patient data
+        const mergedPatients = patientsForStorage.map(p => {
+          const correction = p.invoiceId ? patientCorrectionLookup.get(p.invoiceId) : undefined;
+          if (correction) {
+            return {
+              ...p,
+              resolved: correction.resolved || p.resolved,
+              resolvedNote: correction.resolvedNote || p.resolvedNote,
+              financeFee: correction.financeFee ?? p.financeFee,
+              flagged: correction.resolved ? false : p.flagged,
+            };
+          }
+          return p;
+        });
+
+        // 3. Preserve therapy minutes if user has manually edited them
+        //    Only overwrite if Dentally actually found therapy data
+        const existingTherapyMinutes = parseFloat(String(existingEntry.therapy_minutes || "0"));
+        const existingTherapyBreakdown: unknown[] = JSON.parse(String(existingEntry.therapy_breakdown_json || "[]"));
+        const useExistingTherapy = totalTherapyMinutes === 0 && existingTherapyMinutes > 0;
+        const finalTherapyMinutes = useExistingTherapy ? existingTherapyMinutes : totalTherapyMinutes;
+        const finalTherapyBreakdownJson = useExistingTherapy ? JSON.stringify(existingTherapyBreakdown) : therapyBreakdownJson;
+
+        // 4. NHS data (nhs_udas), lab bills, adjustments, notes, superannuation, dentist_log
+        //    are NOT in this UPDATE - they are already preserved
+
         await db.execute({
           sql: `UPDATE payslip_entries SET
             gross_private = ?,
@@ -1109,11 +1197,11 @@ export async function POST(req: NextRequest) {
           WHERE period_id = ? AND dentist_id = ?`,
           args: [
             Math.round(data.totalPaid * 100) / 100, // Only count PAID amount as gross
-            JSON.stringify(patientsForStorage),
+            JSON.stringify(mergedPatients),
             discrepanciesJson,
             analyticsJson,
-            therapyBreakdownJson,
-            totalTherapyMinutes,
+            finalTherapyBreakdownJson,
+            finalTherapyMinutes,
             therapyRate, // Sync therapy rate from settings
             period_id,
             dentistId,
@@ -1122,8 +1210,14 @@ export async function POST(req: NextRequest) {
         updated++;
         const dentistName = dentists.find(d => d.id === dentistId)?.name;
         const analytics = data.analytics;
-        const therapyCost = Math.round(totalTherapyMinutes * therapyRate * 100) / 100;
-        console.log(`[Dentally] Updated ${dentistName}: £${data.totalPaid.toFixed(2)} paid, ${data.patients.length} patients, ${analytics?.totalChairMins || 0} mins chair time, ${totalTherapyMinutes} therapy mins (£${therapyCost})`);
+        const therapyCost = Math.round(finalTherapyMinutes * therapyRate * 100) / 100;
+        console.log(`[Dentally] Updated ${dentistName}: £${data.totalPaid.toFixed(2)} paid, ${data.patients.length} patients, ${analytics?.totalChairMins || 0} mins chair time, ${finalTherapyMinutes} therapy mins (£${therapyCost})`);
+        if (resolvedLookup.size > 0) {
+          console.log(`[Dentally]   Preserved ${resolvedLookup.size} resolved discrepancy corrections`);
+        }
+        if (useExistingTherapy) {
+          console.log(`[Dentally]   Preserved existing therapy minutes: ${existingTherapyMinutes} (no new therapy data from Dentally)`);
+        }
       }
     }
 
